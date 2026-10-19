@@ -314,7 +314,7 @@ function Set-Palette([string]$name) {
       @('Card','Card'), @('StripBg','Strip'), @('Edge','Edge'), @('Hover','Hover'), @('TabHover','TabHover'), @('TabInk','TabInk'),
       @('Ink','Ink'), @('Faint','Faint'), @('Line','Line'), @('Accent','Accent'), @('NoteBg','NoteBg'), @('NoteInk','NoteInk'),
       @('MenuBg','MenuBg'), @('MenuHover','MenuHover'), @('Red','Red'), @('RedSoft','RedSoft'), @('Amber','Amber'),
-      @('AmberSoft','AmberSoft'), @('CloseHover','CloseHover'), @('Selected','Selected'), @('ButtonBg','ButtonBg'),
+      @('AmberSoft','AmberSoft'), @('CloseHover','CloseHover'), @('CloseGlyph','CloseGlyph'), @('Selected','Selected'), @('ButtonBg','ButtonBg'),
       @('OnAccent','OnAccent'), @('Closed','Closed'))) {
     Set-Variable -Scope Script -Name $pair[0] -Value (Brush $T[$pair[1]])
   }
@@ -1431,7 +1431,7 @@ function New-WinButton([int]$code, [string]$tip, [bool]$danger, [scriptblock]$on
   $t.Text = G $code; $t.FontFamily = $MDL2; $t.FontSize = 9.5; $t.Foreground = $TabInk
   $t.HorizontalAlignment = 'Center'; $t.VerticalAlignment = 'Center'
   $b.Child = $t
-  $b.Add_MouseEnter({ param($s, $e) if ($s.Tag) { $s.Background = $CloseHover; $s.Child.Foreground = $White } else { $s.Background = $TabHover } })
+  $b.Add_MouseEnter({ param($s, $e) if ($s.Tag) { $s.Background = $CloseHover; $s.Child.Foreground = $CloseGlyph } else { $s.Background = $TabHover } })
   $b.Add_MouseLeave({ param($s, $e) $s.Background = $Clear; $s.Child.Foreground = $TabInk })
   return $b
 }

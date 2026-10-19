@@ -24,6 +24,7 @@ describe('design tokens', () => {
       expect(contrast(p.smoke, p.hover), 'meta on a hovered row').toBeGreaterThanOrEqual(4.5);
       expect(contrast(p.ink, p.selected), 'text on the selected row').toBeGreaterThanOrEqual(4.5);
       expect(contrast(p.onViolet, p.violet), 'primary button label').toBeGreaterThanOrEqual(4.5);
+      expect(contrast(p.onDanger, p.danger), 'close button glyph on its red hover').toBeGreaterThanOrEqual(3);
     });
     it(`${name}: status chips and their glyphs meet WCAG 1.4.11 (3:1), also on hovered and selected rows`, () => {
       const p = palette(theme);

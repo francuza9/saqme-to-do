@@ -48,6 +48,7 @@ export function palette(theme) {
     alertWash: mix(theme.alert, surface, theme.wash),
     amberWash: mix(amber, surface, theme.wash),
     danger: '#D94B45',
+    onDanger: '#FFFFFF',   // the close button's glyph while it is red (hover)
     // text on violet (primary buttons, selected segment): whichever reads better
     onViolet: contrast('#FFFFFF', violet) >= contrast(frame, violet) ? '#FFFFFF' : frame,
     statusTodo: s.todo, statusProg: s.prog, statusDone: s.done, statusPost: s.post,
@@ -111,7 +112,7 @@ export function buildPs1(t) {
       Card: p.surface, Strip: p.frame, Edge: p.edge, Hover: p.hover, TabHover: p.tabHover, TabInk: p.smoke,
       Ink: p.ink, Faint: p.smoke, Line: p.line, Accent: p.violet, Amber: p.amber, NoteBg: p.noteBg, NoteInk: p.noteInk,
       MenuBg: p.frame, MenuHover: p.menuHover, Selected: p.selected, ButtonBg: p.buttonBg, OnAccent: p.onViolet,
-      Red: p.alert, RedSoft: p.alertWash, AmberSoft: p.amberWash, CloseHover: p.danger, Closed: p.closed,
+      Red: p.alert, RedSoft: p.alertWash, AmberSoft: p.amberWash, CloseHover: p.danger, CloseGlyph: p.onDanger, Closed: p.closed,
       GradA: t.gradient[0], GradB: t.gradient[1],
       S_todo_edge: p.statusTodo, S_todo_text: p.ink,
       S_prog_chip: p.statusProg, S_prog_text: p.ink,

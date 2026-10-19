@@ -38,6 +38,7 @@
   --alert-wash: #402B32;
   --amber-wash: #40332C;
   --danger: #D94B45;
+  --on-danger: #FFFFFF;
   --on-violet: #15121A;
   --status-todo: #7C7589;
   --status-prog: #E8A23A;
@@ -76,6 +77,7 @@
   --alert-wash: #ECD8D0;
   --amber-wash: #E7DDCC;
   --danger: #D94B45;
+  --on-danger: #FFFFFF;
   --on-violet: #FFFFFF;
   --status-todo: #827A69;
   --status-prog: #A86E16;
