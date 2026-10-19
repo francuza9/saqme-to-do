@@ -50,9 +50,14 @@
   never overwritten with stale content.
 - Status (synced / syncing / offline / error), conflicts and the "deletions paused" guard flow back the same
   way and show up as the small cloud glyph and badge in the tab strip.
+- **No silent loss:** moves inside a list (drag and drop, Alt+Up/Down) are `Move-ListBlock` / `Step-ListBlock`
+  in `sync-core.ps1`. Every save is checked by `Get-UnexplainedLoss`: only an explicit delete, a move to
+  another list or Ctrl+Z may remove a task, and a save that would lose any other task is refused
+  ([sync.md](sync.md#desktop-engine-powershell-and-its-javascript-port)). Deletes go to *Recently deleted* (`recently-deleted.json`,
+  30 days); Ctrl+Z undoes the last change while the files are as it left them.
 
 Data folder (`%APPDATA%\SaqmeToDo`, see [file-format.md](file-format.md)):
-`lists\*.md` (your lists), `.widget-settings`, `.widget-pos`, `sync\config.json` (server URL + token +
+`lists\*.md` (your lists), `.widget-settings`, `.widget-pos`, `recently-deleted.json`, `sync\config.json` (server URL + token +
 device id), `sync\state.json` (sync engine state), `sync\sync.log`, `cloud.json` (what setup generated).
 
 ## Linux and macOS app

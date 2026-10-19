@@ -158,6 +158,23 @@ copy in `lists\.recovery`. A list changed by another program is reloaded once it
 (it may still be being written), and one that cannot be read when its tab opens shows as busy and is never
 written over.
 
+**Tasks leave a list only on purpose.** Before every write the widget checks that each task that was in the
+file or in memory is still in the text it is about to write (`Get-UnexplainedLoss` in `sync-core.ps1`). The
+only exceptions are an explicit delete, a move to another list, Ctrl+Z, and a task another program deleted
+from the file meanwhile. A write that would lose any other task is refused: nothing is written, the list is
+shown as it is on disk, and the window says so. Whatever a bug in the app does, it cannot become a delete
+that sync sends everywhere. (In 1.0.0 dragging a task removed it, and its subtasks, from the list: the drag
+used a live view of the list after removing those items from it. Moves are now shared, tested functions,
+`Move-ListBlock` and `Step-ListBlock`, that copy the moved block and change nothing when a drop cannot be
+done.)
+
+**Undo and Recently deleted on the desktop.** Ctrl+Z puts back the files of the last change (a move puts back
+one list, a move to another list both), as long as nothing else has changed them since. Deleted tasks are
+kept for 30 days in `recently-deleted.json` in the data folder, outside the lists folder. With sync on, tasks
+deleted on other devices (from the engine's state) show there too. A restore writes the lines back with their
+ids, which sync sends as not deleted. A restore of a task that a plan removed tells the engine so, otherwise
+the engine would take the line for a save from an older copy (below) and keep the delete.
+
 On first contact with a server (empty state), the desktop pulls first and adopts server projects with the
 same name instead of creating duplicates; the phone does the same for lists made before pairing. An empty
 lists folder receives the server's lists right away.
@@ -204,6 +221,10 @@ ones, except for fields still pending in the outbox, which stay on top until the
 
 - A change saved on a device is never dropped by sync: it stays in the outbox until the server has it, and
   the losing side of any concurrent edit is kept as a conflict. Deletes are tombstones.
+- Moving a task (drag and drop, Alt+Up/Down, touch drag on the phone) only ever changes its place, never
+  deletes it: covered by randomized tests in `desktop/tests/sync-core.tests.ps1` (thousands of moves keep
+  every task; moves reach the server as new places only), the widget's self-check (drags through its mouse
+  code) and `worker/test/node/pwa-store.test.js`.
 - All devices converge to the same lists (covered by `npm run test:e2e`, including randomized concurrent
   edits on two phones and the desktop).
 - Field granularity: two edits to different parts of the *same* text are a conflict, not a text merge.

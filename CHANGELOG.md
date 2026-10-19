@@ -4,6 +4,12 @@
 
 Fixes from testing on a real iPhone, a real Windows install and a real Cloudflare deploy.
 
+- **Windows: dragging a task (or Alt+Up / Alt+Down) deleted it.** Every drag removed the dragged task and its
+  subtasks from the list, and sync then deleted them on every device. Moves now never drop a task (a drop
+  that cannot be done changes nothing), and every save is checked: a change that would remove tasks nobody
+  deleted is not saved. New on Windows: Ctrl+Z undoes the last change, and *Settings > Data > Recently
+  deleted* restores deleted tasks for 30 days (with sync, also those deleted on other devices).
+
 - iPhone: the app on the Home Screen pairs with a short one-time code (shown under every QR code, and in
   Safari right after the link pairs it). iOS starts Home Screen apps unpaired, so the link alone never
   reached them. Pasting the link still works; the key now leaves the address bar at once.

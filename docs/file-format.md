@@ -104,6 +104,7 @@ Windows (`%APPDATA%\SaqmeToDo`):
 | `lists\.recovery\` | edits the app could not save before you quit or switched lists (the file was locked by another program); copy back what you need |
 | `.widget-settings` | app settings (`theme`, `notifyAt`, window size, …), `key=value` |
 | `.widget-pos` | window position |
+| `recently-deleted.json` | tasks deleted in the widget in the last 30 days, as list lines with their ids (*Settings > Data > Recently deleted* restores them) |
 | `sync\config.json` | server address, access token, this device's id (private) |
 | `sync\state.json` | sync engine state (server rows, last synced base, unsent changes) |
 | `sync\sync.log` | sync log (errors and summaries; rotated at 256 KB) |
