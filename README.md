@@ -9,11 +9,7 @@
 </p>
 
 <p align="center">
-  <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="docs/images/hero-dark.png">
-    <source media="(prefers-color-scheme: light)" srcset="docs/images/hero-light.png">
-    <img src="docs/images/hero-light.png" width="860" alt="The desktop widget and the iPhone app side by side, showing the same Work list with subtasks, deadlines and a Georgian task">
-  </picture>
+  <img src="docs/images/hero-dark.png" width="860" alt="The desktop widget and the iPhone app side by side, showing the same Work list with subtasks, deadlines and a Georgian task">
 </p>
 
 ## Features
@@ -87,11 +83,7 @@ Prefer to look first? Download the repository as a ZIP and run **`setup.cmd`** (
    **Enable** next to Notifications (iOS 16.4 or later).
 
 <p align="center">
-  <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="docs/images/phone-settings-dark.png">
-    <source media="(prefers-color-scheme: light)" srcset="docs/images/phone-settings-light.png">
-    <img src="docs/images/phone-settings-light.png" width="300" alt="Phone app settings with the button that enables notifications">
-  </picture>
+  <img src="docs/images/phone-settings-dark.png" width="300" alt="Phone app settings with the button that enables notifications">
 </p>
 
 Your lists are already there, and they stay available offline. No Cloudflare account? The phone app also
