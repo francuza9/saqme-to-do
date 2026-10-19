@@ -101,6 +101,17 @@ describe('cloud setup', () => {
     expect(json(d2.state).url).toBe('https://saqme.my-sub.workers.dev');
   });
 
+  it('--device-login says what to do with the code, and shows the address and the code where they stand out', () => {
+    const dd = setupDirs();
+    const r = runSetup(dd, ['--device-login'], {});
+    expect(r.status, r.stdout + r.stderr).toBe(0);
+    expect(r.fakeState.calls).toContain('login --device');
+    expect(r.stdout).not.toMatch(/a browser window opens/);
+    expect(r.stdout).toMatch(/Open the address on any device/);
+    expect(r.stdout).toMatch(/^ {6}Open {3}https:\/\/dash\.cloudflare\.com\/oauth2\/device$/m);
+    expect(r.stdout).toMatch(/^ {6}Code {3}WXYZ-2345$/m);
+  });
+
   it('asks which account to use when there are several (and remembers it)', () => {
     const d3 = setupDirs();
     const accounts = [{ id: 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa', name: 'Work' }, { id: 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb', name: 'Personal' }];

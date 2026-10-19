@@ -17,6 +17,10 @@ if (cmd === 'whoami') {
   if (!st.loggedIn) exit(1, '', '{"loggedIn":false}\n');
   exit(0, JSON.stringify({ loggedIn: true, authType: 'OAuth Token', email: 'me@example.com', accounts: st.accounts ?? [{ id: '0123456789abcdef0123456789abcdef', name: 'My Account' }] }) + '\n');
 }
+if (cmd === 'login' && sub === '--device') {   // the device flow's text, as wrangler 4 prints it
+  st.loggedIn = true;
+  exit(0, '\nTo authorize Wrangler, please visit:\n\n  https://dash.cloudflare.com/oauth2/device\n\nand enter the code:\n\n  WXYZ-2345\n\nYou have 10 minutes to approve this request.\nSuccessfully logged in.\n');
+}
 if (cmd === 'login') { st.loggedIn = true; exit(0, 'Successfully logged in.\n'); }
 if (cmd === 'd1' && sub === 'list') exit(0, JSON.stringify(st.dbs.map((d) => ({ uuid: d.uuid, name: d.name, created_at: '2026-10-19' })), null, 2) + '\n');
 if (cmd === 'd1' && sub === 'create') {

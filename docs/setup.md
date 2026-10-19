@@ -174,7 +174,10 @@ Then setup starts the Cloudflare login — **the one step you have to do yoursel
 3. Click **Allow**. The page says you can close it; go back to the setup window, it continues on its own.
 
 No browser opens (remote desktop, SSH, WSL without a browser)? Run setup with **`-DeviceLogin`**
-(`scripts/setup.sh --device-login`): it prints a short code and a link to open on any device.
+(`scripts/setup.sh --device-login`): instead of a browser window it shows a sign-in address and a short code
+(on their own lines, marked **Open** and **Code**). Open the address on any device (this computer or your
+phone), sign in, enter the code and approve; setup goes on by itself. The code expires after the time shown
+with it; if it does, run setup again for a new one.
 
 If your login can see several Cloudflare accounts, setup asks which one to use (from the Linux/macOS window,
 which cannot ask, it takes the first) and says which one it used. To pick another later, run setup with the

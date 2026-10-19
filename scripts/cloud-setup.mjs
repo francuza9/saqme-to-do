@@ -112,6 +112,39 @@ function run(workerDir, args, { interactive = false, env = {}, input } = {}) {
 }
 
 const stripAnsi = (s) => s.replace(/\x1b\[[0-9;]*m/g, '');
+
+/**
+ * `wrangler login --device`: its output passes through as it comes, and once it has printed the sign-in
+ * address and the code, both are repeated on their own lines where they stand out (and where the
+ * Linux/macOS window's setup log makes the address a link).
+ */
+function runDeviceLogin(workerDir) {
+  const [cmd, pre] = wranglerCommand(workerDir);
+  return new Promise((resolveRun) => {
+    const child = spawn(cmd, [...pre, 'login', '--device'], {
+      cwd: workerDir, env: { ...process.env, WRANGLER_SEND_METRICS: 'false' }, stdio: ['inherit', 'pipe', 'pipe'],
+    });
+    let out = '';
+    let shown = false;
+    const pass = (stream) => (d) => {
+      stream.write(d);
+      out += d;
+      if (shown) return;
+      const plain = stripAnsi(out);
+      const url = /please visit:\s+(https:\/\/\S+)/i.exec(plain)?.[1];
+      const code = /enter the code:\s+(\S+)/i.exec(plain)?.[1];
+      if (!url || !code) return;
+      shown = true;
+      console.log(`\n      ${c('1', 'Open')}   ${url}\n      ${c('1', 'Code')}   ${c('1;35', code)}\n`);
+      say.info('Open the address on any device (this computer or your phone), sign in, enter the code and approve.');
+      say.info('Setup goes on by itself once you have.');
+    };
+    child.stdout.on('data', pass(process.stdout));
+    child.stderr.on('data', pass(process.stderr));
+    child.on('error', (e) => resolveRun({ code: -1, out: String(e) }));
+    child.on('close', (code) => resolveRun({ code, out }));
+  });
+}
 function lastLines(text, n = 12) {
   return stripAnsi(text).trim().split(/\r?\n/).filter((l) => l.trim()).slice(-n).map((l) => `          ${l}`).join('\n');
 }
@@ -155,14 +188,17 @@ async function whoami(workerDir) {
 async function ensureLogin(workerDir, opts, state) {
   let me = await whoami(workerDir);
   if (!me) {
-    say.info('Log in to Cloudflare: a browser window opens - sign in (or create a free account) and click "Allow".');
+    if (opts.deviceLogin) say.info('Log in to Cloudflare with a code: Cloudflare shows a sign-in address and a code below. Open the address on any device, sign in (or create a free account) and enter the code.');
+    else say.info('Log in to Cloudflare: a browser window opens - sign in (or create a free account) and click "Allow".');
     say.info('This is the only step setup cannot do for you.');
-    const args = ['login'];
-    if (opts.deviceLogin) args.push('--device');
-    const r = await run(workerDir, args, { interactive: true });
-    if (r.code !== 0) throw new SetupError('Cloudflare login did not finish.', 'Run setup again; if no browser opens, add --device-login (setup.ps1: -DeviceLogin) to log in with a code.');
+    const r = opts.deviceLogin ? await runDeviceLogin(workerDir) : await run(workerDir, ['login'], { interactive: true });
+    if (r.code !== 0) {
+      throw new SetupError('Cloudflare login did not finish.', opts.deviceLogin
+        ? 'Run setup again and enter the new code before it expires (the time is shown with it).'
+        : 'Run setup again; if no browser opens, add --device-login (setup.ps1: -DeviceLogin) to log in with a code.');
+    }
     me = await whoami(workerDir);
-    if (!me) throw new SetupError('Still not logged in to Cloudflare.', 'Run setup again and approve the login in the browser.');
+    if (!me) throw new SetupError('Still not logged in to Cloudflare.', `Run setup again and approve the login${opts.deviceLogin ? ' with the code' : ' in the browser'}.`);
   }
   const accounts = (me.accounts || []).map((a) => ({ id: a.id, name: a.name }));
   say.ok(`logged in${me.email ? ` as ${me.email}` : ''}`);
