@@ -1,9 +1,11 @@
 #!/usr/bin/env node
 // Builds the README images in docs/images from the real apps and the sample lists:
 //   logo.png                         the app icon at 2x for a ~120 px header
-//   hero-dark.png / hero-light.png   desktop widget + phone side by side (dark UI; transparent for GitHub's
-//                                    dark mode, on a plum panel for light mode)
+//   hero-dark.png / hero-light.png   desktop widget + phone side by side (dark UI; transparent, or on a plum panel)
 //   phone-settings-dark/-light.png   small phone Settings shot for the setup steps
+// The README shows the -dark files with plain <img> tags (they read well on light pages too). Not <picture>
+// with light/dark <source>s: the GitHub mobile app shows those as broken images (worker/test/node/repository.test.js
+// fails on them); try a variant in that app before using it.
 // Needs a local `npm run dev` server and the desktop render first:
 //   powershell -File scripts\dev\render-widget.ps1 -Out <shots>          (writes <shots>\desktop-dark.png)
 //   cd <folder with playwright> && node <repo>/scripts/dev/readme-images.mjs --shots <shots>
