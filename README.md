@@ -79,7 +79,9 @@ Prefer to look first? Download the repository as a ZIP and run **`setup.cmd`** (
 1. **Scan the QR code** the computer app shows after setting up sync with the phone camera, and open the
    link (Safari on iPhone, Chrome on Android). To see it again: **Settings > Sync > Pair phone**.
 2. **Add it to the Home Screen:** on iPhone tap **Share**, then **Add to Home Screen**; on Android, **Install app**.
-3. **Turn on reminders:** open Saqme from the Home Screen, tap the logo to open **Settings**, and tap
+   On iPhone, open Saqme from the Home Screen and type the **pairing code** shown under the QR code (and in
+   Safari after step 1): iOS gives Home Screen apps storage of their own, so the app starts unpaired.
+3. **Turn on reminders:** in Saqme on the Home Screen, tap the logo to open **Settings**, and tap
    **Enable** next to Notifications (iOS 16.4 or later).
 
 <p align="center">
@@ -104,7 +106,9 @@ hand or by an AI assistant syncs like any other change. The details are in [docs
 Your lists are stored on your devices and, if you turn sync on, in the database of your own Cloudflare
 account. Nobody else runs a server for this app, and it has no analytics or tracking. Without sync, nothing
 leaves the device. With it, devices prove access with a 256-bit key that travels in the pairing link after
-the `#`, the part of a URL browsers never send to a server. Cloudflare hosts the data (encrypted at rest);
+the `#`, the part of a URL browsers never send to a server (the app removes it from the address bar at once).
+A pairing code is a short stand-in for that link: it works once, for 10 minutes, and only a device that
+already has the key can ask for one. Cloudflare hosts the data (encrypted at rest);
 the key is stored on your devices (the app's data folder and the phone app's storage), so protect them as
 you would any signed-in device. On macOS and Linux the app window talks to a local program that answers
 only on this computer and only with its own key.

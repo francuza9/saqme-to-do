@@ -37,7 +37,7 @@ What is automated and what you do yourself:
 | Node.js (Linux, macOS) | uses yours if it is 22.13 or newer, otherwise downloads Node.js 24 just for Saqme | very old or unusual systems: install Node.js 22.13+ yourself ([details](#requirements-linux-and-macos)) |
 | Cloudflare database, Worker, keys, deploy | Settings > Sync > **Set up sync** in the app (or setup with `-Cloud` / `--cloud`) | sign in to Cloudflare and click **Allow** (once); pick a workers.dev name (first time only) |
 | Connecting the desktop app to sync | yes | — |
-| Phone | — | scan the QR code, add to Home Screen, enable notifications |
+| Phone | — | scan the QR code, add to Home Screen, type the pairing code (iPhone), enable notifications |
 | The phone app without a cloud account | published on GitHub Pages ([section 7](#7-phones-and-browsers-without-a-cloud-account)) | open its address |
 
 ## 1. Install on Windows
@@ -204,15 +204,17 @@ window there is nobody to ask: set the subdomain in the dashboard, then choose *
 Needs iOS 16.4 or later for notifications (everything else works on older versions too).
 
 1. **Open the pairing link.** Scan the QR code the computer app showed after setting up sync with the
-   **Camera** app and tap the banner. It opens in **Safari**. The apps show the code again under
-   **Settings > Sync > Pair phone** (or `saqme pair-phone` in a terminal on Linux and macOS). You can also send the
-   link to yourself (it is a secret; don't post it anywhere).
+   **Camera** app and tap the banner. It opens in **Safari**, which shows your lists. The apps show the QR code
+   again under **Settings > Sync > Pair phone** (or `saqme pair-phone` in a terminal on Linux and macOS).
 2. **Install.** In Safari tap the **Share** button (square with an arrow), scroll, **Add to Home Screen**,
-   **Add**. The app keeps the pairing; if it ever shows the welcome screen instead of your lists, paste the
-   link into its *Paste the pairing link* field.
-3. **Open Saqme from the Home Screen** (not from Safari — only the installed app may send notifications).
+   **Add**.
+3. **Open Saqme from the Home Screen and type the pairing code.** iOS starts a Home Screen app at its own
+   address, with storage of its own, so neither the link nor Safari's pairing reaches it: it opens on the
+   welcome screen. Type the 8-character code that Safari showed after step 1, or the one under the QR code on
+   the computer (**Pair phone**), into *Pairing code or link* and tap **Pair**. A code works once and for 10
+   minutes; **Pair phone** shows a new one each time. Pasting the whole pairing link works too.
 4. **Enable notifications:** tap the logo (top left), then **Settings > Notifications > Enable**, **Allow**.
-   **Send test** should show a notification within seconds.
+   **Send test** should show a notification within seconds (only the Home Screen app may send them, not Safari).
 
 Reminders on the phone come from the Worker's schedule (every 5 minutes) in the phone's time zone:
 15 minutes before a timed deadline, again at the time (or late, if it was missed), and one daily summary
@@ -223,7 +225,9 @@ Turned notifications off by mistake? iPhone **Settings > Notifications > Saqme >
 ## 6. Android
 
 1. Scan the pairing QR code with the camera (or Google Lens) and open the link in **Chrome**.
-2. Chrome offers **Install app** (or menu ⋮ > **Add to Home screen** > **Install**).
+2. Chrome offers **Install app** (or menu ⋮ > **Add to Home screen** > **Install**). The installed app shares
+   Chrome's storage, so it is already paired. (If it shows the welcome screen, type the code from **Pair
+   phone** there, as on iPhone.)
 3. Open Saqme from the app drawer, then **Settings > Notifications > Enable**, **Allow**.
 
 Push notifications work on Android the same way as on iPhone. The app is tuned and tested for iPhone, but
@@ -240,7 +244,8 @@ above so the system keeps that storage.
   they just appear. **Import lists** takes such a zip or `.md` files; tasks that are already there (same
   `^id`) are skipped, nothing is deleted, so importing twice is harmless.
 - **Add sync later:** set up the cloud part from a computer, then paste the pairing link into
-  **Settings > Sync** of this copy of the app. Your lists are merged with the synced ones (same-name lists
+  **Settings > Sync** of this copy of the app (pairing codes only work in the copy your sync service serves,
+  the one the QR code opens). Your lists are merged with the synced ones (same-name lists
   are combined, not duplicated).
 
 **Where it comes from.** The app has to be served from some web address once, so the phone can install it.
@@ -261,7 +266,8 @@ its API (every call still needs your key), and the app's own security policy onl
 
 ## 8. More devices
 
-- **Another iPhone / iPad / Android phone:** same as above with the same QR code.
+- **Another iPhone / iPad / Android phone:** same as above. A phone that already syncs can pair the next
+  one too: its **Settings > Sync > Pair a phone** shows the QR code and a code.
 - **Another Windows PC:** install with `setup.cmd`, then in the app **Settings > Sync** paste
   the pairing link (from a device that already syncs: **Settings > Sync > Pair phone > Copy link**) into
   the box and click **Connect**. Lists with the same name are merged. (**Set up sync** on the second PC would
@@ -292,7 +298,7 @@ the next time it is opened with a connection.
 |---|---|
 | Sync icon shows a red warning | Hover it for the reason. *Token rejected*: run setup's cloud part again (or pair again). *Server error*: wait a minute; it retries on its own. |
 | "N tasks vanished from the lists folder … deletions paused" | A list file was emptied or replaced in one go. Restore it (Recycle Bin, Trash, `lists/.trash`) — or, if it was on purpose, confirm: Windows **Settings > Sync > Delete them**; Linux/macOS **Delete them** in the window's settings, or `saqme allow-deletes`. |
-| Phone shows the welcome screen after installing | Paste the pairing link into the field on that screen (iOS keeps Home Screen apps separate from Safari). |
+| Phone shows the welcome screen after installing | Expected on iPhone: type the pairing code (**Pair phone** on the computer, or the one Safari showed) into the field on that screen. *Wrong or expired*: show a new one; a code works once, for 10 minutes. Pasting the pairing link works too. |
 | Linux/macOS window says it is "not connected" | It was opened from a bookmark. Open Saqme from the menu (or `saqme open`); that hands the window its key. |
 | Linux/macOS: "Port 47613 is used by another program" | Run setup again with `--port 47700` (any free port). |
 | Linux: no reminders | Install `libnotify-bin` (Debian/Ubuntu) or `libnotify` (Fedora) for `notify-send`, and check that `saqme status` says it is running. |

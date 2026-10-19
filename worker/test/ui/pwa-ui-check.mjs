@@ -153,7 +153,53 @@ await page.waitForTimeout(2500);
 const srv = await (await fetch(base + '/api/sync', { method: 'POST', headers: { authorization: 'Bearer ' + token, 'content-type': 'application/json' }, body: JSON.stringify({ deviceId: 'probe', cursor: 0, changes: [] }) })).json();
 const texts = srv.changes.filter((c) => c.kind === 'task' && !c.fields.deleted.v).map((c) => c.fields.text.v);
 check(texts.includes('Find sources') && texts.includes('Buy milk'), `pairing uploaded the local lists (${texts.length} tasks)`);
+// iPhone Safari: the Home Screen app will start unpaired with storage of its own, so Safari hands over a code
+const CODE = /^[2-9A-HJKMNP-Z]{4}-[2-9A-HJKMNP-Z]{4}$/;
+const codeIn = async (pg) => (await pg.textContent('#sheet .pair-code .code').catch(() => ''))?.trim();
+await page.waitForSelector('#sheet:has-text("Now the Home Screen app")');
+const step = await page.textContent('#sheet');
+check(/Add to Home Screen/.test(step) && CODE.test(await codeIn(page)), `Safari, once paired, shows the Home Screen step with a code (${await codeIn(page)})`);
+await page.tap('#sheet .btn.primary');
 await page.screenshot({ path: '/tmp/saqme-qa/ui-settings-paired.png' });
+
+// Settings > Sync > Pair a phone: the QR code and a fresh one-time code
+await page.tap('.setting:has-text("Pair a phone") button');
+await page.waitForSelector('#sheet img.qr');
+const shown = await codeIn(page);
+check(CODE.test(shown), `Pair a phone shows the QR code and a code (${shown})`);
+await page.tap('#sheet .btn.primary');
+
+// the app on the Home Screen (standalone, storage of its own): welcome, then the code pairs it (BUGS #1)
+{
+  const home = await browser.newContext({ ...devices['iPhone 14'], colorScheme: 'dark' });
+  await home.addInitScript(() => Object.defineProperty(navigator, 'standalone', { get: () => true }));
+  const hp = await home.newPage();
+  hp.on('pageerror', (e) => errors.push(e.message));
+  await hp.goto(base + '/');
+  await hp.waitForSelector('.welcome');
+  await hp.fill('.welcome .field-row input', 'ZZZZ-ZZZZ');
+  await hp.tap('.welcome .field-row .btn.primary');
+  await hp.waitForSelector('#toast:has-text("wrong or has expired")');
+  check(await hp.$eval('.welcome .field-row input', (el) => el.classList.contains('bad')), 'Home Screen app: a wrong code is refused, saying why');
+  await hp.fill('.welcome .field-row input', shown.toLowerCase().replace('-', ' '));
+  await hp.tap('.welcome .field-row .btn.primary');
+  await hp.waitForSelector('.tab', { timeout: 8000 });
+  await hp.waitForSelector('.row:has-text("Find sources")', { timeout: 8000 }).catch(() => {});
+  check(await hp.isVisible('.row:has-text("Find sources")'), 'Home Screen app: the code pairs it and the lists arrive');
+  check(await hp.isHidden('#sheetWrap'), 'Home Screen app: no Add to Home Screen step there');
+  await home.close();
+}
+
+// opening the pairing link in iPhone Safari: paired, the key leaves the address bar, and the code step shows
+{
+  const safari = await browser.newContext({ ...devices['iPhone 14'], colorScheme: 'dark' });
+  const sp = await safari.newPage();
+  sp.on('pageerror', (e) => errors.push(e.message));
+  await sp.goto(`${base}/#pair=${token}`);
+  await sp.waitForSelector('#sheet:has-text("Now the Home Screen app")');
+  check(CODE.test(await codeIn(sp)) && !(await sp.evaluate(() => location.href)).includes(token), 'link in Safari: the code step shows, and the key is gone from the address bar');
+  await safari.close();
+}
 
 // theme switch
 await page.tap('.segmented button:has-text("Light")');

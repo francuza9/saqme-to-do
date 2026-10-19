@@ -5,7 +5,8 @@
 //   GET  /api/config              the Worker's answer plus `local` (lists folder, cloud sync status)
 //   POST /api/local/code          one-time code for opening a window (`saqme open`), needs the token
 //   POST /api/local/claim         { code } -> { token }: how a window started by `saqme open` pairs itself
-//   GET  /api/local/pairing       { link } that pairs a phone with the cloud sync (when set up)
+//   GET  /api/local/pairing       { link, code } that pair a phone with the cloud sync (when set up); code is a
+//                                  one-time pairing code from the cloud service (null when it can't be reached)
 //   POST /api/local/connect       { link }: start cloud sync with a pairing link from another device
 //   POST /api/local/cloud-setup   Settings > Sync > Set up sync: run the cloud setup (GET: its progress;
 //                                  POST /api/local/cloud-setup/cancel stops it)
@@ -112,7 +113,10 @@ export function startServer(opts) {
         codes.set(code, now + CODE_TTL);
         return json(res, 200, { code });
       }
-      case 'GET /api/local/pairing': return json(res, 200, { link: opts.pairingLink?.() ?? null });
+      case 'GET /api/local/pairing': {
+        const link = opts.pairingLink?.() ?? null;
+        return json(res, 200, { link, code: link ? (await opts.pairingCode?.()) ?? null : null });
+      }
       case 'POST /api/local/connect': {
         let link = '';
         try { link = String(JSON.parse(body.toString('utf8')).link ?? ''); } catch { /* bad JSON */ }
@@ -127,6 +131,7 @@ export function startServer(opts) {
       case 'POST /api/local/stop': json(res, 200, { ok: true }); setTimeout(() => opts.onStop?.(), 50); return undefined;
     }
     if (url.pathname.startsWith('/api/push/')) return json(res, 404, { error: 'push is not used by the desktop app; reminders show as desktop notifications' });
+    if (url.pathname.startsWith('/api/pair/')) return json(res, 404, { error: 'pairing codes come from the cloud sync service (Settings > Sync > Pair phone)' });
     if (req.method === 'OPTIONS') { res.writeHead(405); res.end(); return undefined; }   // no CORS: this server is for its own window only
     const response = await worker.fetch(request, env);
     if (route === 'POST /api/sync' && response.ok) {

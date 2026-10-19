@@ -252,6 +252,16 @@ function readCloudConfig(path) {
   return c;
 }
 
+/** A one-time pairing code from the cloud sync service (for the app on an iPhone's Home Screen), or null. */
+async function cloudPairingCode(c) {
+  try {
+    const res = await fetch(`${c.url.replace(/\/+$/, '')}/api/pair/code`, {
+      method: 'POST', headers: { authorization: `Bearer ${c.token}` }, signal: AbortSignal.timeout(8000),
+    });
+    return res.ok ? (await res.json()).code ?? null : null;
+  } catch { return null; }   // offline, or a sync service from before codes: the link still works
+}
+
 async function localReminders(d1, notifyFn, nowMs = Date.now()) {
   const settings = Object.fromEntries((await d1.prepare('SELECT key, value FROM settings').all()).results.map((r) => [r.key, r.value]));
   const tz = Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC';   // notifications show on this computer
@@ -327,6 +337,7 @@ export async function startApp({ dataDir = defaultDataDir(), port, interval = 10
     cloudSetup: cloudSetupRunner(p, { log, onDone: () => cloud.wake() }),
     disconnect: () => { disconnectCloud(p.cloudConfig); cloud.wake(); log('cloud: turned off in Settings'); },
     pairingLink: () => { const c = readCloudConfig(p.cloudConfig); return c ? `${c.url.replace(/\/+$/, '')}/#pair=${c.token}` : null; },
+    pairingCode: () => { const c = readCloudConfig(p.cloudConfig); return c ? cloudPairingCode(c) : null; },
     onStop: () => app.stop().then(() => process.exit(0)),
   });
   writeFileSync(p.server, JSON.stringify({ port: srv.port, pid: process.pid, version: VERSION }));
@@ -439,10 +450,12 @@ async function cmdPairPhone(opts) {
   if (!c) { console.log('Cloud sync is not set up on this computer yet. Run setup.sh --cloud first.'); process.exit(1); }
   const { qrMatrix, qrToTerminal } = await import('../worker/public/js/qr.js');
   const link = `${c.url.replace(/\/+$/, '')}/#pair=${c.token}`;
+  const code = await cloudPairingCode(c);
   console.log(`\nYour phone (the link is your key - keep it private)\n\n${qrToTerminal(qrMatrix(link, 'M'), { margin: 2 })}\n\n  ${link}\n`);
-  console.log('  1. Scan the code with the phone camera and open the link (Safari on iPhone, Chrome on Android).');
+  console.log('  1. Scan the QR code with the phone camera and open the link (Safari on iPhone, Chrome on Android).');
   console.log('  2. Add it to the Home Screen (iPhone: Share > Add to Home Screen; Android: menu > Install app).');
-  console.log('  3. Open Saqme from the Home Screen, then Settings > Notifications > Enable.\n');
+  if (code) console.log(`  3. iPhone: open Saqme from the Home Screen and type the code ${code} (works once, for 10 minutes).`);
+  console.log(`  ${code ? 4 : 3}. Open Saqme from the Home Screen, then Settings > Notifications > Enable.\n`);
 }
 
 async function cmdConnect(opts) {

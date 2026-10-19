@@ -48,7 +48,7 @@ try {
   await page.waitForSelector('.setup-log a[href^="https://dash.cloudflare.com/oauth2/auth"]');
   check(true, 'progress shows, with the sign-in link clickable');
   await page.screenshot({ path: join(tmpdir(), 'saqme-window-setup-running.png') });
-  await page.waitForSelector('#sheet:has-text("Pair your phone")', { timeout: 15000 });
+  await page.waitForSelector('#sheet:has-text("Pair a phone")', { timeout: 15000 });
   check(await page.isVisible('#sheet img.qr'), 'when it is done, the QR code for the phone');
   await page.screenshot({ path: join(tmpdir(), 'saqme-window-setup-done.png') });
   await page.keyboard.press('Escape');

@@ -2227,21 +2227,60 @@ function New-QrImage([string]$text) {
   return $img
 }
 
+# A one-time pairing code for the phone app (the Worker's POST /api/pair/code). The app on an iPhone's Home
+# Screen starts at the manifest's start_url with storage of its own, so it is paired by typing this code. It is
+# fetched off the UI thread; the timer picks it up (Receive-PairCode) and the Pair phone view shows it.
+$script:pairCode = $null; $script:pairReq = $null
+function Request-PairCode($syncCfg) {
+  if ($script:pairReq -or ($script:pairCode -and $script:pairCode.Until -gt (Get-Date))) { return }
+  $ps = [powershell]::Create()
+  [void]$ps.AddScript({
+    param($core, $url, $token)
+    . $core
+    try { $r = Invoke-SaqmeApi $url $token 'POST' @{} 8000; if ($r.Status -eq 200 -and $r.Data) { return [string]$r.Data['code'] } } catch {}
+    return ''
+  }).AddArgument((Join-Path $dir 'sync-core.ps1')).AddArgument(([string]$syncCfg['url']).TrimEnd('/') + '/api/pair/code').AddArgument([string]$syncCfg['token'])
+  $script:pairReq = @{ Ps = $ps; Handle = $ps.BeginInvoke() }
+}
+function Receive-PairCode {
+  $q = $script:pairReq
+  if (-not $q -or -not $q.Handle.IsCompleted) { return }
+  $code = ''
+  try { $code = [string](@($q.Ps.EndInvoke($q.Handle)) | Select-Object -Last 1) } catch {}
+  try { $q.Ps.Dispose() } catch {}
+  $script:pairReq = $null
+  # valid for 10 minutes: shown for 9; no code (offline, or a sync service from before codes): ask again in a minute
+  $script:pairCode = @{ Code = $code; Until = (Get-Date).AddMinutes($(if ($code) { 9 } else { 1 })) }
+  if ($script:view -eq 'pair') { Render }
+}
+
 function Render-PairView {
   [void]$list.Children.Add((New-SettingsHeader 'Pair phone' 'settings'))
   $syncCfg = Read-SyncConfigUi
   if (-not $syncCfg) { $t = New-Text 'Sync is not set up on this PC yet (Settings > Sync).' $TypeSize.body $Faint; $t.Margin = '8,6,8,6'; [void]$list.Children.Add($t); return }
+  Request-PairCode $syncCfg
+  $code = $(if ($script:pairCode -and $script:pairCode.Until -gt (Get-Date)) { $script:pairCode.Code } else { $null })
   $link = ([string]$syncCfg['url']).TrimEnd('/') + '/#pair=' + [string]$syncCfg['token']
   $frame = New-Object System.Windows.Controls.Border
   $frame.Background = $Paper; $frame.CornerRadius = New-Object System.Windows.CornerRadius($Tokens.Radius.tab); $frame.Padding = '8'
   $frame.HorizontalAlignment = 'Center'; $frame.Margin = '0,4,0,10'
   try { $frame.Child = New-QrImage $link } catch { $frame.Child = New-Text "Could not draw the QR code: $($_.Exception.Message)" $TypeSize.meta $Red }
   [void]$list.Children.Add($frame)
+  $codeStep = $(if ($code) { '3.  Open Saqme from the Home Screen and type this code:' }
+                elseif ($null -eq $code) { '3.  Open Saqme from the Home Screen and type the code that appears here in a moment.' }
+                else { '3.  Open Saqme from the Home Screen and paste the link below (Copy link, then send it to the phone).' })
   foreach ($step in @('1.  Scan it with the iPhone camera and open the link in Safari.',
-                      '2.  Tap Share, then Add to Home Screen.',
-                      '3.  Open Saqme from the Home Screen; in its Settings, tap Enable notifications.')) {
+                      '2.  Tap Share, then Add to Home Screen.', $codeStep)) {
     $t = New-Text $step $TypeSize.body $Ink; $t.Margin = '12,2,8,2'; [void]$list.Children.Add($t)
   }
+  if ($code) {
+    $ct = New-Text $code 28 $Ink; $ct.FontWeight = 'SemiBold'; $ct.HorizontalAlignment = 'Center'; $ct.Margin = '0,6,0,0'; Set-Tabular $ct
+    Set-Name $ct ('Pairing code ' + (($code -replace '-', '').ToCharArray() -join ' '))
+    [void]$list.Children.Add($ct)
+    $ch = New-Text 'works once, for 10 minutes' $TypeSize.meta $Faint; $ch.HorizontalAlignment = 'Center'; $ch.Margin = '0,0,0,8'
+    [void]$list.Children.Add($ch)
+  }
+  $t = New-Text '4.  In its Settings, tap Enable notifications.' $TypeSize.body $Ink; $t.Margin = '12,2,8,2'; [void]$list.Children.Add($t)
   $g = New-Object System.Windows.Controls.Grid; $g.Margin = '8,10,6,4'
   foreach ($wd in @('*', 'Auto')) { $cd = New-Object System.Windows.Controls.ColumnDefinition; $cd.Width = $wd; $g.ColumnDefinitions.Add($cd) }
   $box = New-Object System.Windows.Controls.TextBox
@@ -2254,7 +2293,7 @@ function Render-PairView {
   $script:pairLink = $link
   [System.Windows.Controls.Grid]::SetColumn($copy, 1); [void]$g.Children.Add($copy)
   [void]$list.Children.Add($g)
-  $warn = New-Text 'This code is the key to your lists: anyone who scans it can read and change them. To revoke it, run setup again with -RotateToken and pair your devices again.' $TypeSize.meta $Faint
+  $warn = New-Text 'The QR code and the link are the key to your lists: anyone who has them can read and change them. To revoke it, run setup again with -RotateToken and pair your devices again.' $TypeSize.meta $Faint
   $warn.Margin = '8,6,8,8'
   [void]$list.Children.Add($warn)
 }
@@ -2529,6 +2568,8 @@ $timer.Add_Tick({
   if ($showEvt.WaitOne(0)) { Show-Main }
   if ($quitEvt.WaitOne(0)) { Quit-App; return }
   if ($script:setupRun) { Watch-SyncSetup }
+  if ($script:pairReq) { Receive-PairCode }
+  elseif ($script:view -eq 'pair' -and $script:pairCode -and $script:pairCode.Until -lt (Get-Date)) { Render }   # a fresh code
   if (-not $script:sync -and $script:tick % 10 -eq 5 -and (Test-Path -LiteralPath $syncCfgFile) -and (Read-SyncConfigUi)) {
     Start-SyncLoop   # setup (-CloudOnly) just connected this PC
   }
@@ -2641,6 +2682,14 @@ if ($SmokeTest) {
       Request-Sync
       & $wait { @($script:items | Where-Object { $_.Id -eq $first.Id -and $_.Text -eq 'changed on another device' }).Count -eq 1 } 'the remote edit to show up in the open list'
       Write-Output "SYNC OK ($($script:sync.Status))"
+      # Pair phone: a one-time code from the Worker, fetched in the background
+      $script:view = 'pair'; Render
+      & $wait { Receive-PairCode; $script:pairCode -and $script:pairCode.Code } 'a pairing code'
+      if ($script:pairCode.Code -notmatch '^[2-9A-HJKMNP-Z]{4}-[2-9A-HJKMNP-Z]{4}$') { throw "unexpected pairing code: $($script:pairCode.Code)" }
+      $claim = Invoke-SaqmeApi (([string]$syncCfg['url']).TrimEnd('/') + '/api/pair/claim') '' 'POST' @{ code = $script:pairCode.Code }
+      if ($claim.Status -ne 200 -or [string]$claim.Data['token'] -ne [string]$syncCfg['token']) { throw "the pairing code did not pair: $($claim.Status) $($claim.Text)" }
+      Write-Output 'PAIR CODE OK'
+      $script:view = 'list'; Render
       if ($env:SAQME_SMOKE_SHOTS) {
         # a stale edit from yet another device -> a conflict to look at
         $stale = @{ kind = 'task'; id = $first.Id; fields = @{ text = @{ v = 'older edit from a laptop'; ts = [long]$row['fields']['text']['ts'] + 5; base = [long]$row['fields']['text']['ts'] } } }

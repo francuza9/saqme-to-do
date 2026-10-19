@@ -23,6 +23,7 @@
 | `desktop/sync-worker.ps1` | The background sync loop, run in its own PowerShell runspace. |
 | `desktop/qr.ps1` | QR encoder for *Pair phone* (byte-identical to `worker/public/js/qr.js`). |
 | `worker/src/index.js` | Worker entry: routing, bearer auth, cron handler. |
+| `worker/src/pairing.js` | One-time pairing codes for phones (the app on an iPhone's Home Screen). |
 | `worker/src/merge.js` | Pure merge rules (per field, conflicts, edit vs delete, cycle checks). |
 | `worker/src/sync.js` | D1 access for `/api/sync`: optimistic batches, paging. |
 | `worker/src/push.js`, `reminders.js` | Web Push (VAPID + RFC 8291 encryption, WebCrypto only) and the reminder rules. |
@@ -93,8 +94,12 @@ device id), `sync\state.json` (sync engine state), `sync\sync.log`, `cloud.json`
   visible and 1 s after an edit; offline it backs off and retries.
 - `sw.js` caches the app shell (network first with a short timeout, so updates arrive by themselves) and
   shows push notifications; tapping one focuses or opens the app.
-- iOS gives Home Screen apps their own storage: the pairing link keeps its `#pair=` part in Safari so that
-  *Add to Home Screen* carries it into the installed app, which then drops it from the address.
+- iOS gives Home Screen apps their own storage and starts them at the manifest's `start_url`, so neither the
+  pairing link's `#pair=` part nor Safari's pairing reaches the installed app. It pairs with a **pairing
+  code** instead (`worker/src/pairing.js`): a device that has the key asks the Worker for one
+  (`POST /api/pair/code`); the welcome screen trades it for the key (`POST /api/pair/claim`). Safari, once
+  paired by the link, shows a code with the *Add to Home Screen* steps; every *Pair phone* screen shows one
+  under the QR code. The link's key leaves the address bar as soon as the app reads it.
 
 ## Worker and D1
 
@@ -102,7 +107,8 @@ device id), `sync\state.json` (sync engine state), `sync\sync.log`, `cloud.json`
   (`run_worker_first`). The app it serves talks to the API on its own origin, and the service worker can
   cache everything; copies of the app hosted elsewhere reach the API across origins (see CORS below).
 - **Auth:** single user. `AUTH_TOKEN` (256-bit, base64url) is a Worker secret; each API call needs
-  `Authorization: Bearer <token>`, compared via SHA-256 digests in constant time. `/api/health` is public.
+  `Authorization: Bearer <token>`, compared via SHA-256 digests in constant time. `/api/health` is public,
+  and so is `/api/pair/claim`, which answers only for an open pairing code.
 - **D1 tables:** `tasks`, `projects`, `settings`, `conflicts` (all with per-field timestamps and a change
   `seq`), `push_subscriptions`, `notified` (reminder dedupe), `meta` (`seq`, `db_id`, `lock`, `origin`).
   Rows are never hard-deleted: deletes are tombstones, so *Recently deleted* can restore them.
@@ -158,8 +164,13 @@ disagree, decide which side is right, fix the other one and keep the case in the
   hosts, there also allowing `connect-src https:` (to reach your Worker from elsewhere). A meta tag cannot
   forbid framing, so the app itself refuses to run inside another site's frame. Where both apply, the
   stricter one wins (`connect-src 'self'`).
+- **Pairing codes** (`worker/src/pairing.js`): 8 characters out of 31 (about 40 bits), made only for a caller
+  with the token, usable once, for 10 minutes, at most 5 open; 10 wrong guesses drop every open code, so a
+  guess has about 10 in 8·10¹¹ chances per code. Stored as SHA-256 digests in D1's `meta` table. With no
+  code open a claim writes nothing, so strangers cannot run up the database's write quota.
 - **CORS:** the Worker's API answers cross-origin requests, so a copy of the app on a static host can pair
-  with it. That gives other sites nothing: there are no cookies, and every call needs the token.
+  with it. That gives other sites nothing: there are no cookies, and every call needs the token (the
+  pairing code claim needs an open code).
 - **The Linux/macOS local server** listens on 127.0.0.1 only, refuses any other `Host` header (DNS
   rebinding), sends no CORS headers, and needs its own 256-bit key (`local/token`, mode 0600) for every API
   call. `saqme open` hands the key to the window through a one-time code (`#claim=`, valid two minutes,

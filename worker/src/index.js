@@ -6,13 +6,16 @@
 //   POST /api/push/subscribe      { deviceId, subscription }
 //   POST /api/push/unsubscribe    { endpoint }
 //   POST /api/push/test           { endpoint? }
-// Every /api call except health needs `Authorization: Bearer <AUTH_TOKEN>`.
+//   POST /api/pair/code           -> { code, expiresAt }: a one-time pairing code for a new phone (src/pairing.js)
+//   POST /api/pair/claim          { code } -> { token }, no auth: what the phone app does with that code
+// Every /api call except health and pair/claim needs `Authorization: Bearer <AUTH_TOKEN>`.
 // The API answers cross-origin requests too (CORS), so a copy of the app served from elsewhere (a static
 // host such as GitHub Pages) can sync with this Worker. That gives other sites nothing: there are no
 // cookies, and every call needs the token, which only paired devices have.
 
 import { handleSync, HttpError } from './sync.js';
 import { pushToAll, runReminders } from './reminders.js';
+import { createPairingCode, claimPairingCode } from './pairing.js';
 
 // The push services browsers use (Chrome and other Chromium browsers, Firefox, Safari, legacy Edge): the
 // cron sends requests to subscription endpoints, so a subscription may only point at one of these.
@@ -82,6 +85,13 @@ async function rememberOrigin(env, origin) {
 async function handleApi(request, env, url) {
   const route = `${request.method} ${url.pathname.replace(/\/+$/, '')}`;
   if (route === 'GET /api/health') return json({ ok: true, version: VERSION });
+  if (route === 'POST /api/pair/claim') {
+    const code = (await readJson(request))?.code;
+    if (!env.AUTH_TOKEN || env.AUTH_TOKEN.length < 32 || !(await claimPairingCode(env, code))) {
+      return json({ error: 'That code is wrong or has expired. Show a new one on the device that already syncs.' }, 400);
+    }
+    return json({ token: env.AUTH_TOKEN });
+  }
   if (!(await authorized(request, env))) return json({ error: 'unauthorized' }, 401);
 
   switch (route) {
@@ -90,6 +100,9 @@ async function handleApi(request, env, url) {
 
     case 'POST /api/sync':
       return json(await handleSync(env, await readJson(request)));
+
+    case 'POST /api/pair/code':
+      return json(await createPairingCode(env));
 
     case 'POST /api/push/subscribe': {
       const body = await readJson(request);

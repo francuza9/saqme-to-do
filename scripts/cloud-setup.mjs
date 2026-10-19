@@ -299,15 +299,26 @@ function writeDesktopConfig(path, url, token) {
   say.ok('desktop app connected (it starts syncing within a few seconds)');
 }
 
-async function printPairing(url, token, pairAgain) {
+/** A one-time pairing code for the app on an iPhone's Home Screen (worker/src/pairing.js), or null. */
+async function pairingCode(url, token) {
+  try {
+    const res = await fetch(`${url}/api/pair/code`, { method: 'POST', headers: { authorization: `Bearer ${token}` }, signal: AbortSignal.timeout(8000) });
+    return res.ok ? (await res.json()).code ?? null : null;
+  } catch { return null; }
+}
+
+async function printPairing(url, token, pairAgain, reachable) {
   const { qrMatrix, qrToTerminal } = await import('../worker/public/js/qr.js');
   const link = `${url}/#pair=${token}`;
+  const code = reachable ? await pairingCode(url, token) : null;
   console.log(`\n${c('1', 'Your phone')}  (the link is your key - keep it private)\n`);
   console.log(qrToTerminal(qrMatrix(link, 'M'), { margin: 2 }));
   console.log(`\n  ${link}\n`);
-  console.log('  1. Scan the code with the iPhone camera and open the link in Safari.');
+  console.log('  1. Scan the QR code with the iPhone camera and open the link in Safari.');
   console.log('  2. Tap Share, then "Add to Home Screen".');
-  console.log('  3. Open Saqme from the Home Screen, then Settings > Notifications > Enable.');
+  console.log(code ? `  3. Open Saqme from the Home Screen and type the code ${c('1', code)} (works once, for 10 minutes).`
+    : '  3. Open Saqme from the Home Screen and type the code Safari shows after step 1.');
+  console.log('  4. In Saqme, Settings > Notifications > Enable.');
   console.log(pairAgain ? `  (Show this code again any time with: ${pairAgain})\n` : '  (The desktop app shows this QR code again under Settings > Sync > Pair phone.)\n');
 }
 
@@ -362,7 +373,7 @@ async function main(opts) {
   writePrivateJson(opts.state, state);
 
   say.step(6, total, 'Checking it works');
-  await verify(url, secrets.token);
+  const reachable = await verify(url, secrets.token);
   if (opts.desktopConfig) writeDesktopConfig(opts.desktopConfig, url, secrets.token);
   else say.info('(no desktop app on this machine - on Windows, paste the link below into Settings > Sync)');
   if (opts.rotateToken) await forgetPushSubscriptions(workerDir, db, accountEnv);
@@ -373,7 +384,7 @@ async function main(opts) {
     say.warn('The old key is revoked: links and devices paired with it no longer work, and its phones get no more notifications.');
     say.info('Pair your phone (and other computers) again with the new link below, then turn notifications on again.');
   }
-  await printPairing(url, secrets.token, opts.pairAgain);
+  await printPairing(url, secrets.token, opts.pairAgain, reachable);
   writeResult(opts.result, { ok: true, url });
 }
 

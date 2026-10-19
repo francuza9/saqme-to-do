@@ -9,7 +9,7 @@ import {
 import { parseDue, dueLabel, dueLong, dueTone, quickDates } from './dates.js';
 import { icon, STATUS_GLYPH } from './icons.js';
 import { makeZip, readZip } from './zip.js';
-import { parsePairingLink } from './pairing.js';
+import { parsePairingLink, normalizePairingCode } from './pairing.js';
 
 // Inside another site's frame the app does not start: a page could trick taps onto it (clickjacking). The
 // Worker forbids framing with a header; a copy on a static host (GitHub Pages) can only do it here.
@@ -967,9 +967,10 @@ function renderSettings() {
   if (ui.local) out.push(...localSyncSettings());
   else {
     out.push(setting(statusText(), store.meta.token ? `This device: ${store.meta.deviceId}`
-      : 'Sync is set up from a computer: in the Saqme app there, Settings, Sync, Set up sync. Then scan its QR code with this phone, or paste its link here.',
+      : 'Sync is set up from a computer: in the Saqme app there, Settings, Sync, Set up sync. Then type the code its Pair phone shows here, or scan its QR code.',
       store.meta.token ? h('button', { class: 'btn', onclick: () => store.sync({ force: true }) }, 'Sync now') : null));
     if (store.meta.token) {
+      out.push(setting('Pair a phone', 'A one-time code (and the QR code) for the app on another phone, or on this phone\'s Home Screen', h('button', { class: 'btn', onclick: showPairing }, 'Show')));
       out.push(setting('Server', store.meta.server ? new URL(store.meta.server).host : location.host, h('button', { class: 'btn danger', title: turnOffHelp('device'), onclick: confirmUnpair }, 'Unpair')));
     } else out.push(pairingField());
   }
@@ -1061,7 +1062,7 @@ function localSyncSettings() {
     out.push(h('div', { class: 'field-row' }, input, h('button', { class: 'btn primary', onclick: go }, 'Connect')));
   }
   if (c) {
-    out.push(setting('Pair phone', 'The QR code that connects your phone to the same lists', h('button', { class: 'btn', onclick: showPairing }, 'Show')));
+    out.push(setting('Pair phone', 'The QR code and a one-time code that connect your phone to the same lists', h('button', { class: 'btn', onclick: showPairing }, 'Show')));
     out.push(setting('Turn off sync', turnOffHelp('computer'), h('button', { class: 'btn danger', title: turnOffHelp('computer'), onclick: () => {
       sheet('Turn off sync?', [h('p', {}, turnOffHelp('computer')), h('div', { class: 'btn-row' },
         h('button', { class: 'btn', onclick: closeSheet }, 'Cancel'),
@@ -1078,20 +1079,53 @@ function localSyncSettings() {
   return out;
 }
 
+/** The pairing link and a fresh one-time code: from the local app (Linux/macOS window) or this device's own key. */
+async function pairingInfo() {
+  if (ui.local) return api('local/pairing');
+  const server = store.meta.server || location.origin;
+  let code = null;
+  try { code = (await api('pair/code', {})).code; } catch { /* offline, or a sync service from before codes */ }
+  return { link: `${server.replace(/\/+$/, '')}/#pair=${store.meta.token}`, code };
+}
+
+/** "ABCD-EFGH, works once, for 10 minutes" in large type */
+const codeBlock = (code) => h('div', { class: 'pair-code' },
+  h('span', { class: 'code', 'aria-hidden': 'true' }, code),
+  h('span', { class: 'sr-only' }, `Pairing code: ${code.replace('-', '').split('').join(' ')}.`),
+  h('span', { class: 'hint' }, 'works once, for 10 minutes'));
+
 async function showPairing() {
   try {
-    const { link } = await api('local/pairing');
+    const { link, code } = await pairingInfo();
     if (!link) { toast('Cloud sync is not set up yet'); return; }
     const { qrMatrix, qrToSvg } = await import('./qr.js');
     const svg = qrToSvg(qrMatrix(link, 'M'), { margin: 4, scale: 6 });
-    sheet('Pair your phone', [
+    sheet('Pair a phone', [
       h('img', { class: 'qr', alt: 'QR code with the pairing link', src: `data:image/svg+xml;charset=utf-8,${encodeURIComponent(svg)}` }),
-      h('p', {}, 'Scan it with the phone camera and open the link, then add Saqme to the Home Screen. The link is the key to your lists: keep it private.'),
+      h('p', {}, 'Scan it with the phone camera and open the link, then add Saqme to the Home Screen.'),
+      code ? h('p', {}, 'On iPhone, the app on the Home Screen starts unpaired: open it and type this code.') : null,
+      code ? codeBlock(code) : null,
+      h('p', {}, 'The link is the key to your lists: keep it private.'),
       h('div', { class: 'btn-row' },
         h('button', { class: 'btn', onclick: () => copyText(link, 'Link copied') }, 'Copy link'),
         h('button', { class: 'btn primary', onclick: closeSheet }, 'Done')),
     ]);
   } catch (e) { toast(`Could not show it: ${e.message}`); }
+}
+
+/** iPhone Safari, just paired by the link: the Home Screen app has storage of its own, so hand it a code. */
+async function showHomeScreenStep() {
+  const { link, code } = await pairingInfo();
+  sheet('Paired. Now the Home Screen app', [
+    h('ol', { class: 'steps' },
+      h('li', {}, 'Tap ', h('b', {}, 'Share'), ', then ', h('b', {}, 'Add to Home Screen'), '.'),
+      h('li', {}, 'Open Saqme from the Home Screen and ', code ? 'type this code:' : 'paste the pairing link (Copy link below).')),
+    code ? codeBlock(code) : null,
+    h('p', {}, code ? 'Expired? Settings › Sync › Pair a phone, here or on your computer, shows a new one.' : 'The link is the key to your lists: keep it private.'),
+    h('div', { class: 'btn-row' },
+      h('button', { class: 'btn', onclick: () => copyText(link, 'Link copied') }, 'Copy link'),
+      h('button', { class: 'btn primary', onclick: closeSheet }, 'Done')),
+  ]);
 }
 
 async function loadLocalInfo() {
@@ -1191,12 +1225,31 @@ function confirmSyncWith(server, onYes) {
   ]);
 }
 
+/** A pairing code -> the key, from the sync service that served this copy of the app. */
+async function claimCode(code, input) {
+  let res = null;
+  let data = null;
+  try {
+    res = await fetch('api/pair/claim', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ code }) });
+    data = await res.json();
+  } catch { /* offline, or no sync service here */ }
+  if (!res) { toast('No connection. Try again when you are online.'); return; }
+  if (!data || !(data.token || data.error)) { input.classList.add('bad'); toast('Codes work in the app opened from your sync service\'s address. Here, paste the pairing link instead.'); return; }
+  if (!res.ok) { input.classList.add('bad'); toast(data.error); return; }
+  pair(data.token);
+}
+
 function pairingField() {
-  const input = h('input', { class: 'field', placeholder: 'Paste the pairing link', autocapitalize: 'off', autocomplete: 'off', spellcheck: false });
+  const input = h('input', { class: 'field', placeholder: 'Pairing code or link', 'aria-label': 'Pairing code or link', autocapitalize: 'characters', autocomplete: 'off', spellcheck: false });
   const go = () => {
+    const code = normalizePairingCode(input.value);
+    if (code) {
+      if (localCounts().tasks) confirmSyncWith(location.origin, () => claimCode(code, input)); else claimCode(code, input);
+      return;
+    }
     // a link to the Worker's own address pairs this copy of the app with it, wherever this copy is served from
     const p = parsePairingLink(input.value, location.origin);
-    if (!p) { input.classList.add('bad'); return; }
+    if (!p) { input.classList.add('bad'); toast('Type the 8-character code, or paste the whole pairing link.'); return; }
     if (!p.server && !localCounts().tasks) { pair(p.key); return; }   // this app's own server, nothing to upload yet
     confirmSyncWith(p.server || location.origin, () => pair(p.key, p.server));
   };
@@ -1364,9 +1417,10 @@ function renderWelcome() {
     h('p', {}, 'To-do lists in plain markdown. Start on this device right away; sync with your computer through your own Cloudflare account now or later.'),
     h('button', { class: 'btn primary', onclick: () => { ui.welcomeSkipped = true; ls.set('localOnly', '1'); store.addProject('General'); render(); } }, 'Use it on this device'),
     h('ol', { class: 'steps' },
-      h('li', {}, 'Already syncing on your computer? Open ', h('b', {}, 'Pair phone'), ' in its settings, or use the QR code setup printed.'),
-      h('li', {}, 'Scan it with the camera, or paste the link below.'),
-      isIOS() && !isStandalone() ? h('li', {}, 'Then tap ', h('b', {}, 'Share'), ', ', h('b', {}, 'Add to Home Screen'), ' and open Saqme from there.') : null),
+      h('li', {}, 'Already syncing on your computer? Open ', h('b', {}, 'Pair phone'), ' in its settings (Settings › Sync).'),
+      // (in the installed app the camera would open the link in the browser, not here)
+      h('li', {}, isStandalone() ? 'Type the code it shows below.' : 'Type the code it shows below, or scan its QR code with the camera.'),
+      isIOS() && !isStandalone() ? h('li', {}, 'On iPhone, add Saqme to the Home Screen first (', h('b', {}, 'Share'), ' › ', h('b', {}, 'Add to Home Screen'), '), open it from there and type the code in it.') : null),
     pairingField()));
 }
 
@@ -1374,8 +1428,8 @@ function pair(token, server = '') {
   store.pair(token, server);
   ui.welcomeSkipped = true;
   closeSheet();
-  toast(isIOS() && !isStandalone() ? 'Paired. Now tap Share → Add to Home Screen.' : 'Paired — syncing…');
   render();
+  if (isIOS() && !isStandalone()) showHomeScreenStep(); else toast('Paired — syncing…');
 }
 
 /** #pair=<token> from the QR link. The fragment never reaches the server. */
@@ -1389,9 +1443,9 @@ function readPairingLink() {
   const m = /^#pair=([A-Za-z0-9_-]{32,})$/.exec(location.hash);
   if (!m) return;
   const token = m[1];
-  // keep it in Safari's address bar so Add to Home Screen carries it into the installed app
-  // (its storage is separate on iOS); the installed app drops it.
-  if (isStandalone() || !isIOS()) history.replaceState(null, '', location.pathname);
+  // out of the address bar (and this history entry) at once. Keeping it there would not help an iPhone either:
+  // the Home Screen app starts at the manifest's start_url, so it is paired with a code (showHomeScreenStep).
+  history.replaceState(null, '', location.pathname);
   if (token === store.meta.token) return;
   const seen = ls.get(`link.${linkId(token)}`);
   if (!store.meta.token && !seen) {

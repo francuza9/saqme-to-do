@@ -4,7 +4,7 @@ import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import { existsSync, mkdtempSync, mkdirSync, readFileSync, writeFileSync, rmSync, statSync } from 'node:fs';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
-import { request as httpRequest } from 'node:http';
+import { request as httpRequest, createServer } from 'node:http';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -74,6 +74,32 @@ describe('local app server', () => {
     const info = await until(async () => (await (await fetch(`${app.url}/api/local`, { headers: { authorization: `Bearer ${app.token}` } })).json()).cloud);
     expect(info.label).toBe('saqme.invalid');
     rmSync(join(dir, 'sync', 'config.json'));
+  });
+
+  it('Pair phone: the link plus a one-time code from the cloud service; the local server makes no codes itself', async () => {
+    const auth = { authorization: `Bearer ${app.token}` };
+    const key = 'k'.repeat(43);
+    const cloud = createServer((req, res) => {   // a stand-in for the Worker's POST /api/pair/code
+      const ok = req.method === 'POST' && req.url === '/api/pair/code' && req.headers.authorization === `Bearer ${key}`;
+      res.writeHead(ok ? 200 : 404, { 'content-type': 'application/json' });
+      res.end(JSON.stringify(ok ? { code: 'ABCD-EFGH', expiresAt: 1 } : { error: 'not found' }));
+    });
+    await new Promise((r) => cloud.listen(0, '127.0.0.1', r));
+    const url = `http://127.0.0.1:${cloud.address().port}`;
+    mkdirSync(join(dir, 'sync'), { recursive: true });
+    writeFileSync(join(dir, 'sync', 'config.json'), JSON.stringify({ url, token: key, deviceId: 'pc-x', enabled: true }));
+    const pairing = async () => (await fetch(`${app.url}/api/local/pairing`, { headers: auth })).json();
+    try {
+      expect(await pairing()).toEqual({ link: `${url}/#pair=${key}`, code: 'ABCD-EFGH' });
+      cloud.close(); cloud.closeAllConnections();
+      expect(await pairing()).toEqual({ link: `${url}/#pair=${key}`, code: null });   // unreachable: the link still works
+    } finally {
+      cloud.close(); cloud.closeAllConnections();
+      rmSync(join(dir, 'sync', 'config.json'), { force: true });
+    }
+    expect(await pairing()).toEqual({ link: null, code: null });
+    expect((await fetch(`${app.url}/api/pair/code`, { method: 'POST', headers: auth })).status).toBe(404);
+    expect((await fetch(`${app.url}/api/pair/claim`, { method: 'POST', body: '{"code":"ABCD-EFGH"}' })).status).toBe(401);
   });
 
   it('a window opened by `saqme open` claims the token once with a one-time code', async () => {

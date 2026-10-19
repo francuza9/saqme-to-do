@@ -21,3 +21,17 @@ export function parsePairingLink(text, ownOrigin = '') {
   if (u.protocol !== 'https:' && !LOOPBACK.includes(u.hostname)) return null;
   return { key: m[2], server: u.origin === ownOrigin ? '' : u.origin };
 }
+
+// Pairing codes: the short, one-time alternative to the link, typed into the phone app (see worker/src/pairing.js).
+// Eight characters without look-alikes (no 0/O, 1/I/L), shown as two groups of four.
+export const CODE_ALPHABET = '23456789ABCDEFGHJKMNPQRSTUVWXYZ';
+const CODE_RE = new RegExp(`^[${CODE_ALPHABET}]{8}$`);
+
+/** What someone typed -> the 8-character code, or null. Case, spaces and dashes don't matter. */
+export function normalizePairingCode(text) {
+  const v = String(text ?? '').toUpperCase().replace(/[\s-]+/g, '');
+  return CODE_RE.test(v) ? v : null;
+}
+
+/** ABCDEFGH -> ABCD-EFGH */
+export const formatPairingCode = (code) => `${code.slice(0, 4)}-${code.slice(4)}`;
