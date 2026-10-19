@@ -1,5 +1,22 @@
 # Changes
 
+## Unreleased
+
+Fixes from testing on a real iPhone, a real Windows install and a real Cloudflare deploy.
+
+- iPhone: the app on the Home Screen pairs with a short one-time code (shown under every QR code, and in
+  Safari right after the link pairs it). iOS starts Home Screen apps unpaired, so the link alone never
+  reached them. Pasting the link still works; the key now leaves the address bar at once.
+- Windows: the tab strip ends before the buttons on its right; projects that don't fit fade out and are
+  listed under a "more" button, the current one is always scrolled into view, "+" stays visible, and long
+  names end in "…". Rows waste less space on the left (phone rows a little too).
+- Windows: the switch knob, the QR code's white frame and the close button's hover glyph are drawn again.
+- Phone: before you start, the header is just the logo, and it opens Settings.
+- Setup: with `-DeviceLogin` it says to open the address and enter the code (shown where they stand out);
+  it stops with an explanation when run from inside another app's package (a Store app's or an AI
+  assistant's shell), where Windows would keep what it installs out of the app's sight. The installer test
+  no longer leaves a copy of the app running under the real app's name.
+
 ## 1.0.0
 
 The first public version.
