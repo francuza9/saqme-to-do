@@ -350,6 +350,7 @@ function Apply-Theme([string]$name) {
   $addBorder.BorderBrush = $Line; $addBox.Foreground = $Ink; $addBox.CaretBrush = $Accent
   $ph.Foreground = $Accent; $phText.Foreground = $Faint
   $conflictBadge.Background = $AmberSoft; $cbText.Foreground = $Amber
+  if ($notice) { Update-NoticeColors }   # (defined further down; not yet at the first theme)
   [void](Update-SyncIndicator -Force)
   try {
     $cms.BackColor = [System.Drawing.ColorTranslator]::FromHtml('#' + $T.MenuBg.Substring(3))
@@ -446,7 +447,7 @@ function Use-Loaded($loaded) {
     if (-not $script:listBusy) { $script:items = New-Object System.Collections.ArrayList; $script:listBusy = $true; $script:loadedText = $null }
     return $false
   }
-  $script:items = $loaded; $script:listBusy = $false
+  $script:items = $loaded; $script:listBusy = $false; $script:allowRemove.Clear()
   try { $script:lastWrite = (Get-Item -LiteralPath $script:todo).LastWriteTimeUtc } catch {}
   return $true
 }
@@ -493,6 +494,10 @@ function Save-Items {
     $text = Merge-ListText $script:loadedText $script:items $disk
     $merged = $true
   }
+  # tasks leave a list only by an explicit delete or a move to another list: a save that would lose any other
+  # is refused, so a bug can never turn into a delete that sync sends to every device
+  $lost = Get-UnexplainedLoss $script:loadedText $disk $script:items $text $script:allowRemove
+  if ($lost.Count) { Refuse-Save $lost; return }
   try {
     # only over what was just read and merged: if it changed again meanwhile, merge with that next time
     if (-not (Write-TextFileIfUnchanged $script:todo $text $disk)) { Defer-Save; return }
@@ -501,6 +506,14 @@ function Save-Items {
     return
   }
   $script:saveFailed = $false; $script:saveWarned = $false
+  if (-not $script:undoing -and $text -cne $disk) {
+    # Ctrl+Z puts every file back as it was, as long as nothing else changed it meanwhile (Undo-Last)
+    $files = @(@{ Path = $script:todo; Before = $disk; After = $text })
+    if ($script:undoExtra) { $files += $script:undoExtra }
+    [void]$script:undo.Add(@{ Proj = $script:proj; Files = $files })
+    while ($script:undo.Count -gt 30) { $script:undo.RemoveAt(0) }
+  }
+  $script:undoExtra = $null; $script:allowRemove.Clear()
   $script:loadedText = $text
   if ($merged) { $script:items = Read-Items $text }
   try { $script:lastWrite = (Get-Item -LiteralPath $script:todo).LastWriteTimeUtc } catch {}
@@ -508,6 +521,21 @@ function Save-Items {
 }
 $script:saveFailed = $false; $script:saveWarned = $false; $script:saveFailedSince = Get-Date; $script:loadedText = $null; $script:openPopup = $null
 $script:listBusy = $false
+# ids that may leave the open list with the next save: explicit deletes, moves to another list, undo
+$script:allowRemove = New-Object 'System.Collections.Generic.HashSet[string]'
+$script:undo = New-Object System.Collections.ArrayList; $script:undoing = $false; $script:undoExtra = $null
+$script:refusedSaves = 0
+
+# Save-Items found that a change would make tasks disappear that nobody deleted (a bug, never what was asked
+# for): nothing is written, the list is shown as it is on disk, and the user is told.
+function Refuse-Save($lost) {
+  $script:refusedSaves++
+  $names = @((Read-Items $script:loadedText) | Where-Object { $_.Kind -eq 'task' -and $lost -contains $_.Id } | ForEach-Object { "'$($_.Text)'" })
+  $script:allowRemove.Clear(); $script:undoExtra = $null
+  [void](Use-Loaded (Load-Items)); Render
+  $what = $(if ($names.Count -eq 1) { $names[0] } elseif ($names.Count) { "$($names.Count) tasks" } else { 'tasks' })
+  Show-Notice "Not saved: that change would have removed $what. The list is as it was."
+}
 # a menu or popup holds references to task objects: never swap the list under it
 function Test-PopupOpen { return ($null -ne $script:openPopup -and $script:openPopup.IsOpen) }
 function Request-Sync { if ($script:sync) { [void]$script:sync.Wake.Set() } }
@@ -517,9 +545,17 @@ function Subtree-End([int]$i) {
   while ($j -lt $script:items.Count -and $script:items[$j].Kind -eq 'task' -and $script:items[$j].Level -gt $L) { $j++ }
   return $j
 }
+# An explicit delete (the delete button or menu, a task whose text was erased): the task and its subtasks leave
+# the list and are kept in Recently deleted. The only way, besides a move to another list, that Save-Items
+# lets tasks go.
 function Remove-Subtree($it) {
   $i = $script:items.IndexOf($it); if ($i -lt 0) { return }
   $end = Subtree-End $i
+  $block = $script:items.GetRange($i, $end - $i).ToArray()
+  $parent = ''
+  for ($k = $i - 1; $k -ge 0; $k--) { $p = $script:items[$k]; if ($p.Kind -eq 'task' -and $p.Level -lt $it.Level) { $parent = [string]$p.Id; break } }
+  Add-DeletedEntry $block $parent $script:proj
+  foreach ($b in $block) { if ($b.Id) { [void]$script:allowRemove.Add([string]$b.Id) } }
   $script:items.RemoveRange($i, $end - $i)
 }
 function Shift-Level($it, [int]$delta) {
@@ -736,8 +772,8 @@ function New-Row($node) {
   $nt.Add_MouseLeftButtonUp({ param($s, $e) $e.Handled = $true; Begin-Notes $s.Tag })
   $add = New-IconButton 0xE710 'Add subtask' { param($s, $e) Add-Subtask $s.Tag }; $add.Tag = $it
   $add.Add_MouseLeftButtonUp({ param($s, $e) $e.Handled = $true; Add-Subtask $s.Tag })
-  $del = New-IconButton 0xE711 'Delete (with subtasks)' { param($s, $e) Commit-Edit; Remove-Subtree $s.Tag; Save-Items; Render }; $del.Tag = $it
-  $del.Add_MouseLeftButtonUp({ param($s, $e) $e.Handled = $true; Commit-Edit; Remove-Subtree $s.Tag; Save-Items; Render })
+  $del = New-IconButton 0xE711 'Delete (with subtasks)' { param($s, $e) Delete-Task $s.Tag }; $del.Tag = $it
+  $del.Add_MouseLeftButtonUp({ param($s, $e) $e.Handled = $true; Delete-Task $s.Tag })
   foreach ($x in @($cal, $nt, $add, $del)) { [System.Windows.Input.KeyboardNavigation]::SetIsTabStop($x, $false) }
   foreach ($x in @($cal, $nt, $add, $del)) { [void]$acts.Children.Add($x) }
   # floats over the end of the row on hover instead of reserving width
@@ -825,6 +861,192 @@ function Move-Task($it, $target, [bool]$atEnd) {
   $script:sel = $it
   Save-Items
 }
+# the delete button and menu: the task and its subtasks, to Recently deleted (Remove-Subtree); Undo is offered
+function Delete-Task($it) {
+  Commit-Edit
+  $i = $script:items.IndexOf($it); if ($i -lt 0) { return }
+  $n = 0; for ($k = $i; $k -lt (Subtree-End $i); $k++) { if ($script:items[$k].Text) { $n++ } }
+  $name = $it.Text
+  Remove-Subtree $it; Save-Items; Render
+  if ($script:saveFailed) { return }
+  Show-Notice ("Deleted '$name'" + $(if ($n -gt 2) { " and its $($n - 1) subtasks" } elseif ($n -eq 2) { ' and its subtask' } else { '' }) + '.') -Undo
+}
+
+# Ctrl+Z: puts back the files of the last change to a list (a move, a delete, an edit; a move to another list
+# puts back both lists), as long as nothing else has changed them since (sync, an editor, an AI assistant).
+function Undo-Last {
+  Commit-Edit
+  if (-not $script:undo.Count) { Show-Notice 'Nothing to undo.'; return }
+  $u = $script:undo[$script:undo.Count - 1]
+  $script:undo.RemoveAt($script:undo.Count - 1)
+  foreach ($f in $u.Files) {
+    $cur = $(if (Test-Path -LiteralPath $f.Path) { Read-TextFile $f.Path } else { $null })
+    if ($cur -cne $f.After) { $script:undo.Clear(); Show-Notice 'Could not undo: the list has changed since (sync or another program).'; return }
+  }
+  if ($u.Proj -ne $script:proj) { Switch-Project $u.Proj }
+  $script:view = 'list'
+  foreach ($f in $u.Files) { if ($f.Path -ne $script:todo) { try { [void](Write-TextFileIfUnchanged $f.Path ([string]$f.Before) $f.After) } catch {} } }
+  $open = @($u.Files | Where-Object { $_.Path -eq $script:todo })
+  if ($open.Count -and -not $script:listBusy) {
+    $before = Read-Items $open[0].Before
+    $keep = Get-TaskIdSet $before
+    # tasks the undo takes out of the list (it undoes adding them) go to Recently deleted, like any delete
+    for ($k = 0; $k -lt $script:items.Count; $k++) {
+      $t = $script:items[$k]
+      if ($t.Kind -ne 'task' -or -not $t.Text -or $keep.Contains([string]$t.Id)) { continue }
+      $e = Subtree-End $k
+      $blk = @($script:items.GetRange($k, $e - $k).ToArray() | Where-Object { -not $keep.Contains([string]$_.Id) })
+      $parent = ''; for ($q = $k - 1; $q -ge 0; $q--) { if ($script:items[$q].Kind -eq 'task' -and $script:items[$q].Level -lt $t.Level) { $parent = [string]$script:items[$q].Id; break } }
+      Add-DeletedEntry $blk $parent $script:proj
+      foreach ($b in $blk) { if ($b.Id) { [void]$script:allowRemove.Add([string]$b.Id) } }
+      $k = $e - 1
+    }
+    $script:items = $before
+    $script:undoing = $true
+    try { Save-Items } finally { $script:undoing = $false }
+  }
+  Render
+  if (-not $script:saveFailed) { Show-Notice 'Undone.' }
+}
+
+# ---------------------------------------------------------------- recently deleted
+# Tasks deleted here, and with sync on also those deleted on other devices, can be restored for 30 days. The
+# widget's own deletes are kept in recently-deleted.json in the data folder (outside the lists folder: nothing
+# syncs or reads it as a list). Restoring writes the lines back with their ids; sync sends them as not deleted.
+$deletedFile = Join-Path $DataDir 'recently-deleted.json'
+$TrashMs = [long]30 * 86400000
+function Get-NowMs { return [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds() }
+function Read-DeletedJournal {   # the entries, one by one
+  $t = Read-TextFile $deletedFile
+  if (-not $t) { return }
+  try { $o = ConvertFrom-JsonText $t } catch { return }
+  $o | Where-Object { $_ -is [System.Collections.IDictionary] -and $_['text'] }
+}
+function Save-DeletedJournal($entries) { try { Write-TextFileAtomic $deletedFile (ConvertTo-JsonText @($entries)) } catch {} }
+function Add-DeletedEntry($block, [string]$parent, [string]$listName) {
+  $tasks = @($block | Where-Object { $_.Kind -eq 'task' -and $_.Text -ne '' })
+  if (-not $tasks.Count) { return }
+  $now = Get-NowMs
+  $keep = @(Read-DeletedJournal | Where-Object { $now - [long]$_['at'] -lt $TrashMs } | Select-Object -Last 199)
+  $entry = @{ key = (New-SaqmeId 10); list = $listName; at = $now; parent = $parent; text = (Serialize-Block $tasks); first = [string]$tasks[0].Text
+              count = $tasks.Count; ids = @($tasks | ForEach-Object { [string]$_.Id }) }
+  Save-DeletedJournal ($keep + ,$entry)
+}
+# the ids in every list (the open one as it is in memory)
+function Get-AllListIds {
+  $set = New-Object 'System.Collections.Generic.HashSet[string]'
+  foreach ($n in @(Get-ProjectNames)) {
+    $its = $(if ($n -eq $script:proj -and -not $script:listBusy) { $script:items } else { Read-Items (Read-TextFile (Proj-Path $n)) })
+    foreach ($id in (Get-TaskIdSet $its)) { [void]$set.Add($id) }
+  }
+  return ,$set
+}
+# what can be restored, newest first: @{ Key; List; At (ms); Parent; Text (list lines with ids); First; Count }
+function Get-DeletedEntries {
+  $now = Get-NowMs
+  $present = Get-AllListIds
+  $seen = New-Object 'System.Collections.Generic.HashSet[string]'
+  $out = New-Object System.Collections.ArrayList
+  foreach ($e in (Read-DeletedJournal)) {
+    if ($now - [long]$e['at'] -ge $TrashMs) { continue }
+    $ids = @($e['ids'] | ForEach-Object { [string]$_ })
+    foreach ($id in $ids) { [void]$seen.Add($id) }
+    if (-not @($ids | Where-Object { -not $present.Contains($_) }).Count) { continue }   # all back already
+    [void]$out.Add(@{ Key = [string]$e['key']; List = [string]$e['list']; At = [long]$e['at']; Parent = [string]$e['parent']; Text = [string]$e['text']; First = [string]$e['first']; Count = [int]$e['count'] })
+  }
+  if (Read-SyncConfigUi) { foreach ($t in (Get-SyncTombstones $present $seen $now)) { [void]$out.Add($t) } }
+  $out | Sort-Object { $_.At } -Descending
+}
+# tasks deleted on any device, from the sync state (read only): each with the subtasks deleted along with it
+function Get-SyncTombstones($present, $seen, [long]$now) {
+  $out = New-Object System.Collections.ArrayList
+  try { $st = Read-SyncState (Join-Path $syncDir 'state.json') } catch { return }
+  $del = @{}
+  foreach ($r in @($st.R.Values)) {
+    if ($r['kind'] -ne 'task') { continue }
+    $d = Get-Field $r 'deleted'
+    if ($d -and $d['v'] -and ($now - [long]$d['ts']) -lt $TrashMs) { $del[[string]$r['id']] = $r }
+  }
+  $kids = @{}
+  foreach ($r in $del.Values) {
+    $p = [string](Get-PlaceOf $r)['parent']
+    if ($p) { if (-not $kids.ContainsKey($p)) { $kids[$p] = New-Object System.Collections.ArrayList }; [void]$kids[$p].Add($r) }
+  }
+  foreach ($r in $del.Values) {
+    $id = [string]$r['id']; $ts = [long](Get-Field $r 'deleted')['ts']; $p = [string](Get-PlaceOf $r)['parent']
+    if ($p -and $del.ContainsKey($p) -and [Math]::Abs([long](Get-Field $del[$p] 'deleted')['ts'] - $ts) -le 5000) { continue }   # went with its parent
+    if ($seen.Contains($id) -or $present.Contains($id)) { continue }
+    $its = New-Object System.Collections.ArrayList
+    Add-TombstoneItems $its $r 0 $kids $ts $present
+    $projId = [string](Get-PlaceOf $r)['project']
+    $listName = $(if ($st.Files.ContainsKey($projId)) { [string]$st.Files[$projId] } elseif ($st.R.ContainsKey("project:$projId")) { [string](Get-Field $st.R["project:$projId"] 'name')['v'] } else { '' })
+    [void]$out.Add(@{ Key = "sync:$id"; List = $listName; At = $ts; Parent = $p; Text = (ConvertTo-MarkdownText $its 0); First = [string]$its[0].Text; Count = $its.Count })
+  }
+  $out
+}
+function Add-TombstoneItems($its, $r, [int]$level, $kids, [long]$ts, $present) {
+  $due = (Get-Field $r 'due')['v']
+  [void]$its.Add([pscustomobject]@{ Kind = 'task'; Level = $level; Mark = [string](Get-Field $r 'status')['v']; MarkRaw = ''; Indent = 2 * $level
+    Text = [string](Get-Field $r 'text')['v']; Due = $(if ($due) { [string]$due['date'] } else { '' }); DueTime = $(if ($due) { [string]$due['time'] } else { '' })
+    Notes = [string](Get-Field $r 'notes')['v']; Raw = ''; Id = [string]$r['id'] })
+  $mine = $kids[[string]$r['id']]
+  if (-not $mine) { return }
+  foreach ($k in (Sort-Ordinal $mine { param($x) [string](Get-PlaceOf $x)['pos'] })) {
+    if ([Math]::Abs([long](Get-Field $k 'deleted')['ts'] - $ts) -gt 5000 -or $present.Contains([string]$k['id'])) { continue }
+    Add-TombstoneItems $its $k ($level + 1) $kids $ts $present
+  }
+}
+# puts an entry back into its list (the open one if that list is gone): under its parent when that is still
+# there, else at the end. Ids already in some list are skipped, so a restore never duplicates a task.
+function Restore-Deleted($en) {
+  Commit-Edit
+  $names = @(Get-ProjectNames)
+  $target = $(if ($en.List -and $names -contains $en.List) { $en.List } else { $script:proj })
+  if ($target -ne $script:proj) { Switch-Project $target }
+  $script:view = 'list'
+  if ($script:listBusy) { Render; Show-Notice "'$target' is busy in another program. Try again in a moment."; return }
+  $present = Get-AllListIds
+  $block = @((Read-Items $en.Text) | Where-Object { $_.Kind -eq 'task' -and $_.Text -ne '' -and -not $present.Contains([string]$_.Id) })
+  if ($block.Count) {
+    $pi = -1
+    if ($en.Parent) { for ($k = 0; $k -lt $script:items.Count; $k++) { if ($script:items[$k].Kind -eq 'task' -and [string]$script:items[$k].Id -ceq $en.Parent) { $pi = $k; break } } }
+    if ($pi -ge 0) { $pos = Subtree-End $pi; $lv = $script:items[$pi].Level + 1 }
+    else {
+      $pos = $script:items.Count; $lv = 0
+      for ($k = $script:items.Count - 1; $k -ge 0; $k--) { if ($script:items[$k].Kind -eq 'task' -and $script:items[$k].Level -eq 0) { $pos = Subtree-End $k; break } }
+    }
+    foreach ($b in $block) { $b.Level += $lv }
+    # with sync: tell it this is a restore, not a stale copy of a list from before a delete on another device
+    if ($script:sync) { foreach ($b in $block) { $script:sync.Queue.Enqueue(@{ kind = 'task'; id = [string]$b.Id; field = 'restore' }) } }
+    $script:items.InsertRange($pos, [object[]]$block)
+    Save-Items
+    $script:sel = $block[0]
+  }
+  if (-not $en.Key.StartsWith('sync:')) { Save-DeletedJournal @(Read-DeletedJournal | Where-Object { [string]$_['key'] -ne $en.Key }) }
+  Render
+  if ($block.Count) { Show-Notice "Restored '$($en.First)' to $target." -Undo } else { Show-Notice "'$($en.First)' is already back." }
+}
+function Format-Deleted([long]$ms) {
+  $t = [DateTimeOffset]::FromUnixTimeMilliseconds($ms).LocalDateTime
+  if ($t.Date -eq (Get-Date).Date) { return 'today ' + $t.ToString('H:mm', $CI) }
+  if ($t.Date -eq (Get-Date).Date.AddDays(-1)) { return 'yesterday ' + $t.ToString('H:mm', $CI) }
+  return $t.ToString('d MMM H:mm', $CI)
+}
+function Render-TrashView {
+  [void]$list.Children.Add((New-SettingsHeader 'Recently deleted' 'settings'))
+  $entries = @(Get-DeletedEntries)
+  if (-not $entries.Count) { $t = New-Text 'Nothing deleted in the last 30 days.' $TypeSize.body $Faint; $t.Margin = '8,6,8,6'; [void]$list.Children.Add($t) }
+  foreach ($en in $entries) {
+    $hint = $(if ($en.List) { "$($en.List), $(Format-Deleted $en.At)" } else { Format-Deleted $en.At })
+    if ($en.Count -gt 1) { $hint += $(if ($en.Count -eq 2) { ', with its subtask' } else { ", with $($en.Count - 1) subtasks" }) }
+    $b = New-SmallButton 'Restore' { param($x) Restore-Deleted $x } $null $en
+    Set-Name $b "Restore $($en.First)"
+    [void]$list.Children.Add((New-SettingRow $en.First $hint $b))
+  }
+  $note = New-Text ("Deleted tasks stay here for 30 days" + $(if (Read-SyncConfigUi) { ', also those deleted on your other devices' } else { '' }) + '. Right after a change, Ctrl+Z undoes it.') $TypeSize.meta $Faint
+  $note.Margin = '8,10,8,8'; [void]$list.Children.Add($note)
+}
+
 # Alt+Up / Alt+Down: swap with the previous / next sibling
 function Nudge-Task($it, [int]$dir) {
   if (-not (Step-ListBlock $script:items $it $dir)) { return }
@@ -854,7 +1076,7 @@ function Show-RowMenu($target, $it) {
     }
   }
   [void]$m.Items.Add((New-Separator))
-  $del = New-MenuItem 'Delete'; $del.Tag = $it; $del.Add_Click({ param($s, $e) Remove-Subtree $s.Tag; Save-Items; Render })
+  $del = New-MenuItem 'Delete'; $del.Tag = $it; $del.Add_Click({ param($s, $e) Delete-Task $s.Tag })
   [void]$m.Items.Add($del)
   $m.PlacementTarget = $target; $m.Placement = 'MousePoint'
   if ($target -ne $null -and -not $target.IsMouseOver) { $m.Placement = 'Bottom' }
@@ -869,12 +1091,15 @@ function Move-ToProject($it, [string]$proj) {
   $block = $script:items.GetRange($i, $end - $i).ToArray()
   $dest = Proj-Path $proj
   try {
-    $existing = $(if (Test-Path -LiteralPath $dest) { [IO.File]::ReadAllText($dest, [Text.Encoding]::UTF8) } else { '' })
+    $before = $(if (Test-Path -LiteralPath $dest) { [IO.File]::ReadAllText($dest, [Text.Encoding]::UTF8) } else { '' })
+    $existing = $before
     $eol = Get-TextEol $existing
     $text = Serialize-Block $block $eol
     if ($existing -and -not $existing.EndsWith("`n")) { $existing += $eol }
     Write-TextFileAtomic $dest ($existing + $text)
   } catch { return }
+  $script:undoExtra = @{ Path = $dest; Before = $before; After = $existing + $text }
+  foreach ($b in $block) { if ($b.Id) { [void]$script:allowRemove.Add([string]$b.Id) } }
   $script:items.RemoveRange($i, $end - $i)
   $script:sel = $null
   Save-Items; Render
@@ -1140,10 +1365,12 @@ function Commit-Edit([switch]$Cancel) {
     if ($it.Text -eq '') { Remove-Subtree $it }
   } else {
     $t = $box.Text.Trim()
+    $erased = $(if ($t -eq '' -and $it.Text -ne '') { $it.Text } else { '' })
     if ($t -eq '') { Remove-Subtree $it } else { Rekey-State $it.Text $t; $it.Text = $t }
     Save-Items
   }
   Render
+  if ($erased -and -not $script:saveFailed) { Show-Notice "Deleted '$erased'." -Undo }
   if (-not [System.Windows.Input.Keyboard]::FocusedElement) { [void]$w.Focus() }
 }
 
@@ -1545,7 +1772,9 @@ function Show-AppMenu($s) {
   $test.Add_Click({ Show-Toast 'Saqme To Do' 'Notifications are working.' $script:proj })
   $reload = New-MenuItem 'Reload'
   $reload.Add_Click({ [void](Use-Loaded (Load-Items)); Render })
-  foreach ($x in @($theme, $open, $folder, $fit, $test, $reload)) { [void]$m.Items.Add($x) }
+  $trashItem = New-MenuItem 'Recently deleted'
+  $trashItem.Add_Click({ $script:view = 'trash'; Render })
+  foreach ($x in @($theme, $trashItem, $open, $folder, $fit, $test, $reload)) { [void]$m.Items.Add($x) }
   if ($script:sync) {
     $sn = New-MenuItem 'Sync now'
     $sn.Add_Click({ Request-Sync })
@@ -1571,6 +1800,37 @@ $phText.IsHitTestVisible = $false; $phText.VerticalAlignment = 'Center'; $phText
 [void]$addGrid.Children.Add($addBox); [void]$addGrid.Children.Add((Hide-Decoration $ph)); [void]$addGrid.Children.Add((Hide-Decoration $phText))
 $addBorder.Child = $addGrid
 [System.Windows.Controls.DockPanel]::SetDock($addBorder, 'Bottom'); [void]$dock.Children.Add($addBorder)
+
+# a short message above the add line ("Deleted ...  Undo", "Not saved ..."); it goes away by itself
+$notice = New-Object System.Windows.Controls.Border
+$notice.Margin = '8,6,8,0'; $notice.Padding = '12,6,6,6'; $notice.Visibility = 'Collapsed'
+$notice.CornerRadius = New-Object System.Windows.CornerRadius($Tokens.Radius.control)
+$noticeGrid = New-Object System.Windows.Controls.Grid
+foreach ($wd in @('*', 'Auto')) { $cd = New-Object System.Windows.Controls.ColumnDefinition; $cd.Width = $wd; $noticeGrid.ColumnDefinitions.Add($cd) }
+$noticeText = New-Object System.Windows.Controls.TextBlock
+$noticeText.FontFamily = $UI; $noticeText.FontSize = $TypeSize.meta; $noticeText.TextWrapping = 'Wrap'; $noticeText.VerticalAlignment = 'Center'
+try { [System.Windows.Automation.AutomationProperties]::SetLiveSetting($noticeText, 'Polite') } catch {}   # read out (.NET 4.7.1+)
+[void]$noticeGrid.Children.Add($noticeText)
+$notice.Child = $noticeGrid
+[System.Windows.Controls.DockPanel]::SetDock($notice, 'Bottom'); [void]$dock.Children.Add($notice)
+$noticeTimer = New-Object System.Windows.Threading.DispatcherTimer
+$noticeTimer.Interval = [TimeSpan]::FromSeconds(8)
+$noticeTimer.Add_Tick({ $noticeTimer.Stop(); $notice.Visibility = 'Collapsed' })
+function Update-NoticeColors {
+  $notice.Background = $ButtonBg; $noticeText.Foreground = $Ink
+  if ($noticeGrid.Children.Count -gt 1) { $noticeGrid.Children[1].Background = $ButtonBg; $noticeGrid.Children[1].Child.Foreground = $Ink }
+}
+function Show-Notice([string]$text, [switch]$Undo) {
+  $noticeText.Text = $text
+  if ($noticeGrid.Children.Count -gt 1) { $noticeGrid.Children.RemoveAt(1) }
+  if ($Undo) {
+    $b = New-SmallButton 'Undo' { $notice.Visibility = 'Collapsed'; Undo-Last }
+    $b.ToolTip = 'Ctrl+Z'; [System.Windows.Controls.Grid]::SetColumn($b, 1); [void]$noticeGrid.Children.Add($b)
+  }
+  Update-NoticeColors
+  $notice.Visibility = 'Visible'
+  $noticeTimer.Stop(); $noticeTimer.Start()
+}
 
 $addBox.Add_GotKeyboardFocus({ Commit-Edit })
 $addBox.Add_TextChanged({ $phText.Visibility = $(if ($addBox.Text) { 'Collapsed' } else { 'Visible' }) })
@@ -1750,6 +2010,7 @@ $script:Keybinds = @(
   @('Space', 'Mark done / not done'),
   @('Right / Left', 'Open / close a task (Left on a subtask jumps to its parent)'),
   @('Alt+Up / Alt+Down', 'Move the task up / down'),
+  @('Ctrl+Z', 'Undo the last change (a move, a delete, an edit)'),
   @('Ctrl+D', 'Set a deadline'),
   @('Ctrl+I', 'Notes / links'),
   @('Ctrl+M', 'Task menu (status, deadline, move, delete...)'),
@@ -1845,9 +2106,10 @@ function Render-Settings {
   $addBorder.Visibility = 'Collapsed'
   $list.Children.Clear()
   if ($script:HasA11y) { $list.Role = 'group' }
-  Set-Name $list $(switch ($script:view) { 'pair' { 'Pair phone' } 'conflicts' { 'Conflicts' } 'keys' { 'Keyboard shortcuts' } default { 'Settings' } })
+  Set-Name $list $(switch ($script:view) { 'pair' { 'Pair phone' } 'conflicts' { 'Conflicts' } 'keys' { 'Keyboard shortcuts' } 'trash' { 'Recently deleted' } default { 'Settings' } })
   $script:visible = New-Object System.Collections.ArrayList
   if ($script:view -eq 'pair') { Render-PairView; return }
+  if ($script:view -eq 'trash') { Render-TrashView; return }
   if ($script:view -eq 'conflicts') { Render-ConflictsView; return }
   if ($script:view -eq 'keys') {
     [void]$list.Children.Add((New-SettingsHeader 'Keyboard shortcuts' 'settings'))
@@ -1925,6 +2187,7 @@ function Render-Settings {
   $fo.Child = (New-Text 'Open folder' $TypeSize.label $Ink); $fo.Child.FontWeight = 'Medium'
   $fo.Add_MouseLeftButtonUp({ param($s, $e) $e.Handled = $true; Start-Process explorer.exe -ArgumentList "`"$listsDir`"" })
   [void]$list.Children.Add((New-SettingRow 'Lists' 'Plain markdown files, one per project' $fo))
+  [void]$list.Children.Add((New-SettingRow 'Recently deleted' 'Deleted tasks, ready to restore for 30 days' (New-SmallButton 'Show' { $script:view = 'trash'; Render })))
 }
 
 # ---------------------------------------------------------------- sync (cloud): UI side
@@ -2398,6 +2661,7 @@ $w.Add_PreviewKeyDown({
     return    # the task / notes / tab editors handle their own keys
   }
 
+  if ($ctrl -and $key -eq 'Z') { $e.Handled = $true; Undo-Last; return }   # (text boxes keep their own Ctrl+Z)
   if ($script:view -ne 'list') {
     if ($key -eq 'Escape') { $e.Handled = $true; $script:view = $(if ($script:view -eq 'settings') { 'list' } else { 'settings' }); Render }
     return
@@ -2653,8 +2917,9 @@ if ($SmokeTest) {
     $first.Mark = '/'; Save-Items
     $after = [IO.File]::ReadAllText($script:todo)
     if ($after -notmatch 'added by an assistant' -or $after -notmatch '- \[/\] smoke task one') { throw "outside edit lost: $after" }
-    # Drag and drop through the code the mouse handlers run (Start-Drag / Drag-Move / End-Drag) and Alt+Up/Down:
-    # a list never loses a task (1.0.0 lost every dragged task, and sync sent them as deletes)
+    # Drag and drop through the code the mouse handlers run (Start-Drag / Drag-Move / End-Drag), Alt+Up/Down,
+    # Ctrl+Z, a delete and its restore from Recently deleted, and the save guard: a list never loses a task
+    # that was not deleted (1.0.0 lost every dragged task, and sync sent them as deletes)
     $homeList = $script:proj
     Write-TextFileAtomic (Proj-Path 'Drag check') ("- [ ] P one ^pppppp01`n  - [ ] P sub a ^pppppp02`n  - [x] P sub b ^pppppp03`n  - [ ] P sub c ^pppppp04`n" +
       "- [ ] Q two ^qqqqqq01`n- [ ] R three ^rrrrrr01`n- [>] S later ^ssssss01`n- [x] T done ^tttttt01`n")
@@ -2662,7 +2927,7 @@ if ($SmokeTest) {
     $script:cfg.showCompleted = '1'; Render
     $layout = { $outer.Measure((New-Object System.Windows.Size(420, 1200))); $outer.Arrange((New-Object System.Windows.Rect(0, 0, 420, 1200))); $outer.UpdateLayout() }
     $fileText = { [IO.File]::ReadAllText($script:todo) }
-    $ids = { $a = [string[]]@((Read-Items (& $fileText)) | Where-Object { $_.Kind -eq 'task' -and $_.Text } | ForEach-Object { [string]$_.Id }); [Array]::Sort($a, [StringComparer]::Ordinal); $a -join ',' }
+    $ids = { $set = Get-TaskIdSet (Read-Items (& $fileText)); $a = New-Object string[] $set.Count; $set.CopyTo($a); [Array]::Sort($a, [StringComparer]::Ordinal); $a -join ',' }
     $all = & $ids
     if ($all.Split(',').Count -ne 8) { throw "drag check list: $all" }
     $rowOf = { param($id) @($list.Children | Where-Object { (Is-TaskRow $_) -and $_.Tag.Id -ceq $id })[0] }
@@ -2695,6 +2960,27 @@ if ($SmokeTest) {
     Nudge-Task @($script:items | Where-Object { $_.Id -eq 'qqqqqq01' })[0] -1
     Nudge-Task @($script:items | Where-Object { $_.Id -eq 'pppppp01' })[0] 1
     if ((& $ids) -ne $all) { throw "Alt+Up/Down lost tasks:`n$(& $fileText)" }
+    # Ctrl+Z right after a drag puts the list back
+    $t0 = & $fileText
+    & $dragTo 'qqqqqq01' $null 'end'
+    Undo-Last
+    if ((& $fileText) -cne $t0) { throw "undo after a drag:`n$(& $fileText)" }
+    # a delete goes to Recently deleted; Ctrl+Z, or Restore there, brings it back
+    Delete-Task @($script:items | Where-Object { $_.Id -eq 'pppppp01' })[0]
+    if ((& $ids) -match 'pppppp0[123]') { throw 'delete' }
+    $en = @(Get-DeletedEntries | Where-Object { $_.First -eq 'P one' })
+    if ($en.Count -ne 1 -or $en[0].Count -ne 3) { throw "Recently deleted: $($en.Count) entries" }
+    $script:view = 'trash'; Render; $script:view = 'list'
+    Undo-Last
+    if ((& $ids) -ne $all) { throw "undo after a delete:`n$(& $fileText)" }
+    Delete-Task @($script:items | Where-Object { $_.Id -eq 'pppppp01' })[0]
+    Restore-Deleted @(Get-DeletedEntries | Where-Object { $_.First -eq 'P one' })[0]
+    if ((& $ids) -ne $all) { throw "restore:`n$(& $fileText)" }
+    # the guard: a change that drops a task nobody deleted is not saved
+    $t0 = & $fileText; $refused = $script:refusedSaves
+    $script:items.Remove(@($script:items | Where-Object { $_.Id -eq 'qqqqqq01' })[0])
+    Save-Items
+    if ((& $fileText) -cne $t0 -or $script:refusedSaves -ne $refused + 1 -or -not @($script:items | Where-Object { $_.Id -eq 'qqqqqq01' }).Count) { throw 'the save guard let a task go' }
     # and random drags between all kinds of rows
     $rng = New-Object System.Random 19
     for ($k = 0; $k -lt 30; $k++) {
@@ -2742,6 +3028,27 @@ if ($SmokeTest) {
       if ($claim.Status -ne 200 -or [string]$claim.Data['token'] -ne [string]$syncCfg['token']) { throw "the pairing code did not pair: $($claim.Status) $($claim.Text)" }
       Write-Output 'PAIR CODE OK'
       $script:view = 'list'; Render
+      # a task deleted on another device shows in Recently deleted here; restoring it undeletes it everywhere
+      $rowOfId = {
+        param($id)
+        $r = Invoke-SaqmeApi $api ([string]$syncCfg['token']) 'POST' @{ deviceId = 'smoke-probe'; cursor = 0; changes = @() }
+        foreach ($x in @($r.Data['changes'])) { if ($x['kind'] -eq 'task' -and $x['id'] -eq $id) { return $x } }
+        return $null
+      }
+      Add-Task 'smoke deleted elsewhere'
+      $other = @($script:items | Where-Object { $_.Text -eq 'smoke deleted elsewhere' })[0]
+      Request-Sync
+      & $wait { $null -ne (& $rowOfId $other.Id) } 'the new task to reach the server'
+      $orow = & $rowOfId $other.Id
+      $gone = @{ kind = 'task'; id = $other.Id; fields = @{ deleted = @{ v = $true; ts = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds(); base = [long]$orow['fields']['deleted']['ts'] } } }
+      [void](Invoke-SaqmeApi $api ([string]$syncCfg['token']) 'POST' @{ deviceId = 'smoke-phone'; cursor = 0; changes = @($gone) })
+      Request-Sync
+      & $wait { -not @($script:items | Where-Object { $_.Id -eq $other.Id }).Count } 'the delete from the other device to arrive'
+      & $wait { @(Get-DeletedEntries | Where-Object { $_.First -eq 'smoke deleted elsewhere' }).Count -eq 1 } 'the task in Recently deleted'
+      Restore-Deleted @(Get-DeletedEntries | Where-Object { $_.First -eq 'smoke deleted elsewhere' })[0]
+      Request-Sync
+      & $wait { $x = & $rowOfId $other.Id; $x -and -not $x['fields']['deleted']['v'] } 'the restore to reach the server'
+      Write-Output 'RESTORE OK'
       if ($env:SAQME_SMOKE_SHOTS) {
         # a stale edit from yet another device -> a conflict to look at
         $stale = @{ kind = 'task'; id = $first.Id; fields = @{ text = @{ v = 'older edit from a laptop'; ts = [long]$row['fields']['text']['ts'] + 5; base = [long]$row['fields']['text']['ts'] } } }

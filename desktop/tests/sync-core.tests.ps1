@@ -500,6 +500,20 @@ Test-Case 'thousands of random drags and nudges keep every task with its text, s
   Assert-True ($moved -gt 1000) "most moves happen ($moved)"
 }
 
+Test-Case 'a save may lose a task only when it was deleted on purpose or on disk meanwhile' {
+  $base = "- [ ] A ^aaaaaaaa`n- [ ] B ^bbbbbbbb`n"
+  $allowB = New-Object 'System.Collections.Generic.HashSet[string]'; [void]$allowB.Add('bbbbbbbb')
+  $onlyA = Read-Items "- [ ] A ^aaaaaaaa`n"
+  Assert-Eq (Get-UnexplainedLoss $base $base $onlyA "- [ ] A ^aaaaaaaa`n" $null) 'bbbbbbbb' 'dropped from memory'
+  Assert-Eq (Get-UnexplainedLoss $base $base $onlyA "- [ ] A ^aaaaaaaa`n" $allowB).Count 0 'deleted on purpose'
+  Assert-Eq (Get-UnexplainedLoss $base "- [ ] A ^aaaaaaaa`n" (Read-Items $base) "- [ ] A ^aaaaaaaa`n" $null).Count 0 'deleted on disk meanwhile (a merge)'
+  Assert-Eq (Get-UnexplainedLoss $base $base (Read-Items "$base- [ ] N ^nnnnnnnn`n") $base $null) 'nnnnnnnn' 'a task in memory missing from the text'
+  Assert-Eq (Get-UnexplainedLoss $base "$base- [ ] E ^eeeeeeee`n" (Read-Items $base) $base $null) 'eeeeeeee' 'a task added on disk missing from the text'
+  Assert-Eq (Get-UnexplainedLoss $base $null $onlyA "- [ ] A ^aaaaaaaa`n" $null) 'bbbbbbbb' 'the file is gone: what memory came from still counts'
+  Assert-Eq (Get-UnexplainedLoss $base $base (Read-Items "$base- [ ] `n") $base $null).Count 0 'a task without text is never written'
+  Assert-Eq (Get-UnexplainedLoss $null $null (Read-Items $base) $base $null).Count 0 'a new list'
+}
+
 # what the server does with the changes: they become the synced rows
 function Confirm-Outbox($st) {
   foreach ($c in @($st.Outbox)) {

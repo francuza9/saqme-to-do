@@ -59,6 +59,12 @@ $applyPlan = {
 function Add-QueuedChanges($st) {
   while ($shared.Queue.Count -gt 0) {
     $q = $shared.Queue.Dequeue()
+    if ($q.kind -eq 'task' -and $q.field -eq 'restore') {
+      # Recently deleted put this task back in its list on purpose: not a save from before a remote delete
+      # (Get-StaleSave), so the next diff sends it as not deleted, as of now
+      [void]$st.Planned.Remove("task:$($q.id)")
+      continue
+    }
     $now = Get-SyncNow $st
     $targets = @($q.id)
     if ($q.kind -eq 'task' -and $q.field -eq 'deleted' -and $q.value -eq $true) {

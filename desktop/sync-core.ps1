@@ -393,6 +393,36 @@ function Step-ListBlock($items, $it, [int]$dir) {
   return $true
 }
 
+# The ids of the tasks a list holds (tasks without text are never written, so they do not count).
+function Get-TaskIdSet($items) {
+  $set = New-Object 'System.Collections.Generic.HashSet[string]'
+  foreach ($it in $items) { if ($it.Kind -eq 'task' -and $it.Text -ne '' -and $it.Id) { [void]$set.Add([string]$it.Id) } }
+  return ,$set
+}
+
+# The widget's last line of defence before it writes a list: the ids that writing $newText would make disappear
+# without anyone deleting them. A task may leave the file only by an explicit delete or a move to another list
+# ($allowed), or because another program deleted it on disk since the widget loaded the list (in $baseText, not
+# in $diskText). Anything else in the file or in memory ($items) must be in $newText. Empty = safe to write.
+function Get-UnexplainedLoss($baseText, $diskText, $items, $newText, $allowed) {   # texts may be $null (no file)
+  $base = Get-TaskIdSet (Read-Items $baseText)
+  $disk = Get-TaskIdSet (Read-Items $diskText)
+  $result = Get-TaskIdSet (Read-Items $newText)
+  $lost = New-Object System.Collections.ArrayList
+  $check = New-Object 'System.Collections.Generic.HashSet[string]'
+  foreach ($id in $disk) { [void]$check.Add($id) }
+  foreach ($id in (Get-TaskIdSet $items)) { [void]$check.Add($id) }
+  # what memory came from counts too, unless it was deleted on disk meanwhile
+  foreach ($id in $base) { if ($null -eq $diskText -or $disk.Contains($id)) { [void]$check.Add($id) } }
+  foreach ($id in $check) {
+    if ($result.Contains($id)) { continue }
+    if ($allowed -and $allowed.Contains($id)) { continue }
+    if ($base.Contains($id) -and $null -ne $diskText -and -not $disk.Contains($id)) { continue }
+    [void]$lost.Add($id)
+  }
+  return ,$lost
+}
+
 # the list (other than $except) holding most of these ids: where an open list went when renamed outside
 function Find-ListWithIds([string]$listsDir, $ids, [string]$except) {
   $best = $null; $bestHits = 0
