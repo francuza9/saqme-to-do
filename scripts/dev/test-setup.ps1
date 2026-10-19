@@ -19,6 +19,20 @@ function Invoke-Setup {
 $utf8 = New-Object System.Text.UTF8Encoding($false)
 New-Item -ItemType Directory -Path $sb -Force | Out-Null
 
+# The app setup starts here runs under the sandbox's own instance name and data folder (never the real
+# Local\SaqmeToDo, which a real install would then only "show"); every case that starts it quits it again.
+$sbInstance = 'Local\SaqmeToDo.Sandbox'
+function Test-SandboxApp { $m = $null; if ([System.Threading.Mutex]::TryOpenExisting("$sbInstance.Instance", [ref]$m)) { $m.Dispose(); return $true }; return $false }
+function Stop-SandboxApp {
+  $q = $null
+  if ([System.Threading.EventWaitHandle]::TryOpenExisting("$sbInstance.Quit", [ref]$q)) { [void]$q.Set(); $q.Dispose() }
+  for ($i = 0; $i -lt 40 -and (Test-SandboxApp); $i++) { Start-Sleep -Milliseconds 250 }
+  # and anything else still running from the sandbox's app folder (a widget that never got that far)
+  Get-CimInstance Win32_Process -Filter "Name='powershell.exe'" | Where-Object { $_.CommandLine -like "*$app\widget.ps1*" } |
+    ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
+}
+function Wait-SandboxApp { for ($i = 0; $i -lt 80 -and -not (Test-SandboxApp); $i++) { Start-Sleep -Milliseconds 250 }; return (Test-SandboxApp) }
+
 # lists in another folder to import (without ids)
 $old = Join-Path $sb 'old\todo'
 New-Item -ItemType Directory -Path (Join-Path $old 'lists') -Force | Out-Null
@@ -74,6 +88,13 @@ try {
   Check ($r.Code -eq 0 -and $r.Out -match 'FAKE-CLOUD .*cloud-setup\.mjs.*--rotate-token') '-RotateToken alone runs the cloud part (the old key is replaced)'
   $r = Invoke-Setup -DeviceLogin -CloudOnly
   Check ($r.Code -eq 0 -and $r.Out -match 'FAKE-CLOUD .*--device-login') '-DeviceLogin reaches the cloud part'
+  # -CloudOnly starts the app when it isn't running: the sandbox's own copy, on the sandbox's data
+  Check (Wait-SandboxApp) 'the app setup started runs under the sandbox instance name'
+  $settings = Join-Path $data '.widget-settings'   # written once the window is up
+  for ($i = 0; $i -lt 80 -and -not (Test-Path $settings); $i++) { Start-Sleep -Milliseconds 250 }
+  Check (Test-Path $settings) '... on the sandbox data folder'
+  Stop-SandboxApp
+  Check (-not (Test-SandboxApp)) '... and quits when asked'
   $r = Invoke-Setup -NoStart
   Check ($r.Out -notmatch 'FAKE-CLOUD') 'no cloud part without asking for it'
   # the app's Settings > Sync > Set up sync
@@ -82,6 +103,7 @@ try {
   Check ($r.Code -eq 0 -and $r.Out -match 'FAKE-CLOUD .*--result' -and $r.Out -notmatch 'Desktop app') 'from the app: only the cloud part, told where to report'
   Check ((Test-Path $result) -and (Get-Content $result -Raw) -match '"ok":\s*true') 'it reports success'
   Remove-Item $result
+  [void](Wait-SandboxApp); Stop-SandboxApp
   $env:FAKE_NODE_EXIT = '1'
   $r = Invoke-Setup -FromApp -ResultFile $result
   Remove-Item Env:\FAKE_NODE_EXIT
@@ -98,6 +120,8 @@ try {
   Check $okImport 'missing import folder explained'
   if (-not $okImport) { Write-Host "       exit $($r.Code):`n$(($r.Out -split "`n" | Select-Object -Last 12) -join "`n")" }
 } finally {
+  Stop-SandboxApp
+  Check (@(Get-CimInstance Win32_Process -Filter "Name='powershell.exe'" | Where-Object { $_.CommandLine -like "*$app\widget.ps1*" }).Count -eq 0) 'no widget left running from the sandbox'
   Remove-Item -Path $reg -Recurse -Force -ErrorAction SilentlyContinue
   Remove-Item -LiteralPath $sb -Recurse -Force -ErrorAction SilentlyContinue
 }

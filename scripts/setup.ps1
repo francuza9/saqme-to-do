@@ -152,6 +152,9 @@ function Stop-App {
   Write-Ok 'app closed'
 }
 function Start-App {
+  # the sandbox's app gets the sandbox's name and data folder (the launcher passes the environment on), so it
+  # never takes the real app's place or touches its lists; scripts/dev/test-setup.ps1 quits it afterwards
+  if ($env:SAQME_SETUP_SANDBOX) { $env:SAQME_INSTANCE = $Instance; $env:SAQME_DATA_DIR = $DataDir }
   Start-Process -FilePath (Join-Path $env:WINDIR 'System32\wscript.exe') -ArgumentList ('"' + (Join-Path $AppDir 'start-widget.vbs') + '"')
   Write-Ok 'app started (look for the icon in the notification area)'
 }

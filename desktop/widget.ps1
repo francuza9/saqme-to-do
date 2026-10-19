@@ -53,8 +53,9 @@ $CI        = [Globalization.CultureInfo]::InvariantCulture
 . (Join-Path $dir 'sync-core.ps1')
 . (Join-Path $dir 'qr.ps1')
 
-# one instance per user: a second start just shows the running one; setup.ps1 can ask it to quit
-$instance = $(if ($SmokeTest) { "Local\SaqmeToDo.Smoke.$PID" } else { 'Local\SaqmeToDo' })
+# one instance per user: a second start just shows the running one; setup.ps1 can ask it to quit.
+# SAQME_INSTANCE (Local\SaqmeToDo.<something>) gives a test copy a name of its own (setup's sandbox).
+$instance = $(if ($SmokeTest) { "Local\SaqmeToDo.Smoke.$PID" } elseif ($env:SAQME_INSTANCE -match '^Local\\SaqmeToDo\.[\w.-]+$') { $env:SAQME_INSTANCE } else { 'Local\SaqmeToDo' })
 $showEvt = New-Object System.Threading.EventWaitHandle($false, [System.Threading.EventResetMode]::AutoReset, "$instance.Show")
 $quitEvt = New-Object System.Threading.EventWaitHandle($false, [System.Threading.EventResetMode]::AutoReset, "$instance.Quit")
 $mutex = New-Object System.Threading.Mutex($false, "$instance.Instance")
