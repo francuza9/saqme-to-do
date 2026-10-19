@@ -120,6 +120,8 @@ function currentProject() {
 function render() {
   // the DOM is rebuilt on every change: keep keyboard focus on the same control (by its data-fk key)
   const fk = document.activeElement?.dataset?.fk;
+  // before the user starts (welcome screen) the header is just the logo, which opens Settings
+  els.tabAdd.hidden = els.sync.hidden = showWelcome();
   renderTabs();
   renderStatus();
   if (!(ui.editing || ui.notesEditing || ui.drag)) renderMain();   // never pull the rug while typing / dragging
@@ -242,7 +244,7 @@ function renderStatus() {
 function renderMain() {
   const showAdd = ui.view === 'list' && !!currentProject() && !showWelcome();
   els.addBar.hidden = !showAdd;
-  if (showWelcome()) return renderWelcome();
+  if (ui.view === 'list' && showWelcome()) return renderWelcome();
   if (ui.view === 'settings') return renderSettings();
   if (ui.view === 'trash') return renderTrash();
   if (ui.view === 'conflicts') return renderConflicts();

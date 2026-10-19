@@ -29,9 +29,17 @@ const rows = () => page.$$eval('.row .text', (els) => els.map((e) => e.textConte
 await page.goto(base + '/');
 await page.waitForSelector('.welcome');
 check(await page.isVisible('text=Use it on this device'), 'welcome screen when not paired');
+// no dead controls before starting: the header is only the logo, and it opens Settings (BUGS #2)
+check(!(await page.isVisible('#tabAdd')) && !(await page.isVisible('#syncBtn')), 'welcome: no "+" or sync button yet');
+await page.click('#logo');
+await page.waitForSelector('.view-header');
+check(await page.isVisible('text=Theme'), 'welcome: the logo opens Settings');
+await page.click('#logo');
+await page.waitForSelector('.welcome');
 await page.click('text=Use it on this device');
 await page.waitForSelector('#addInput');
 check((await page.$$eval('.tab .name', (e) => e.map((x) => x.textContent))).join() === 'General', 'local General project');
+check(await page.isVisible('#tabAdd') && await page.isVisible('#syncBtn'), 'after starting: "+" and the sync button are back');
 
 // add tasks with the add bar
 for (const t of ['Buy milk', 'Write report', 'Call Anna']) { await page.fill('#addInput', t); await page.press('#addInput', 'Enter'); }
