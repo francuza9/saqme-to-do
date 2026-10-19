@@ -106,8 +106,12 @@ edge instead of a soft drop shadow.
  indent  grip chev chip  text ................................................  ⋯
  ├─20─┤  ┆┆  ›   ◧     Ship the Q4 roadmap draft                                 ⋯    ← body 15/22, ink
                        Today 16:30   1/3   ⛓                                          ← meta 13/18, smoke, tnum
-         14  24   30   │← text and meta share one column, so long titles get the full width
+         14  24   26   │← text and meta share one column, so long titles get the full width
 ```
+
+The columns are the click/touch targets (phone widths shown; the desktop uses 13 / 16 / the chip, for the
+mouse); the margins around them are kept small so text gets the width. Phone: the chevron stays 24 px wide
+(the minimum target size), the status button is the 18 px chip with 4 px either side.
 
 - **Meta moves under the text** (deadline, subtask progress, notes mark) instead of competing with it on
   the same line. Rows without metadata stay single-line.
@@ -122,7 +126,9 @@ edge instead of a soft drop shadow.
 - The add bar is drawn like the next line of the list: its "+" sits in the chip column and "Add a task" in
   the text column.
 - The "+" for a new project stays next to the last tab; when there are more projects than fit, the tabs
-  scroll sideways and fade out at the edge instead of cutting a tab in half.
+  scroll sideways and fade out at the clipped edge(s) instead of cutting a tab in half, the current project
+  is always scrolled into view, and (desktop) a "⌄" button before the "+" lists every project. The tab area
+  ends where the sync and window buttons begin; long project names end in "…" (full name in the tooltip).
 
 ## Accessibility
 

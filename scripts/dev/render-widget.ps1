@@ -1,10 +1,11 @@
 # Renders the desktop widget to PNG without a visible window and without touching a running instance:
 # runs a copy of desktop\widget.ps1 under its own instance name, on a throw-away data folder filled from
-# scripts\dev\sample (due:{N} = N days from today), tray icon hidden, window at Left=-5000 (not activated,
-# not in the taskbar), then Show() + UpdateLayout() + RenderTargetBitmap of the window frame per theme.
-#   powershell -NoProfile -ExecutionPolicy Bypass -File scripts\dev\render-widget.ps1 -Out C:\temp\shots [-Prefix desktop] [-Project Work] [-View settings]
+# scripts\dev\sample (or -Sample: e.g. scripts\dev\sample-tabs, five projects for a crowded tab strip; due:{N} =
+# N days from today), tray icon hidden, window at Left=-5000 (not activated, not in the taskbar), then
+# Show() + UpdateLayout() + RenderTargetBitmap of the window frame per theme.
+#   powershell -NoProfile -ExecutionPolicy Bypass -File scripts\dev\render-widget.ps1 -Out C:\temp\shots [-Prefix desktop] [-Project Work] [-View settings] [-Sample dir]
 param([Parameter(Mandatory)][string]$Out, [string]$Prefix = 'desktop', [string]$Project = 'Work', [int]$Width = 440, [int]$Height = 660,
-  [ValidateSet('list', 'settings', 'keys')][string]$View = 'list')
+  [ValidateSet('list', 'settings', 'keys')][string]$View = 'list', [string]$Sample = '')
 $ErrorActionPreference = 'Stop'
 $root = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
 $tmp = Join-Path ([IO.Path]::GetTempPath()) ('saqme-render-' + [guid]::NewGuid().ToString('N').Substring(0, 6))
@@ -14,7 +15,8 @@ Copy-Item -Path (Join-Path $root 'desktop\*') -Destination $app -Recurse -Force
 if (Test-Path (Join-Path $root 'worker\public\fonts')) { Copy-Item -Path (Join-Path $root 'worker\public\fonts') -Destination (Join-Path $app 'fonts') -Recurse -Force }
 
 $utf8 = New-Object System.Text.UTF8Encoding($false)
-foreach ($f in Get-ChildItem (Join-Path $root 'scripts\dev\sample') -Force -File) {
+if (-not $Sample) { $Sample = Join-Path $root 'scripts\dev\sample' }
+foreach ($f in Get-ChildItem $Sample -Force -File) {
   $text = [IO.File]::ReadAllText($f.FullName)
   $text = [regex]::Replace($text, 'due:\{([+-]?\d+)\}', { param($m) 'due:' + (Get-Date).Date.AddDays([int]$m.Groups[1].Value).ToString('yyyy-MM-dd') })
   [IO.File]::WriteAllText((Join-Path $data "lists\$($f.Name)"), $text, $utf8)
@@ -33,6 +35,8 @@ try {
 `$script:view = '$View'
 foreach (`$th in 'dark', 'light') {
   Apply-Theme `$th; Render; `$w.UpdateLayout()
+  # let the work the widget queues for after layout run (the tab strip scrolls the current project into view)
+  foreach (`$i in 1..3) { `$w.Dispatcher.Invoke([action]{}, [System.Windows.Threading.DispatcherPriority]::ContextIdle); `$w.UpdateLayout() }
   `$rtb = New-Object System.Windows.Media.Imaging.RenderTargetBitmap([int](`$w.ActualWidth * 2), [int](`$w.ActualHeight * 2), 192, 192, [System.Windows.Media.PixelFormats]::Pbgra32)
   `$rtb.Render(`$outer)
   `$enc = New-Object System.Windows.Media.Imaging.PngBitmapEncoder

@@ -1,0 +1,3 @@
+- [ ] Write the release notes
+- [/] Fix the tab strip on narrow windows due:{0}
+- [ ] Display clearly what the AI can do for a list, with an example in the README

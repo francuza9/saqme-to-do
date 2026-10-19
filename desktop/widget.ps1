@@ -393,6 +393,15 @@ function Tab-Signature {
   return ($parts -join '|')
 }
 
+# ---------------------------------------------------------------- row geometry
+# A task row: [2 px selection edge][drag handle][chevron][status chip][gap][text]. The handle and chevron
+# columns are their click targets; the empty space around them is what was trimmed (BUGS #9). Everything
+# that lines up with the rows (notes, section labels, the add line) is derived from these.
+$RowGripW = 13   # six dots, 7 px wide, 3 px on each side
+$RowChevW = 16   # an 8 pt chevron with room to click it
+$RowChipX = $RowGripW + $RowChevW                    # where the chip column starts (after the 2 px edge)
+$RowTextX = 2 + $RowChipX + 17 + $Tokens.Row.chipGap   # where the text starts: edge, columns, chip, gap
+
 # ---------------------------------------------------------------- model
 # parsing / writing is shared with the sync engine (sync-core.ps1: Read-Items, ConvertTo-MarkdownText)
 $script:items = New-Object System.Collections.ArrayList
@@ -651,7 +660,7 @@ function New-Row($node) {
   $g = New-Object System.Windows.Controls.Grid
   # columns: 0 grip | 1 chevron | 2 chip | 3 text over meta | 4 (spare) | 5 actions
   # (children order: chev, chip, text, meta, acts, grip - other code relies on these indices)
-  foreach ($wd in @('16', '20', 'Auto', '*', 'Auto', 'Auto')) {
+  foreach ($wd in @("$RowGripW", "$RowChevW", 'Auto', '*', 'Auto', 'Auto')) {
     $cd = New-Object System.Windows.Controls.ColumnDefinition; $cd.Width = $wd; $g.ColumnDefinitions.Add($cd)
   }
   foreach ($ht in @('Auto', 'Auto')) { $rd = New-Object System.Windows.Controls.RowDefinition; $rd.Height = $ht; $g.RowDefinitions.Add($rd) }
@@ -735,7 +744,7 @@ function New-Row($node) {
 
   # six-dot drag handle - only for manually ordered (active) tasks, not auto-sorted ones
   $grip = New-Object System.Windows.Controls.Border
-  $grip.Background = $Clear; $grip.VerticalAlignment = 'Top'; $grip.Margin = '0,4,0,0'; $grip.Padding = '4,2,4,2'
+  $grip.Background = $Clear; $grip.VerticalAlignment = 'Top'; $grip.Margin = '0,4,0,0'; $grip.Padding = '3,2,3,2'
   if ($script:renderSection -eq 'active' -and (Node-Rank $it) -eq 0 -and $it.Text -ne '') {
     $dots = New-Object System.Windows.Controls.Primitives.UniformGrid
     $dots.Columns = 2; $dots.Rows = 3; $dots.Width = 7; $dots.Height = 11
@@ -798,7 +807,7 @@ function Drag-Move($e) {
   $d.Target = $target
   if ($insertAt -lt 0) { $insertAt = 0 }
   $lvl = $(if ($target) { $target.Level } else { 0 })
-  $d.Ph.Margin = "$(14 + $lvl * 18),1,8,1"; $d.Ph.Visibility = 'Visible'
+  $d.Ph.Margin = "$(11 + $lvl * 18),1,8,1"; $d.Ph.Visibility = 'Visible'
   $list.Children.Insert([Math]::Min($insertAt, $list.Children.Count), $d.Ph)
 }
 function End-Drag([bool]$apply) {
@@ -994,7 +1003,7 @@ $script:notesEditing = $null; $script:notesBox = $null
 
 function New-Notes($it) {
   $wrap = New-Object System.Windows.Controls.Border
-  $wrap.Margin = "$($it.Level * $Tokens.Row.indent + 67),0,8,8"; $wrap.Padding = '12,8,12,9'
+  $wrap.Margin = "$($it.Level * $Tokens.Row.indent + $RowTextX),0,8,8"; $wrap.Padding = '12,8,12,9'
   $wrap.CornerRadius = New-Object System.Windows.CornerRadius($Tokens.Radius.control); $wrap.Background = $NoteBg
   $wrap.BorderBrush = $Accent; $wrap.BorderThickness = '2,0,0,0'
   if ($script:notesEditing -eq $it) {
@@ -1187,15 +1196,18 @@ function New-Tab([string]$name) {
   if ($script:HasA11y) { $b.IsSelected = $active }
   [System.Windows.Input.KeyboardNavigation]::SetIsTabStop($b, $active)   # one Tab stop: the current project
   $b.CornerRadius = New-Object System.Windows.CornerRadius($Tokens.Radius.tab, $Tokens.Radius.tab, 0, 0)
-  $b.Padding = '10,7,10,8'; $b.Margin = '0,0,2,0'; $b.Cursor = 'Hand'; $b.Tag = $name; $b.VerticalAlignment = 'Bottom'
+  $b.Padding = '9,7,9,8'; $b.Margin = '0,0,2,0'; $b.Cursor = 'Hand'; $b.Tag = $name; $b.VerticalAlignment = 'Bottom'
   $sp = New-Object System.Windows.Controls.StackPanel; $sp.Orientation = 'Horizontal'
   $t = New-Object System.Windows.Controls.TextBlock
   $t.Text = $name; $t.FontFamily = $UI; $t.FontSize = $TypeSize.label; $t.FontWeight = 'Medium'
   if ($active) {
     # the one bold place: the active tab carries the icon's violet-to-amber gradient
-    $b.Background = $Card; $b.BorderBrush = $script:TabGradient; $b.BorderThickness = '0,3,0,0'; $b.Padding = '10,4,10,8'
+    $b.Background = $Card; $b.BorderBrush = $script:TabGradient; $b.BorderThickness = '0,3,0,0'; $b.Padding = '9,4,9,8'
     $t.FontWeight = 'SemiBold'; $t.Foreground = $Ink
   } else { $b.Background = $Clear; $t.Foreground = $TabInk }
+  # a long name ends in an ellipsis so one project can't push the others out; the tooltip has it in full
+  $t.Measure((New-Object System.Windows.Size([double]::PositiveInfinity, [double]::PositiveInfinity)))
+  if ($t.DesiredSize.Width -gt 150) { $t.MaxWidth = 150; $t.TextTrimming = 'CharacterEllipsis'; $b.ToolTip = $name }
   [void]$sp.Children.Add($t)
   $cnt = Open-Count $name
   if ($cnt -gt 0) {
@@ -1235,7 +1247,7 @@ function Render-Tabs {
   $plus.Add_MouseLeftButtonDown({ param($s, $e) $e.Handled = $true; Begin-TabEdit $null })
   $tabPlusHost.Child = $plus   # outside the scrolling tabs, so it never scrolls out of reach
   $script:tabSig = Tab-Signature
-  [void]$tabs.Dispatcher.BeginInvoke([action]{ foreach ($c in $tabs.Children) { if ($c.Tag -eq $script:proj) { $c.BringIntoView() } } }, [System.Windows.Threading.DispatcherPriority]::Loaded)
+  Queue-ShowActiveTab
 }
 function Cycle-Project([int]$dir) {
   $names = @(Get-ProjectNames); if ($names.Count -lt 2) { return }
@@ -1375,26 +1387,90 @@ $tabScroll = New-Object System.Windows.Controls.ScrollViewer
 $tabScroll.HorizontalScrollBarVisibility = 'Hidden'; $tabScroll.VerticalScrollBarVisibility = 'Disabled'; $tabScroll.Focusable = $false
 $tabScroll.VerticalAlignment = 'Bottom'; $tabScroll.Content = $tabs
 $tabScroll.Add_PreviewMouseWheel({ param($s, $e) $e.Handled = $true; $s.ScrollToHorizontalOffset($s.HorizontalOffset - $e.Delta / 2) })
-# the tabs take what they need and the "+" follows them; when they overflow they scroll and fade out at the edge
-$tabHost = New-Object System.Windows.Controls.Grid; $tabHost.VerticalAlignment = 'Bottom'
-foreach ($wd in @('Auto', 'Auto', '*')) { $cd = New-Object System.Windows.Controls.ColumnDefinition; $cd.Width = $wd; $tabHost.ColumnDefinitions.Add($cd) }
+# The tabs take what they need and the "+" follows them. When they don't fit they scroll sideways, fade out
+# at the clipped edge(s), and a "more" button appears that lists every project. The tab area clips, so a tab
+# never draws under the sync and window buttons to its right, and the current project is always scrolled
+# into view (after switching, renaming, adding, resizing).
+$tabHost = New-Object System.Windows.Controls.Grid; $tabHost.VerticalAlignment = 'Bottom'; $tabHost.ClipToBounds = $true
+foreach ($wd in @('Auto', 'Auto', 'Auto', '*')) { $cd = New-Object System.Windows.Controls.ColumnDefinition; $cd.Width = $wd; $tabHost.ColumnDefinitions.Add($cd) }
+$tabMore = New-IconButton 0xE70D 'All projects' { param($s, $e) Show-ProjectMenu $s }
+$tabMore.Width = 26; $tabMore.Margin = '0'; $tabMore.Padding = '0,7,0,11'; $tabMore.VerticalAlignment = 'Bottom'; $tabMore.Visibility = 'Collapsed'
+$tabMore.Child.FontSize = 9; $tabMore.Child.Foreground = $TabInk; $tabMore.Child.HorizontalAlignment = 'Center'
+$tabMore.Add_MouseLeftButtonDown({ param($s, $e) $e.Handled = $true; Show-ProjectMenu $s })
 $tabPlusHost = New-Object System.Windows.Controls.Border; $tabPlusHost.VerticalAlignment = 'Bottom'
-[System.Windows.Shell.WindowChrome]::SetIsHitTestVisibleInChrome($tabPlusHost, $true)
-[System.Windows.Controls.Grid]::SetColumn($tabPlusHost, 1)
-[void]$tabHost.Children.Add($tabScroll); [void]$tabHost.Children.Add($tabPlusHost)
-$tabHost.Add_SizeChanged({ $tabScroll.MaxWidth = [math]::Max(0, $tabHost.ActualWidth - $tabPlusHost.ActualWidth) })
-function Update-TabFade {
+foreach ($x in @($tabMore, $tabPlusHost)) { [System.Windows.Shell.WindowChrome]::SetIsHitTestVisibleInChrome($x, $true) }
+[System.Windows.Controls.Grid]::SetColumn($tabMore, 1); [System.Windows.Controls.Grid]::SetColumn($tabPlusHost, 2)
+[void]$tabHost.Children.Add($tabScroll); [void]$tabHost.Children.Add($tabMore); [void]$tabHost.Children.Add($tabPlusHost)
+# an empty stand-in in the same grid cell measures the room the strip gives the tabs (the tab area itself is
+# laid out at the width it asks for and clipped, so its own ActualWidth can be wider than the room)
+$tabSlot = New-Object System.Windows.Controls.Border
+$TabFade = 24   # px of fade at a clipped edge; a tab scrolled into view clears it
+function Fit-Tabs {
+  # the tabs may take the width the "+" (and, when they overflow, the "more" button) leave them
+  $room = $tabSlot.ActualWidth - $tabPlusHost.ActualWidth
+  if ($room -le 0) { return }
+  $over = $tabs.ActualWidth -gt $room + 0.5
+  $tabMore.Visibility = $(if ($over) { 'Visible' } else { 'Collapsed' })
+  if ($over) { $room -= $tabMore.Width }
+  $tabScroll.MaxWidth = [math]::Max(0, $room)
+  Queue-ShowActiveTab
+}
+function Queue-ShowActiveTab {
+  if ($script:tabShowQueued) { return }
+  $script:tabShowQueued = $true
+  [void]$tabs.Dispatcher.BeginInvoke([action]{ $script:tabShowQueued = $false; Show-ActiveTab }, [System.Windows.Threading.DispatcherPriority]::Loaded)
+}
+function Show-ActiveTab {
+  # the project name being typed, else the current project's tab
+  $target = $null
+  foreach ($c in $tabs.Children) {
+    if ($c -is [System.Windows.Controls.TextBox]) { $target = $c; break }
+    if ($c.Tag -eq $script:proj) { $target = $c }
+  }
   $vw = $tabScroll.ViewportWidth
-  if ($vw -gt 40 -and $tabScroll.HorizontalOffset + $vw -lt $tabScroll.ExtentWidth - 0.5) {
-    $m = New-Object System.Windows.Media.LinearGradientBrush
-    $m.StartPoint = New-Object System.Windows.Point(0, 0); $m.EndPoint = New-Object System.Windows.Point(1, 0)
-    $m.GradientStops.Add((New-Object System.Windows.Media.GradientStop([System.Windows.Media.Colors]::Black, (1 - 20 / $vw))))
-    $m.GradientStops.Add((New-Object System.Windows.Media.GradientStop([System.Windows.Media.Colors]::Transparent, 1)))
-    $tabScroll.OpacityMask = $m
-  } else { $tabScroll.OpacityMask = $null }
+  if (-not $target -or $vw -le 0) { return }
+  try { $x = $target.TransformToAncestor($tabs).Transform((New-Object System.Windows.Point(0, 0))).X } catch { return }
+  $left = $x - $TabFade; $right = $x + $target.ActualWidth + $TabFade - $vw
+  if ($left -lt $tabScroll.HorizontalOffset) { $tabScroll.ScrollToHorizontalOffset([math]::Max(0, $left)) }
+  elseif ($right -gt $tabScroll.HorizontalOffset) { $tabScroll.ScrollToHorizontalOffset([math]::Min($left, $right)) }
+}
+function Update-TabFade {
+  $vw = $tabScroll.ViewportWidth; $off = $tabScroll.HorizontalOffset
+  $l = $off -gt 0.5; $r = $off + $vw -lt $tabScroll.ExtentWidth - 0.5
+  if ($vw -le 2 * $TabFade -or -not ($l -or $r)) { $tabScroll.OpacityMask = $null; return }
+  $m = New-Object System.Windows.Media.LinearGradientBrush
+  $m.StartPoint = New-Object System.Windows.Point(0, 0); $m.EndPoint = New-Object System.Windows.Point(1, 0)
+  $f = $TabFade / $vw
+  # transparent at a clipped edge, opaque everywhere else
+  foreach ($st in @(@($l, 0), @($false, $f), @($false, (1 - $f)), @($r, 1))) {
+    $m.GradientStops.Add((New-Object System.Windows.Media.GradientStop($(if ($st[0]) { [System.Windows.Media.Colors]::Transparent } else { [System.Windows.Media.Colors]::Black }), $st[1])))
+  }
+  $tabScroll.OpacityMask = $m
+}
+function Show-ProjectMenu($s) {
+  Commit-Edit
+  $m = New-Menu
+  foreach ($n in @(Get-ProjectNames)) {
+    $mi = New-MenuItem $null; $mi.Tag = $n
+    $hd = New-Object System.Windows.Controls.StackPanel; $hd.Orientation = 'Horizontal'
+    $t = New-Object System.Windows.Controls.TextBlock; $t.Text = $n
+    if ($n -eq $script:proj) { $t.FontWeight = 'SemiBold' }
+    [void]$hd.Children.Add($t)
+    $cnt = Open-Count $n
+    if ($cnt -gt 0) {
+      $c = New-Object System.Windows.Controls.TextBlock; $c.Text = "$cnt"; $c.Foreground = $Faint; $c.Margin = '8,0,0,0'; Set-Tabular $c
+      [void]$hd.Children.Add($c)
+    }
+    $mi.Header = $hd
+    Set-Name $mi ($n + $(if ($cnt -gt 0) { ", $cnt open" }) + $(if ($n -eq $script:proj) { ', current' }))
+    $mi.Add_Click({ param($x, $e) if ($x.Tag -ne $script:proj) { Switch-Project $x.Tag } })
+    [void]$m.Items.Add($mi)
+  }
+  $m.PlacementTarget = $s; $m.Placement = 'Bottom'; $m.IsOpen = $true
 }
 $tabScroll.Add_ScrollChanged({ Update-TabFade })
-[System.Windows.Controls.Grid]::SetColumn($tabHost, 1); [void]$stripGrid.Children.Add($tabHost)
+foreach ($x in @($tabSlot, $tabs, $tabPlusHost)) { $x.Add_SizeChanged({ Fit-Tabs }) }
+foreach ($x in @($tabSlot, $tabHost)) { [System.Windows.Controls.Grid]::SetColumn($x, 1); [void]$stripGrid.Children.Add($x) }
 $countText = New-Object System.Windows.Controls.TextBlock
 $countText.FontFamily = $UI; $countText.FontSize = $TypeSize.small; $countText.Foreground = $Faint; Set-Tabular $countText
 $countText.VerticalAlignment = 'Center'; $countText.Margin = '6,0,4,5'
@@ -1514,13 +1590,13 @@ $addBorder.BorderBrush = $Line; $addBorder.BorderThickness = '0,1,0,0'; $addBord
 $addBox = New-Object System.Windows.Controls.TextBox
 Set-Name $addBox 'Add a task' 'Enter adds it at the end of the list'
 $addBox.FontFamily = $UI; $addBox.FontSize = $TypeSize.body; $addBox.Background = $Clear; $addBox.Foreground = $Ink
-$addBox.BorderThickness = '0'; $addBox.Padding = '57,0,0,0'; $addBox.CaretBrush = $Accent
+$addBox.BorderThickness = '0'; $addBox.Padding = "$($RowTextX - 14),0,0,0"; $addBox.CaretBrush = $Accent
 $ph = New-Object System.Windows.Controls.TextBlock
 $ph.Text = (G 0xE710); $ph.FontFamily = $MDL2; $ph.FontSize = 11; $ph.Foreground = $Accent
-$ph.IsHitTestVisible = $false; $ph.VerticalAlignment = 'Center'; $ph.Margin = '33,0,0,0'
+$ph.IsHitTestVisible = $false; $ph.VerticalAlignment = 'Center'; $ph.Margin = "$($RowChipX - 7),0,0,0"
 $phText = New-Object System.Windows.Controls.TextBlock
 $phText.Text = 'Add a task'; $phText.FontFamily = $UI; $phText.FontSize = $TypeSize.body; $phText.Foreground = $Faint
-$phText.IsHitTestVisible = $false; $phText.VerticalAlignment = 'Center'; $phText.Margin = '59,0,0,0'
+$phText.IsHitTestVisible = $false; $phText.VerticalAlignment = 'Center'; $phText.Margin = "$($RowTextX - 12),0,0,0"
 [void]$addGrid.Children.Add($addBox); [void]$addGrid.Children.Add((Hide-Decoration $ph)); [void]$addGrid.Children.Add((Hide-Decoration $phText))
 $addBorder.Child = $addGrid
 [System.Windows.Controls.DockPanel]::SetDock($addBorder, 'Bottom'); [void]$dock.Children.Add($addBorder)
@@ -1540,7 +1616,7 @@ $addBox.Add_PreviewKeyDown({
 
 # task list
 $scroll = New-Object System.Windows.Controls.ScrollViewer
-$scroll.VerticalScrollBarVisibility = 'Auto'; $scroll.HorizontalScrollBarVisibility = 'Disabled'; $scroll.Margin = '6,8,6,0'
+$scroll.VerticalScrollBarVisibility = 'Auto'; $scroll.HorizontalScrollBarVisibility = 'Disabled'; $scroll.Margin = '2,8,6,0'
 $scroll.Focusable = $false   # not a Tab stop of its own (the rows are)
 $list = New-AccessibleList 'list' 'Tasks'
 $list.Margin = '0,0,4,0'
@@ -1618,10 +1694,10 @@ function Render {
         if ($list.Children.Count -gt 0) { $sp = New-Object System.Windows.Controls.Border; $sp.Height = 6; [void]$list.Children.Add($sp) }
         continue
       }
-      if ($it.Raw -match '^#+\s*(.*)$') { [void]$list.Children.Add((New-SectionLabel $matches[1] 36)); continue }
+      if ($it.Raw -match '^#+\s*(.*)$') { [void]$list.Children.Add((New-SectionLabel $matches[1] $RowChipX)); continue }
       $tb = New-Object System.Windows.Controls.TextBlock
       $tb.FontFamily = $UI; $tb.TextWrapping = 'Wrap'; $tb.Foreground = $Ink
-      $tb.Text = $it.Raw; $tb.FontSize = $TypeSize.meta; $tb.Margin = '36,2,0,2'
+      $tb.Text = $it.Raw; $tb.FontSize = $TypeSize.meta; $tb.Margin = "$RowChipX,2,0,2"
       [void]$list.Children.Add($tb)
       continue
     }
@@ -1632,7 +1708,7 @@ function Render {
   }
 
   if ($postponed.Count) {
-    [void]$list.Children.Add((New-SectionLabel 'Postponed' 36))
+    [void]$list.Children.Add((New-SectionLabel 'Postponed' $RowChipX))
     $script:renderSection = 'postponed'; foreach ($n in $postponed) { Render-Node $n }
   }
 
@@ -1640,7 +1716,7 @@ function Render {
     $show = $script:cfg.showCompleted -eq '1'
     $h = New-Control 'button' ("Completed, $($closed.Count) " + $(if ($closed.Count -eq 1) { 'task' } else { 'tasks' }) + $(if ($show) { ', shown' } else { ', hidden' })) 'Show or hide the completed tasks' {
       param($s, $e) Commit-Edit; $script:cfg.showCompleted = $(if ($script:cfg.showCompleted -eq '1') { '0' } else { '1' }); Save-Settings; Render }
-    $h.Margin = '0,14,0,2'; $h.Padding = '20,7,8,7'; $h.Cursor = 'Hand'; $h.Background = $Clear
+    $h.Margin = '0,14,0,2'; $h.Padding = "$($RowGripW + 4),7,8,7"; $h.Cursor = 'Hand'; $h.Background = $Clear
     $hp = New-Object System.Windows.Controls.Grid
     foreach ($wd in @('16', 'Auto', 'Auto', '*')) { $cd = New-Object System.Windows.Controls.ColumnDefinition; $cd.Width = $wd; $hp.ColumnDefinitions.Add($cd) }
     $chev = New-Object System.Windows.Controls.TextBlock
@@ -1672,7 +1748,7 @@ function Render {
     $e = New-Object System.Windows.Controls.TextBlock
     $e.Text = $(if ($script:listBusy) { "'$($script:proj)' is busy: another program is writing it. It shows here as soon as it is free." } else { 'No tasks here yet. Add one below.' })
     $e.FontFamily = $UI; $e.FontSize = $TypeSize.body; $e.Foreground = $Faint
-    $e.Margin = '36,24,8,8'; $e.TextWrapping = 'Wrap'
+    $e.Margin = "$RowChipX,24,8,8"; $e.TextWrapping = 'Wrap'
     [void]$list.Children.Add($e)
   }
 
