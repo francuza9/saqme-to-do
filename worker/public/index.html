@@ -1,0 +1,52 @@
+<!doctype html>
+<html lang="en" data-theme="dark">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, interactive-widget=resizes-content">
+  <title>Saqme To Do</title>
+  <meta name="description" content="To-do lists in plain markdown, on this device or synced through your own Cloudflare account.">
+  <!-- also enforced as a header where the host supports it (worker/public/_headers); here for static hosts. connect-src https: lets a copy hosted elsewhere sync with your Worker -->
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'self' https:; manifest-src 'self'; worker-src 'self'; base-uri 'none'; form-action 'none'">
+  <meta name="color-scheme" content="dark light">
+  <meta name="theme-color" content="#15121A" media="(prefers-color-scheme: dark)">
+  <meta name="theme-color" content="#E9E2D4" media="(prefers-color-scheme: light)">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-title" content="Saqme">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="format-detection" content="telephone=no">
+  <meta name="referrer" content="no-referrer">
+  <link rel="manifest" href="manifest.webmanifest">
+  <link rel="icon" type="image/png" href="icons/favicon-64.png">
+  <link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
+  <link rel="preload" href="fonts/FiraGO-Regular.ttf" as="font" type="font/ttf" crossorigin>
+  <link rel="preload" href="fonts/FiraGO-Medium.ttf" as="font" type="font/ttf" crossorigin>
+  <link rel="stylesheet" href="css/tokens.css">
+  <link rel="stylesheet" href="css/app.css">
+  <script src="js/theme.js"></script>
+  <script type="module" src="js/app.js"></script>
+</head>
+<body>
+  <div id="app" class="card">
+    <header class="strip" id="strip">
+      <button class="logo" id="logo" aria-label="Settings"><img src="icons/glyph.png" alt="" width="22" height="22"></button>
+      <nav class="tabs" id="tabs" aria-label="Projects"></nav>
+      <button class="tab-add" id="tabAdd" aria-label="New project" title="New project"></button>
+      <button class="conflicts-badge" id="conflictsBadge" hidden aria-label="Conflicts"></button>
+      <button class="sync" id="syncBtn" aria-label="Sync status"></button>
+    </header>
+    <main class="list" id="list" tabindex="-1"></main>
+    <footer class="add" id="addBar">
+      <span class="add-plus" aria-hidden="true"></span>
+      <input id="addInput" type="text" maxlength="10000" placeholder="Add a task" autocomplete="off" autocapitalize="sentences" enterkeyhint="done" aria-label="Add a task">
+    </footer>
+  </div>
+  <div class="sheet-wrap" id="sheetWrap" hidden>
+    <div class="sheet-backdrop" id="sheetBackdrop"></div>
+    <div class="sheet" id="sheet" role="dialog" aria-modal="true"></div>
+  </div>
+  <aside class="toast" id="toast" aria-label="Message" hidden></aside>
+  <div class="sr-only" id="announce" role="status" aria-live="polite" aria-atomic="true"></div>
+  <noscript>Saqme To Do needs JavaScript.</noscript>
+</body>
+</html>

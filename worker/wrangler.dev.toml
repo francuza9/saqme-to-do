@@ -1,0 +1,19 @@
+# Local development / tests only (wrangler dev --local, Vitest). Deploys use wrangler.toml,
+# which scripts/cloud-setup.mjs generates from wrangler.toml.template.
+name = "saqme-dev"
+main = "src/index.js"
+compatibility_date = "2026-10-01"
+
+[assets]
+directory = "./public"
+binding = "ASSETS"
+run_worker_first = ["/api/*"]
+
+[[d1_databases]]
+binding = "DB"
+database_name = "saqme-dev"
+database_id = "00000000-0000-0000-0000-000000000000"
+migrations_dir = "migrations"
+
+[triggers]
+crons = ["*/5 * * * *"]

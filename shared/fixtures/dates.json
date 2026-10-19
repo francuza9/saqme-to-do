@@ -1,0 +1,207 @@
+{
+  "about": [
+    "Deadline parsing, labels and tones. Implementations: worker/public/js/dates.js (parseDue, dueLabel, dueTone) and",
+    "desktop/rules.ps1 (Parse-Due, Due-Label, Get-DueTone). 'now' is the local wall-clock time in 'tz'. JavaScript runs each",
+    "group with TZ set to 'tz'; PowerShell's DateTime arithmetic has no time zone, so it takes 'now' as the wall clock.",
+    "parse: [input, expected date or null, expected time ('' = none)]. A time alone means today, or tomorrow once it has",
+    "passed on the wall clock. Weekday names mean the next one after today. A date without a year more than 30 days in",
+    "the past means next year (and no date if that day does not exist then).",
+    "labels: [date, expected label]. tones: [date, time, closed, expected 'over' | 'soon' | 'later' | 'closed']."
+  ],
+  "parse": [
+    {
+      "about": "an ordinary Wednesday afternoon",
+      "now": "2026-10-21T15:30",
+      "tz": "Europe/Berlin",
+      "cases": [
+        ["today", "2026-10-21", ""],
+        ["TODAY", "2026-10-21", ""],
+        ["tod", "2026-10-21", ""],
+        ["tomorrow", "2026-10-22", ""],
+        ["tmr", "2026-10-22", ""],
+        ["tom", "2026-10-22", ""],
+        ["wed", "2026-10-28", ""],
+        ["wednesday", "2026-10-28", ""],
+        ["weds", "2026-10-28", ""],
+        ["thu", "2026-10-22", ""],
+        ["thurs", "2026-10-22", ""],
+        ["fri", "2026-10-23", ""],
+        ["friday", "2026-10-23", ""],
+        ["satur", "2026-10-24", ""],
+        ["sunday", "2026-10-25", ""],
+        ["mon", "2026-10-26", ""],
+        ["tues", "2026-10-27", ""],
+        ["fridge", null, ""],
+        ["mo", null, ""],
+        ["mondays", null, ""],
+        ["fri 14:00", "2026-10-23", "14:00"],
+        ["fri at 3pm", "2026-10-23", "15:00"],
+        ["  FRI  14:00 ", "2026-10-23", "14:00"],
+        ["3pm", "2026-10-22", "15:00"],
+        ["4pm", "2026-10-21", "16:00"],
+        ["15:30", "2026-10-21", "15:30"],
+        ["15:29", "2026-10-22", "15:29"],
+        ["at 9:30", "2026-10-22", "9:30"],
+        ["9:05am", "2026-10-22", "9:05"],
+        ["12am", "2026-10-22", "0:00"],
+        ["12pm", "2026-10-22", "12:00"],
+        ["11 pm", "2026-10-21", "23:00"],
+        ["25 oct 9:30", "2026-10-25", "9:30"],
+        ["oct 25 3pm", "2026-10-25", "15:00"],
+        ["tomorrow 08:15", "2026-10-22", "8:15"],
+        ["+3", "2026-10-24", ""],
+        ["+3d", "2026-10-24", ""],
+        ["+0", "2026-10-21", ""],
+        ["+2w", "2026-11-04", ""],
+        ["+", null, ""],
+        ["25 oct", "2026-10-25", ""],
+        ["oct 25", "2026-10-25", ""],
+        ["25 October", "2026-10-25", ""],
+        ["25 october 2027", "2027-10-25", ""],
+        ["25.10", "2026-10-25", ""],
+        ["25/10/2027", "2027-10-25", ""],
+        ["2026-02-01", "2026-02-01", ""],
+        ["1 oct", "2026-10-01", ""],
+        ["25 sep", "2026-09-25", ""],
+        ["25 sept", "2026-09-25", ""],
+        ["15 sep", "2027-09-15", ""],
+        ["", null, ""],
+        ["   ", null, ""],
+        ["someday", null, ""],
+        ["31.02", null, ""],
+        ["32 oct", null, ""],
+        ["25:00", null, ""],
+        ["14:60", null, ""],
+        ["13/13", null, ""],
+        ["2026-13-01", null, ""],
+        ["2026-1-5", null, ""],
+        ["29 feb", null, ""],
+        ["octo 25", null, ""],
+        ["٣pm", null, ""]
+      ]
+    },
+    {
+      "about": "end of the year: dates without a year roll into the next one",
+      "now": "2026-12-30T10:00",
+      "tz": "Europe/Berlin",
+      "cases": [
+        ["2 jan", "2027-01-02", ""],
+        ["jan 2", "2027-01-02", ""],
+        ["1.1", "2027-01-01", ""],
+        ["+3", "2027-01-02", ""],
+        ["fri", "2027-01-01", ""],
+        ["tomorrow", "2026-12-31", ""],
+        ["15 dec", "2026-12-15", ""],
+        ["25 nov", "2027-11-25", ""],
+        ["31 dec 9am", "2026-12-31", "9:00"]
+      ]
+    },
+    {
+      "about": "a leap year: 29 February a month and a half ago does not exist next year",
+      "now": "2028-04-15T12:00",
+      "tz": "Europe/Berlin",
+      "cases": [
+        ["29 feb", null, ""],
+        ["29 feb 2028", "2028-02-29", ""],
+        ["1 mar", "2029-03-01", ""],
+        ["20 mar", "2028-03-20", ""]
+      ]
+    },
+    {
+      "about": "the evening before clocks go forward (Berlin, 29 March 2026 02:00 -> 03:00)",
+      "now": "2026-03-28T23:30",
+      "tz": "Europe/Berlin",
+      "cases": [
+        ["tomorrow", "2026-03-29", ""],
+        ["+1", "2026-03-29", ""],
+        ["+2", "2026-03-30", ""],
+        ["sun", "2026-03-29", ""],
+        ["mon 9:00", "2026-03-30", "9:00"],
+        ["2:30", "2026-03-29", "2:30"],
+        ["23:45", "2026-03-28", "23:45"]
+      ]
+    },
+    {
+      "about": "just after the clocks went forward: 2:30 never happened today, but it is in the past on the wall clock",
+      "now": "2026-03-29T03:15",
+      "tz": "Europe/Berlin",
+      "cases": [
+        ["today", "2026-03-29", ""],
+        ["2:30", "2026-03-30", "2:30"],
+        ["3:00", "2026-03-30", "3:00"],
+        ["4:00", "2026-03-29", "4:00"]
+      ]
+    },
+    {
+      "about": "the night clocks go back (Berlin, 25 October 2026 03:00 -> 02:00)",
+      "now": "2026-10-25T01:30",
+      "tz": "Europe/Berlin",
+      "cases": [["today", "2026-10-25", ""], ["+1", "2026-10-26", ""], ["2:30", "2026-10-25", "2:30"], ["sun", "2026-11-01", ""]]
+    },
+    {
+      "about": "New York, the night clocks go back (1 November 2026 02:00 -> 01:00)",
+      "now": "2026-11-01T00:30",
+      "tz": "America/New_York",
+      "cases": [["tomorrow", "2026-11-02", ""], ["+7", "2026-11-08", ""], ["1:30", "2026-11-01", "1:30"]]
+    },
+    {
+      "about": "Auckland, just before clocks go forward (27 September 2026 02:00 -> 03:00)",
+      "now": "2026-09-26T23:59",
+      "tz": "Pacific/Auckland",
+      "cases": [["tomorrow", "2026-09-27", ""], ["+1w", "2026-10-03", ""], ["2:15", "2026-09-27", "2:15"]]
+    }
+  ],
+  "labels": [
+    {
+      "now": "2026-10-21T15:30",
+      "tz": "Europe/Berlin",
+      "cases": [
+        ["2026-10-21", "Today"],
+        ["2026-10-22", "Tomorrow"],
+        ["2026-10-20", "Yesterday"],
+        ["2026-10-23", "Fri"],
+        ["2026-10-27", "Tue"],
+        ["2026-10-28", "28 Oct"],
+        ["2026-10-17", "17 Oct"],
+        ["2026-10-14", "14 Oct"],
+        ["2027-01-05", "5 Jan 2027"],
+        ["2025-12-31", "31 Dec 2025"]
+      ]
+    },
+    {
+      "now": "2026-03-28T23:30",
+      "tz": "Europe/Berlin",
+      "cases": [["2026-03-29", "Tomorrow"], ["2026-03-30", "Mon"], ["2026-04-03", "Fri"]]
+    },
+    {
+      "now": "2026-10-25T01:30",
+      "tz": "Europe/Berlin",
+      "cases": [["2026-10-26", "Tomorrow"], ["2026-10-24", "Yesterday"], ["2026-10-31", "Sat"]]
+    }
+  ],
+  "tones": [
+    {
+      "now": "2026-10-21T15:30",
+      "tz": "Europe/Berlin",
+      "cases": [
+        ["2026-10-21", "15:00", false, "over"],
+        ["2026-10-21", "15:30", false, "soon"],
+        ["2026-10-21", "16:00", false, "soon"],
+        ["2026-10-21", "", false, "soon"],
+        ["2026-10-20", "", false, "over"],
+        ["2026-10-20", "23:59", false, "over"],
+        ["2026-10-22", "", false, "soon"],
+        ["2026-10-22", "9:00", false, "soon"],
+        ["2026-10-23", "", false, "later"],
+        ["2026-10-20", "", true, "closed"],
+        ["2026-10-30", "", true, "closed"]
+      ]
+    },
+    {
+      "about": "a deadline inside the hour that did not exist is over once the wall clock passed it",
+      "now": "2026-03-29T03:15",
+      "tz": "Europe/Berlin",
+      "cases": [["2026-03-29", "2:30", false, "over"], ["2026-03-29", "3:30", false, "soon"]]
+    }
+  ]
+}

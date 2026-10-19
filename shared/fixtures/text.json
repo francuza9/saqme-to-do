@@ -1,0 +1,155 @@
+{
+  "about": [
+    "Small value rules every app applies before saving or syncing. {\"repeat\": [s, n]} means s repeated n times.",
+    "Trimming means JavaScript's white space (trim(), \\s): it includes U+FEFF and not U+0085, unlike .NET's Trim().",
+    "cleanText (task text: line breaks and tabs become spaces, control characters go, trimmed; longer than",
+    "  10000 characters is cut): desktop/sync-core.ps1 ConvertTo-CleanText, local/engine.mjs cleanText, worker/src/merge.js",
+    "  normalizeText (the server; it refuses over-long text instead of cutting, so cases marked \"cut\" are not run there),",
+    "  worker/public/js/markdown.js cleanText (the phone app; model.js re-exports it).",
+    "cleanNotes (notes: CR removed, trailing spaces per line, leading / trailing empty lines): ConvertTo-CleanNotes,",
+    "  engine cleanNotes, merge.js normalizeNotes, markdown.js cleanNotes.",
+    "cleanTime (deadline time in a list line: H:MM or nothing): ConvertTo-CleanTime, markdown.js cleanTime.",
+    "validDate (YYYY-MM-DD that exists, years 1-9999): Test-ValidDate, merge.js isValidDate, markdown.js isValidDate.",
+    "projectName (a project / tab name: no characters Windows forbids in file names, no control characters, no trailing",
+    "  dots or spaces, at most 100 characters; \"\" = not a usable name): ConvertTo-ProjectName, markdown.js cleanProjectName.",
+    "fileName (a project name -> its list file name; reserved device names and empty names get \"Project \" in front):",
+    "  ConvertTo-FileName, markdown.js toFileName.",
+    "pairingLink (a pairing link or a bare key -> {key, server}, or null: https only, plain http just on this computer,",
+    "  no user name in the address): desktop/sync-core.ps1 Get-PairingLink, worker/public/js/pairing.js parsePairingLink."
+  ],
+  "cleanText": [
+    ["  Call\tthe\r\nbank  ", "Call the bank"],
+    ["a\u0000b\u007fc\u001f", "abc"],
+    ["ბიუჯეტის განხილვა", "ბიუჯეტის განხილვა"],
+    ["\u00a0nbsp\u00a0", "nbsp"],
+    ["\ufeffpasted\ufeff", "pasted"],
+    ["line\u2028sep", "line\u2028sep"],
+    ["a \t\t b", "a   b"],
+    ["", ""],
+    ["   ", ""],
+    ["zero\u200bwidth", "zero\u200bwidth"],
+    ["next\u0085line\u0085", "next\u0085line\u0085"],
+    ["\u180emongolian\u180e", "\u180emongolian\u180e"],
+    ["\u3000ideographic\u3000", "ideographic"],
+    { "in": { "repeat": ["x", 10005] }, "out": { "repeat": ["x", 10000] }, "cut": true },
+    { "in": [{ "repeat": ["x", 9999] }, " y"], "out": { "repeat": ["x", 9999] }, "cut": true }
+  ],
+  "cleanNotes": [
+    ["\r\n  first  \n\nsecond \n\n", "  first\n\nsecond"],
+    ["", ""],
+    ["\n\n\n", ""],
+    ["a\r\nb", "a\nb"],
+    ["keep  inner  spaces   ", "keep  inner  spaces"],
+    ["\u00a0x\u00a0", "\u00a0x"],
+    ["https://example.com/a b\t", "https://example.com/a b"],
+    ["ქართული\n\n\nnote", "ქართული\n\n\nnote"],
+    ["a\ufeff\nb\u0085", "a\nb\u0085"]
+  ],
+  "cleanTime": [
+    ["9:05", "9:05"],
+    ["09:05", "9:05"],
+    ["23:59", "23:59"],
+    ["0:00", "0:00"],
+    ["24:00", ""],
+    ["9:60", ""],
+    ["9:5", ""],
+    [" 9:05", ""],
+    ["", ""],
+    ["123:00", ""],
+    ["9:05\n", ""],
+    ["٩:05", ""]
+  ],
+  "validDate": [
+    ["2026-02-28", true],
+    ["2026-02-29", false],
+    ["2028-02-29", true],
+    ["2026-2-1", false],
+    ["2026-13-01", false],
+    ["2026-00-10", false],
+    ["2026-01-00", false],
+    ["0000-01-01", false],
+    ["0001-01-01", true],
+    ["9999-12-31", true],
+    ["", false],
+    ["2026-01-01T00:00", false],
+    ["2026-04-31", false],
+    ["12026-01-01", false],
+    [" 2026-01-01", false],
+    ["2026-01-01\n", false],
+    ["٢٠٢٦-01-01", false]
+  ],
+  "projectName": [
+    ["Work", "Work"],
+    ["Work / Q4: plan?", "Work  Q4 plan"],
+    ["  spaced  ", "spaced"],
+    ["Trailing dots...", "Trailing dots"],
+    ["Name.\u00a0", "Name"],
+    ["Tab\tName", "TabName"],
+    ["con", "con"],
+    ["...", ""],
+    ["", ""],
+    ["ბიუჯეტი", "ბიუჯეტი"],
+    ["Name.\u00a0", "Name"],
+    ["\ufeffInbox", "Inbox"],
+    ["a\u007fb", "a\u007fb"],
+    { "in": { "repeat": ["a", 120] }, "out": { "repeat": ["a", 100] } },
+    { "in": [{ "repeat": ["x", 99] }, " y"], "out": { "repeat": ["x", 99] } },
+    { "in": [{ "repeat": ["x", 99] }, ".y"], "out": { "repeat": ["x", 99] } }
+  ],
+  "fileName": [
+    ["Work", "Work"],
+    ["Work / Q4: plan?", "Work  Q4 plan"],
+    ["con", "Project con"],
+    ["LPT1", "Project LPT1"],
+    ["nul.txt", "nul.txt"],
+    ["Trailing dots...", "Trailing dots"],
+    ["  spaced  ", "spaced"],
+    ["", "Project"],
+    ["...", "Project"],
+    ["Tab\tName", "TabName"],
+    ["ბიუჯეტი", "ბიუჯეტი"],
+    ["com٣", "com٣"],
+    ["COM1", "Project COM1"],
+    ["  nul. ", "Project nul"],
+    { "in": { "repeat": ["a", 120] }, "out": { "repeat": ["a", 100] } },
+    { "in": [{ "repeat": ["x", 99] }, ".y"], "out": { "repeat": ["x", 99] } }
+  ],
+  "pairingLink": [
+    [
+      "https://saqme.me.workers.dev/#pair=kkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkk",
+      { "key": "kkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkk", "server": "https://saqme.me.workers.dev" }
+    ],
+    [
+      "https://saqme.me.workers.dev#pair=kkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkk",
+      { "key": "kkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkk", "server": "https://saqme.me.workers.dev" }
+    ],
+    [
+      "  https://saqme.me.workers.dev/#pair=kkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkk\n",
+      { "key": "kkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkk", "server": "https://saqme.me.workers.dev" }
+    ],
+    [
+      "https://SAQME.me.workers.dev:443/#pair=kkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkk",
+      { "key": "kkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkk", "server": "https://saqme.me.workers.dev" }
+    ],
+    [
+      "https://saqme.me.workers.dev/?from=qr#pair=kkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkk",
+      { "key": "kkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkk", "server": "https://saqme.me.workers.dev" }
+    ],
+    ["kkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkk", { "key": "kkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkk", "server": "" }],
+    [
+      "http://localhost:8787/#pair=kkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkk",
+      { "key": "kkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkk", "server": "http://localhost:8787" }
+    ],
+    [
+      "http://127.0.0.1:8787/#pair=kkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkk",
+      { "key": "kkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkk", "server": "http://127.0.0.1:8787" }
+    ],
+    ["https://saqme.me.workers.dev@evil.example/#pair=kkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkk", null],
+    ["https://user:pw@saqme.me.workers.dev/#pair=kkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkk", null],
+    ["http://saqme.me.workers.dev/#pair=kkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkk", null],
+    ["https://saqme.me.workers.dev/other/#pair=kkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkk", null],
+    ["https://saqme.me.workers.dev/#pair=tooshort", null],
+    ["ftp://saqme.me.workers.dev/#pair=kkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkk", null],
+    ["", null]
+  ]
+}

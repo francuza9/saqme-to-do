@@ -1,0 +1,2 @@
+- [ ] Impossible date due:2026-02-30 ^fffffff1
+- [ ] Date-like text 2026-10-21 ^fffffff2

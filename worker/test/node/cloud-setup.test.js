@@ -1,0 +1,138 @@
+// scripts/cloud-setup.mjs end to end against a fake wrangler (no Cloudflare involved).
+import { describe, it, expect, beforeAll } from 'vitest';
+import { spawnSync } from 'node:child_process';
+import { mkdtempSync, readFileSync, writeFileSync, copyFileSync, existsSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join, dirname } from 'node:path';
+import { fileURLToPath } from 'node:url';
+
+const root = join(dirname(fileURLToPath(import.meta.url)), '..', '..', '..');
+const script = join(root, 'scripts', 'cloud-setup.mjs');
+const fake = join(root, 'worker', 'test', 'setup', 'fake-wrangler.mjs');
+
+function setupDirs() {
+  const dir = mkdtempSync(join(tmpdir(), 'saqme-setup-test-'));
+  const worker = join(dir, 'worker');
+  spawnSync('mkdir', ['-p', worker]);
+  copyFileSync(join(root, 'worker', 'wrangler.toml.template'), join(worker, 'wrangler.toml.template'));
+  return { dir, worker, state: join(dir, 'cloud.json'), desktop: join(dir, 'data', 'sync', 'config.json'), fakeState: join(dir, 'fake.json') };
+}
+function runSetup(d, extra = [], fakeInit) {
+  if (fakeInit) writeFileSync(d.fakeState, JSON.stringify({ loggedIn: false, dbs: [], deploys: [], subdomain: true, calls: [], ...fakeInit }));
+  const r = spawnSync(process.execPath, [script, '--state', d.state, '--desktop-config', d.desktop, '--worker-dir', d.worker, '--skip-install', '--yes', ...extra], {
+    encoding: 'utf8', env: { ...process.env, SAQME_WRANGLER_JS: fake, FAKE_WRANGLER_STATE: d.fakeState, SAQME_VERIFY_ATTEMPTS: '1', NO_COLOR: '1' },
+  });
+  return { ...r, fakeState: JSON.parse(readFileSync(d.fakeState, 'utf8')) };
+}
+const json = (p) => JSON.parse(readFileSync(p, 'utf8'));
+
+describe('cloud setup', () => {
+  let d;
+  let first;
+  beforeAll(() => {
+    d = setupDirs();
+    first = runSetup(d, [], {});
+  });
+
+  it('logs in, creates the database, writes the config and deploys code + secrets together', () => {
+    expect(first.status, first.stdout + first.stderr).toBe(0);
+    expect(first.fakeState.calls).toContain('login');
+    expect(first.fakeState.dbs).toEqual([{ name: 'saqme', uuid: 'uuid-1-0000-0000-000000000000' }]);
+    const toml = readFileSync(join(d.worker, 'wrangler.toml'), 'utf8');
+    expect(toml).toMatch(/name = "saqme"/);
+    expect(toml).toMatch(/database_id = "uuid-1-0000-0000-000000000000"/);
+    expect(toml).toMatch(/account_id = "0123456789abcdef0123456789abcdef"/);
+    const st = json(d.state);
+    expect(st.token).toMatch(/^[A-Za-z0-9_-]{43}$/);
+    expect(st.url).toBe('https://saqme.my-sub.workers.dev');
+    expect(first.fakeState.deploys[0].secrets).toEqual({ AUTH_TOKEN: st.token, VAPID_PUBLIC_KEY: st.vapidPublicKey, VAPID_PRIVATE_KEY: st.vapidPrivateKey });
+    const cfg = json(d.desktop);
+    expect(cfg).toMatchObject({ url: st.url, token: st.token, enabled: true });
+    expect(cfg.deviceId).toMatch(/^pc-/);
+    expect(first.stdout).toContain(`${st.url}/#pair=${st.token}`);
+    expect(first.stdout).toMatch(/[█▀▄]/);   // the terminal QR code
+  });
+
+  it('is idempotent: second run reuses database, token, keys and device id', () => {
+    const before = json(d.state);
+    const deviceId = json(d.desktop).deviceId;
+    const again = runSetup(d);
+    expect(again.status).toBe(0);
+    expect(again.fakeState.calls.filter((c) => c.startsWith('d1 create'))).toHaveLength(1);
+    expect(again.fakeState.calls.filter((c) => c === 'login')).toHaveLength(1);
+    expect(again.stdout).toMatch(/already exists - reusing/);
+    const after = json(d.state);
+    expect(after.token).toBe(before.token);
+    expect(after.vapidPrivateKey).toBe(before.vapidPrivateKey);
+    expect(json(d.desktop).deviceId).toBe(deviceId);
+  });
+
+  it('--rotate-token revokes the old key: new token and push keys everywhere, old subscriptions gone', () => {
+    const before = json(d.state);
+    const r = runSetup(d, ['--rotate-token']);
+    expect(r.status).toBe(0);
+    const after = json(d.state);
+    expect(after.token).not.toBe(before.token);
+    expect(after.vapidPrivateKey).not.toBe(before.vapidPrivateKey);
+    expect(json(d.desktop).token).toBe(after.token);
+    expect(r.fakeState.deploys.at(-1).secrets).toEqual({ AUTH_TOKEN: after.token, VAPID_PUBLIC_KEY: after.vapidPublicKey, VAPID_PRIVATE_KEY: after.vapidPrivateKey });
+    expect(r.fakeState.executed).toEqual(['DELETE FROM push_subscriptions']);
+    expect(r.stdout).toMatch(/old key is revoked/);
+    expect(r.stdout).toMatch(/Pair your phone .* again/);
+  });
+
+  it('--result tells the apps how it ended', () => {
+    const ok = runSetup(d, ['--result', join(d.dir, 'result-ok.json')]);
+    expect(ok.status).toBe(0);
+    expect(json(join(d.dir, 'result-ok.json'))).toEqual({ ok: true, url: 'https://saqme.my-sub.workers.dev' });
+    const d6 = setupDirs();
+    writeFileSync(join(d6.worker, 'wrangler.toml.template'), 'name = "__WORKER_NAME__"\n');   // deploy will refuse this
+    const bad = runSetup(d6, ['--result', join(d6.dir, 'result.json')], { loggedIn: true });
+    expect(bad.status).toBe(1);
+    expect(json(join(d6.dir, 'result.json'))).toMatchObject({ ok: false, message: 'Deploying the Worker failed.' });
+  });
+
+  it('walks the user through registering a workers.dev subdomain', () => {
+    const d2 = setupDirs();
+    const r = runSetup(d2, [], { loggedIn: true, subdomain: false });
+    expect(r.status, r.stdout + r.stderr).toBe(0);
+    expect(r.stdout).toMatch(/needs a free workers\.dev subdomain/);
+    expect(r.fakeState.deploys.some((x) => x.interactive)).toBe(true);
+    expect(json(d2.state).url).toBe('https://saqme.my-sub.workers.dev');
+  });
+
+  it('asks which account to use when there are several (and remembers it)', () => {
+    const d3 = setupDirs();
+    const accounts = [{ id: 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa', name: 'Work' }, { id: 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb', name: 'Personal' }];
+    const r = runSetup(d3, [], { loggedIn: true, accounts });
+    expect(r.status).toBe(0);
+    expect(json(d3.state).accountId).toBe(accounts[0].id);   // --yes picks the first
+    expect(r.stdout).toMatch(/Several Cloudflare accounts/);
+    expect(r.stdout).toMatch(/account: Work \(a{32}\)/);   // always says which one it used
+  });
+
+  it('refuses to replace the token of a setup made on another computer', () => {
+    const d5 = setupDirs();
+    // the database exists already, but this machine has no saved state (no token)
+    const r = runSetup(d5, [], { loggedIn: true, dbs: [{ name: 'saqme', uuid: 'uuid-9-0000-0000-000000000000' }] });
+    expect(r.status).toBe(1);
+    expect(r.stderr).toMatch(/already set up in this Cloudflare account/);
+    expect(r.stderr).toMatch(/Pair phone > Copy link/);
+    expect(r.fakeState.deploys).toHaveLength(0);
+    // deliberately starting over works
+    const again = runSetup(d5, ['--rotate-token']);
+    expect(again.status).toBe(0);
+    expect(json(d5.state).databaseId).toBe('uuid-9-0000-0000-000000000000');
+  });
+
+  it('stops with a clear next step when something fails', () => {
+    const d4 = setupDirs();
+    writeFileSync(join(d4.worker, 'wrangler.toml.template'), 'name = "__WORKER_NAME__"\n');   // deploy will refuse this
+    const r = runSetup(d4, [], { loggedIn: true });
+    expect(r.status).toBe(1);
+    expect(r.stderr).toMatch(/Setup stopped: Deploying the Worker failed/);
+    expect(r.stderr).toMatch(/Re-running setup is safe/);
+    expect(existsSync(d4.state)).toBe(true);   // keys were saved before deploying
+    expect(json(d4.state).token).toBeTruthy();
+  });
+});

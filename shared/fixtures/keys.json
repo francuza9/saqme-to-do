@@ -1,0 +1,94 @@
+{
+  "about": [
+    "Fractional order keys (docs/sync.md). Implementations: worker/public/js/keys.js (keyBetween, isValidKey, rekey),",
+    "local/engine.mjs (rekeyMap) and desktop/sync-core.ps1 (Get-KeyBetween, Test-OrderKey, Get-RekeyMap).",
+    "between: [a, b, key strictly between them, or null = refused]. valid: [key, is it valid].",
+    "rekey: sibling keys in their new order (null = none yet) -> the keys to assign {index: key}; the longest increasing run",
+    "keeps its keys. reset: when a new key would be longer than 48 characters, the whole list is keyed again (only the",
+    "engines that keep lists folders do that: Get-RekeyMap and rekeyMap; keys.js rekey does not).",
+    "walk: start with [\"a0\"], then `steps` times insert keyBetween(left, right) at index floor(r * (n + 1)), where r comes",
+    "from s = (s * 1664525 + 1013904223) mod 2^32, r = s / 2^32, starting at s = seed; expect = the keys at the end."
+  ],
+  "between": [
+    [null, null, "a0"],
+    ["a0", null, "a1"],
+    [null, "a0", "Zz"],
+    ["a0", "a1", "a0V"],
+    ["a0V", "a1", "a0l"],
+    ["az", null, "b00"],
+    ["Zz", null, "a0"],
+    ["a1", "a1V", "a1G"],
+    ["a0", "a0V", "a0G"],
+    ["b00", "b01", "b00V"],
+    ["zzzzzzzzzzzzzzzzzzzzzzzzzzz", null, "zzzzzzzzzzzzzzzzzzzzzzzzzzzV"],
+    ["a0l", null, "a1"],
+    [null, "a0V", "a0"],
+    ["Zz", "a0", "ZzV"],
+    ["a1", "a0", null],
+    ["a0", "a0", null],
+    ["a00", null, null]
+  ],
+  "valid": [
+    ["a0", true],
+    ["Zz", true],
+    ["a", false],
+    ["a0V", true],
+    ["a00", false],
+    ["A00000000000000000000000000", false],
+    ["b00", true],
+    ["b0", false],
+    ["", false],
+    ["a0 ", false],
+    ["zzzzzzzzzzzzzzzzzzzzzzzzzzz", true],
+    ["a0-", false],
+    [
+      "a0VVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVV",
+      false
+    ],
+    [
+      "a0VVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVV",
+      true
+    ]
+  ],
+  "rekey": [
+    { "keys": ["a4", "a0", "a1", "a2", "a3"], "expect": { "0": "Zz" } },
+    { "keys": [null, "a1", null, "a1", "a0"], "expect": { "0": "a0", "2": "a2", "3": "a3", "4": "a4" } },
+    { "keys": ["a0", "a1"], "expect": {} },
+    { "keys": [null, null, null], "expect": { "0": "a0", "1": "a1", "2": "a2" } },
+    { "keys": ["a1", "a0", "a2"], "expect": { "1": "a1V" } },
+    { "keys": ["a0", "a2", "a1"], "expect": { "2": "a3" } },
+    { "keys": ["a0", null, "a1"], "expect": { "1": "a0V" } },
+    { "keys": ["zzz", "a0"], "expect": { "0": "Zz" } },
+    { "keys": ["a0VVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVV", null], "expect": { "1": "a1" } },
+    {
+      "keys": ["a011111111111111111111111111111111111111111111111", null, "a011111111111111111111111111111111111111111111112"],
+      "reset": true,
+      "expect": { "0": "a0", "1": "a1", "2": "a2" }
+    }
+  ],
+  "walk": {
+    "seed": 7,
+    "steps": 300,
+    "expect": [
+      "Zt", "Zu", "Zv", "ZvG", "ZvK", "ZvO", "ZvV", "Zvd", "Zvl", "Zw", "ZwV", "Zx", "Zx2", "Zx4", "Zx8", "ZxG", "ZxO", "ZxV",
+      "ZxW", "ZxW8", "ZxWC", "ZxWG", "ZxWV", "ZxWl", "ZxX", "ZxY", "ZxZ", "Zxd", "Zxe", "Zxf", "Zxg", "Zxh", "Zxj", "Zxl", "Zxt",
+      "Zxv", "ZxvV", "Zxw", "Zxx", "Zy", "Zy8", "ZyC", "ZyG", "ZyV", "ZyZ", "Zya", "Zyb", "Zyd", "Zyl", "Zz", "ZzG", "ZzI", "ZzIV",
+      "ZzJ", "ZzK", "ZzKV", "ZzKl", "ZzKt", "ZzL", "ZzL8", "ZzLG", "ZzLO", "ZzLQ", "ZzLS", "ZzLU", "ZzLV", "ZzM", "ZzN", "ZzO",
+      "ZzP", "ZzQ", "ZzS", "ZzU", "ZzUG", "ZzUO", "ZzUV", "ZzUl", "ZzUp", "ZzUt", "ZzV", "Zzl", "a0", "a01", "a01V", "a01l", "a02",
+      "a03", "a03G", "a03V", "a03l", "a04", "a06", "a07", "a08", "a088", "a08G", "a08V", "a09", "a098", "a09C", "a09E", "a09G",
+      "a09K", "a09O", "a09V", "a09W", "a09X", "a09Z", "a09b", "a09c", "a09d", "a09h", "a09l", "a0A", "a0A8", "a0AG", "a0AO",
+      "a0AV", "a0B", "a0BV", "a0Bd", "a0Bh", "a0Bl", "a0Bt", "a0C", "a0CG", "a0CV", "a0Cl", "a0D", "a0DV", "a0E", "a0EV", "a0Ed",
+      "a0El", "a0F", "a0F4", "a0F8", "a0FC", "a0FG", "a0FO", "a0FV", "a0G", "a0GV", "a0Gd", "a0Gl", "a0H", "a0I", "a0IG", "a0IV",
+      "a0Id", "a0Ih", "a0Ij", "a0Il", "a0Ip", "a0IpV", "a0Iq", "a0Ir", "a0Is", "a0IsV", "a0It", "a0Ix", "a0Iz", "a0J", "a0JV",
+      "a0Jd", "a0Jl", "a0Jt", "a0Jx", "a0Jz", "a0K", "a0M", "a0MG", "a0MV", "a0N", "a0NG", "a0NV", "a0O", "a0OV", "a0P", "a0PG",
+      "a0PO", "a0PV", "a0Pl", "a0Q", "a0QV", "a0QX", "a0QZ", "a0Qd", "a0Ql", "a0R", "a0RV", "a0S", "a0U", "a0V", "a0d", "a0l",
+      "a0p", "a0t", "a1", "a11", "a12", "a12G", "a12V", "a13", "a14", "a16", "a18", "a1C", "a1G", "a1I", "a1K", "a1M", "a1O",
+      "a1Q", "a1S", "a1T", "a1U", "a1V", "a1Z", "a1b", "a1d", "a1d4", "a1d8", "a1dA", "a1dC", "a1dG", "a1dO", "a1dV", "a1e", "a1f",
+      "a1g", "a1gG", "a1gV", "a1gl", "a1h", "a1j", "a1k", "a1l", "a1m", "a1n", "a1p", "a1r", "a1t", "a1t8", "a1tG", "a1tV", "a1u",
+      "a1uV", "a1ul", "a1ut", "a1v", "a1v8", "a1vG", "a1vK", "a1vO", "a1vV", "a1vl", "a1w", "a1wV", "a1wd", "a1wl", "a1x", "a1z",
+      "a1z2", "a1z4", "a1z8", "a1zG", "a1zO", "a1zS", "a1zV", "a1zl", "a2", "a2G", "a2V", "a2l", "a2t", "a2x", "a3", "a3G", "a3V",
+      "a3X", "a3Z", "a3b", "a3d", "a3f", "a3h", "a3i", "a3j", "a3l", "a4", "a5", "a6", "a64", "a68", "a6A", "a6C", "a6G", "a6V",
+      "a6d", "a6l", "a7"
+    ]
+  }
+}

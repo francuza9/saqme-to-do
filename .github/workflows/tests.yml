@@ -1,0 +1,76 @@
+# Runs the test suites on every push to main and every pull request. No secrets: nothing here talks to
+# Cloudflare (the Worker runs locally under Miniflare / wrangler dev --local).
+name: Tests
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: tests-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  vitest:
+    name: Vitest (Node and workerd)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262   # v4.4.0
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020   # v4.4.0
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: worker/package-lock.json
+      - run: npm ci --no-audit --no-fund
+        working-directory: worker
+      - run: npm test
+        working-directory: worker
+
+  e2e:
+    name: End to end (wrangler dev, two phones, the Linux app)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262   # v4.4.0
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020   # v4.4.0
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: worker/package-lock.json
+      - run: npm ci --no-audit --no-fund
+        working-directory: worker
+      - run: npm run test:e2e   # the desktop (PowerShell) part needs Windows: it is skipped here
+        working-directory: worker
+
+  windows:
+    name: Windows (PowerShell suites, widget self-check, installer)
+    runs-on: windows-latest
+    timeout-minutes: 30
+    defaults:
+      run:
+        shell: powershell   # Windows PowerShell 5.1, what the app runs on
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262   # v4.4.0
+        with:
+          persist-credentials: false
+      - name: Sync engine unit tests
+        run: powershell -NoProfile -ExecutionPolicy Bypass -File desktop\tests\sync-core.tests.ps1
+      - name: Shared fixtures (the same cases Vitest runs)
+        run: powershell -NoProfile -ExecutionPolicy Bypass -File desktop\tests\shared-fixtures.tests.ps1
+      - name: Widget self-check
+        run: |
+          $out = powershell -NoProfile -ExecutionPolicy Bypass -STA -File desktop\widget.ps1 -DataDir "$env:RUNNER_TEMP\saqme-smoke" -SmokeTest 2>&1 | Out-String
+          Write-Output $out
+          if ($out -notmatch 'SMOKE OK') { exit 1 }
+      - name: Installer, in a sandbox
+        run: powershell -NoProfile -ExecutionPolicy Bypass -File scripts\dev\test-setup.ps1

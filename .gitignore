@@ -1,0 +1,22 @@
+node_modules/
+.wrangler/
+dist/
+coverage/
+*.log
+.DS_Store
+Thumbs.db
+desktop/cache/
+
+# secrets and per-user configuration (setup generates them; never commit them)
+.dev.vars
+.dev.vars.*
+.env
+.env.*
+wrangler.toml
+cloud.json
+
+# an app's data folder opened inside the repository while developing
+lists/
+sync/
+state.json
+.widget-*

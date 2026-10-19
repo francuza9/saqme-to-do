@@ -1,0 +1,7 @@
+- [ ] To do ^aaaaaaa1
+- [/] In progress ^aaaaaaa2
+- [x] Done ^aaaaaaa3
+- [>] Postponed ^aaaaaaa4
+- [!] Blocked ^aaaaaaa5
+- [-] Failed ^aaaaaaa6
+- [~] Abandoned ^aaaaaaa7

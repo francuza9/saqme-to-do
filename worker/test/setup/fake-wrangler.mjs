@@ -1,0 +1,48 @@
+// Stand-in for wrangler used by test/node/cloud-setup.test.js: same commands and output shapes as the
+// real CLI (whoami --json, d1 list --json, d1 create, migrations apply, deploy --secrets-file), backed
+// by a JSON file instead of Cloudflare.
+import { readFileSync, writeFileSync, existsSync } from 'node:fs';
+
+const statePath = process.env.FAKE_WRANGLER_STATE;
+const st = existsSync(statePath) ? JSON.parse(readFileSync(statePath, 'utf8')) : { loggedIn: false, dbs: [], deploys: [], subdomain: true, calls: [] };
+const save = () => writeFileSync(statePath, JSON.stringify(st, null, 2));
+const args = process.argv.slice(2);
+st.calls.push(args.join(' '));
+const [cmd, sub] = args;
+const interactive = !process.env.CI;
+
+function exit(code, out = '', err = '') { if (out) process.stdout.write(out); if (err) process.stderr.write(err); save(); process.exit(code); }
+
+if (cmd === 'whoami') {
+  if (!st.loggedIn) exit(1, '', '{"loggedIn":false}\n');
+  exit(0, JSON.stringify({ loggedIn: true, authType: 'OAuth Token', email: 'me@example.com', accounts: st.accounts ?? [{ id: '0123456789abcdef0123456789abcdef', name: 'My Account' }] }) + '\n');
+}
+if (cmd === 'login') { st.loggedIn = true; exit(0, 'Successfully logged in.\n'); }
+if (cmd === 'd1' && sub === 'list') exit(0, JSON.stringify(st.dbs.map((d) => ({ uuid: d.uuid, name: d.name, created_at: '2026-10-19' })), null, 2) + '\n');
+if (cmd === 'd1' && sub === 'create') {
+  const uuid = `uuid-${st.dbs.length + 1}-0000-0000-000000000000`;
+  st.dbs.push({ name: args[2], uuid });
+  exit(0, `✅ Successfully created DB '${args[2]}'\n[[d1_databases]]\nbinding = "DB"\ndatabase_name = "${args[2]}"\ndatabase_id = "${uuid}"\n`);
+}
+if (cmd === 'd1' && sub === 'migrations') {
+  if (!st.dbs.find((d) => d.name === args[3])) exit(1, '', `Couldn't find DB with name '${args[3]}'\n`);
+  const first = !st.migrated; st.migrated = true;
+  exit(0, first ? '🚣 17 commands executed successfully.\n' : '✅ No migrations to apply!\n');
+}
+if (cmd === 'd1' && sub === 'execute') {
+  if (!st.dbs.find((d) => d.name === args[2])) exit(1, '', `Couldn't find DB with name '${args[2]}'\n`);
+  st.executed = [...(st.executed ?? []), args[args.indexOf('--command') + 1]];
+  exit(0, '🚣 1 command executed successfully.\n');
+}
+if (cmd === 'deploy') {
+  const toml = readFileSync('wrangler.toml', 'utf8');
+  if (!/database_id = "uuid-/.test(toml)) exit(1, '', 'wrangler.toml has no database id\n');
+  const secrets = JSON.parse(readFileSync(args[args.indexOf('--secrets-file') + 1], 'utf8'));
+  if (!st.subdomain) {
+    if (!interactive) exit(1, '', '▲ [WARNING] You need to register a workers.dev subdomain before publishing to workers.dev\n✘ [ERROR] You can either deploy your worker to one or more routes by specifying them in your wrangler.toml file, or register a workers.dev subdomain here:\nhttps://dash.cloudflare.com/0123/workers/onboarding\n');
+    st.subdomain = true;
+  }
+  st.deploys.push({ secrets, interactive });
+  exit(0, 'Total Upload: 40.00 KiB / gzip: 10.00 KiB\nUploaded saqme (1.23 sec)\nDeployed saqme triggers (0.5 sec)\n  https://saqme.my-sub.workers.dev\n  schedule: */5 * * * *\nCurrent Version ID: 1234\n');
+}
+exit(1, '', `fake wrangler: unsupported command ${args.join(' ')}\n`);

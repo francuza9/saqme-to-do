@@ -1,0 +1,94 @@
+/* Generated from design/tokens.json by scripts/build-tokens.mjs - do not edit by hand. */
+@font-face { font-family: 'FiraGO'; src: url('../fonts/FiraGO-Regular.ttf') format('truetype'); font-weight: 400; font-style: normal; font-display: swap; }
+@font-face { font-family: 'FiraGO'; src: url('../fonts/FiraGO-Italic.ttf') format('truetype'); font-weight: 400; font-style: italic; font-display: swap; }
+@font-face { font-family: 'FiraGO'; src: url('../fonts/FiraGO-Medium.ttf') format('truetype'); font-weight: 500; font-style: normal; font-display: swap; }
+@font-face { font-family: 'FiraGO'; src: url('../fonts/FiraGO-SemiBold.ttf') format('truetype'); font-weight: 600; font-style: normal; font-display: swap; }
+:root {
+  --font: 'FiraGO', system-ui, -apple-system, 'Segoe UI', 'Noto Sans Georgian', sans-serif;
+  --t-display-size: 22px; --t-display-line: 28px; --t-display-weight: 600;
+  --t-title-size: 18px; --t-title-line: 24px; --t-title-weight: 600;
+  --t-body-size: 15px; --t-body-line: 22px; --t-body-weight: 400;
+  --t-label-size: 14px; --t-label-line: 20px; --t-label-weight: 500;
+  --t-meta-size: 13px; --t-meta-line: 18px; --t-meta-weight: 400;
+  --t-small-size: 12px; --t-small-line: 16px; --t-small-weight: 500;
+  --space-1: 2px; --space-2: 4px; --space-3: 8px; --space-4: 12px; --space-5: 16px; --space-6: 24px; --space-7: 32px;
+  --r-container: 14px; --r-tab: 10px; --r-control: 7px; --r-chip: 5px;
+  --row-min-touch: 48px; --row-min-pointer: 34px; --row-indent: 20px; --row-chip-gap: 12px; --row-meta-gap: 2px;
+  --grad-a: #B65CE3; --grad-b: #F3A14A;
+}
+:root[data-theme='dark'] {
+  color-scheme: dark;
+  --surface: #1E1A23;
+  --frame: #15121A;
+  --ink: #EFEAF4;
+  --smoke: #A39BAE;
+  --violet: #C688EE;
+  --amber: #F2B45A;
+  --alert: #F2877F;
+  --closed: #8F8799;
+  --line: #37333C;
+  --hover: #28242D;
+  --selected: #36293F;
+  --note-bg: #27232C;
+  --note-ink: #C5C0CA;
+  --edge: #312E36;
+  --tab-hover: #221F27;
+  --menu-hover: #26232B;
+  --button-bg: #2D2932;
+  --alert-wash: #402B32;
+  --amber-wash: #40332C;
+  --danger: #D94B45;
+  --on-violet: #15121A;
+  --status-todo: #7C7589;
+  --status-prog: #E8A23A;
+  --status-done: #7E758C;
+  --status-post: #4F86C6;
+  --status-block: #776BCB;
+  --status-rej: #D94B45;
+  --status-aband: #7D748A;
+  --status-done-glyph: #FFFFFF;
+  --status-post-glyph: #FFFFFF;
+  --status-block-glyph: #FFFFFF;
+  --status-rej-glyph: #FFFFFF;
+  --status-aband-glyph: #FFFFFF;
+  --thumb: rgba(255, 255, 255, .25);
+  --backdrop: rgba(8, 6, 10, .55);
+}
+:root[data-theme='light'] {
+  color-scheme: light;
+  --surface: #F6F2EA;
+  --frame: #E9E2D4;
+  --ink: #25211C;
+  --smoke: #675F52;
+  --violet: #8930B6;
+  --amber: #7F5100;
+  --alert: #A62B25;
+  --closed: #6F685B;
+  --line: #DDD9D1;
+  --hover: #ECE8E0;
+  --selected: #E7D7E3;
+  --note-bg: #EDE9E1;
+  --note-ink: #4F4B45;
+  --edge: #D0C9BC;
+  --tab-hover: #DDD6C9;
+  --menu-hover: #D9D3C5;
+  --button-bg: #E7E3DC;
+  --alert-wash: #ECD8D0;
+  --amber-wash: #E7DDCC;
+  --danger: #D94B45;
+  --on-violet: #FFFFFF;
+  --status-todo: #827A69;
+  --status-prog: #A86E16;
+  --status-done: #847A65;
+  --status-post: #427DC2;
+  --status-block: #6E62C8;
+  --status-rej: #D94943;
+  --status-aband: #7F788B;
+  --status-done-glyph: #FFFFFF;
+  --status-post-glyph: #FFFFFF;
+  --status-block-glyph: #FFFFFF;
+  --status-rej-glyph: #FFFFFF;
+  --status-aband-glyph: #FFFFFF;
+  --thumb: rgba(0, 0, 0, .2);
+  --backdrop: rgba(38, 36, 31, .35);
+}

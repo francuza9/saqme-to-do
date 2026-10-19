@@ -1,0 +1,6 @@
+- [ ] Plan the trip ^bbbbbbb1
+  - [/] Book flights ^bbbbbbb2
+    - [x] Compare prices ^bbbbbbb3
+    - [ ] Pick seats ^bbbbbbb4
+  - [ ] Hotel ^bbbbbbb5
+- [ ] Pack ^bbbbbbb6

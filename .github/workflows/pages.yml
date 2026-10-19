@@ -1,0 +1,45 @@
+# Publishes the phone app (worker/public) as a static site on GitHub Pages, so it can be used without a
+# Cloudflare account: lists stay on the device (export / import as markdown), and Settings > Sync can still
+# pair it with your own Worker later. Nothing here sees anyone's lists; it only serves the app's files.
+# One-time setup in the repository: Settings > Pages > Build and deployment > Source: GitHub Actions.
+# Everyone who uses the hosted copy runs what this publishes: protect main (required reviews), and keep the
+# actions pinned to commits (the comment says which release).
+name: Phone app on GitHub Pages
+
+on:
+  push:
+    branches: [main]
+    paths: ['worker/public/**', '.github/workflows/pages.yml']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262   # v4.4.0
+        with:
+          persist-credentials: false
+      - name: Static copy of the app
+        run: |
+          mkdir -p _site
+          cp -R worker/public/. _site/
+          rm -f _site/_headers   # Cloudflare's header file: GitHub Pages cannot send headers (index.html has its CSP as a meta tag, app.js refuses frames)
+          touch _site/.nojekyll
+      - uses: actions/configure-pages@983d7736d9b0ae728b81ab479565c72886d7745b   # v5.0.0
+      - uses: actions/upload-pages-artifact@56afc609e74202658d3ffba0e8f6dda462b719fa   # v3.0.1
+        with:
+          path: _site
+      - id: deployment
+        uses: actions/deploy-pages@d6db90164ac5ed86f2b6aed7e0febac5b3c0c03e   # v4.0.5

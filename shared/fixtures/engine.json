@@ -1,0 +1,573 @@
+{
+  "about": [
+    "The lists-folder sync engine, which exists twice: desktop/sync-core.ps1 (Windows) and local/engine.mjs (Linux, macOS).",
+    "Rows: {\"p\": project id, name, pos, deleted?} and {\"t\": task id, \"in\": project id, pos, text, parent?, status?, due?, notes?,",
+    "deleted?}. lists: the files in the lists folder (\".trash/...\" inside lists/.trash; \"busy\": written a moment ago). files:",
+    "project id -> file name. plan: with the base S (what the files reflect) and the server rows R, build the plan that makes",
+    "the files match R and apply it; after = every file in the folder afterwards (lists/.trash aside: \"trash\" lists the start",
+    "of each file name there). diff: with base S (ts 100), read the folder and queue changes; changes = [kind, id, field,",
+    "value, {base?, ts?}?] (any order; base / ts checked when given), with \"guarded\" (deletes held back) and \"skipped\" (some",
+    "list was not usable, or one is briefly missing) when given. State before the diff: \"missing\" (project id -> seconds its",
+    "list has been missing), \"planned\" (task id -> {age: seconds since the plan, added?, addedTs?, fields: {field: [value",
+    "before the plan, its ts]}}), \"guard\" (keys held back last time) and \"allow\" (the user confirmed them); \"guardAfter\":",
+    "the keys held back afterwards."
+  ],
+  "plan": [
+    {
+      "name": "edits from another device land in place; headings and prose stay",
+      "lists": { "Work.md": "# Work\n- [ ] A ^aaaaaaaa\n- [ ] B ^bbbbbbbb\n\nProse stays.\n" },
+      "files": { "pwork001": "Work" },
+      "S": [
+        { "p": "pwork001", "name": "Work", "pos": "a0" },
+        { "t": "aaaaaaaa", "in": "pwork001", "pos": "a0", "text": "A" },
+        { "t": "bbbbbbbb", "in": "pwork001", "pos": "a1", "text": "B" }
+      ],
+      "R": [
+        { "p": "pwork001", "name": "Work", "pos": "a0" },
+        { "t": "aaaaaaaa", "in": "pwork001", "pos": "a0", "text": "A edited", "status": "x" },
+        { "t": "bbbbbbbb", "in": "pwork001", "pos": "a1", "text": "B" }
+      ],
+      "after": { "Work.md": "# Work\n- [x] A edited ^aaaaaaaa\n- [ ] B ^bbbbbbbb\n\nProse stays.\n" }
+    },
+    {
+      "name": "a task deleted elsewhere goes; its subtasks move up a level",
+      "lists": { "Work.md": "- [ ] A ^aaaaaaaa\n  - [ ] C ^cccccccc\n- [ ] B ^bbbbbbbb\n" },
+      "files": { "pwork001": "Work" },
+      "S": [
+        { "p": "pwork001", "name": "Work", "pos": "a0" },
+        { "t": "aaaaaaaa", "in": "pwork001", "pos": "a0", "text": "A" },
+        { "t": "cccccccc", "in": "pwork001", "pos": "a0", "text": "C", "parent": "aaaaaaaa" },
+        { "t": "bbbbbbbb", "in": "pwork001", "pos": "a1", "text": "B" }
+      ],
+      "R": [
+        { "p": "pwork001", "name": "Work", "pos": "a0" },
+        { "t": "aaaaaaaa", "in": "pwork001", "pos": "a0", "text": "A", "deleted": true },
+        { "t": "cccccccc", "in": "pwork001", "pos": "a0", "text": "C", "parent": "aaaaaaaa" },
+        { "t": "bbbbbbbb", "in": "pwork001", "pos": "a1", "text": "B" }
+      ],
+      "after": { "Work.md": "- [ ] C ^cccccccc\n- [ ] B ^bbbbbbbb\n" }
+    },
+    {
+      "name": "a new subtask lands at its position, with its deadline and notes",
+      "lists": { "Work.md": "- [ ] A ^aaaaaaaa\n  - [ ] A1 ^aaaaaaa1\n  - [ ] A3 ^aaaaaaa3\n- [ ] B ^bbbbbbbb\n" },
+      "files": { "pwork001": "Work" },
+      "S": [
+        { "p": "pwork001", "name": "Work", "pos": "a0" },
+        { "t": "aaaaaaaa", "in": "pwork001", "pos": "a0", "text": "A" },
+        { "t": "aaaaaaa1", "in": "pwork001", "pos": "a0", "text": "A1", "parent": "aaaaaaaa" },
+        { "t": "aaaaaaa3", "in": "pwork001", "pos": "a2", "text": "A3", "parent": "aaaaaaaa" },
+        { "t": "bbbbbbbb", "in": "pwork001", "pos": "a1", "text": "B" }
+      ],
+      "R": [
+        { "p": "pwork001", "name": "Work", "pos": "a0" },
+        { "t": "aaaaaaaa", "in": "pwork001", "pos": "a0", "text": "A" },
+        { "t": "aaaaaaa1", "in": "pwork001", "pos": "a0", "text": "A1", "parent": "aaaaaaaa" },
+        { "t": "aaaaaaa3", "in": "pwork001", "pos": "a2", "text": "A3", "parent": "aaaaaaaa" },
+        { "t": "bbbbbbbb", "in": "pwork001", "pos": "a1", "text": "B" },
+        {
+          "t": "aaaaaaa2",
+          "in": "pwork001",
+          "pos": "a1",
+          "text": "A2",
+          "parent": "aaaaaaaa",
+          "status": "/",
+          "due": { "date": "2026-10-25", "time": "9:30" },
+          "notes": "see https://x.example"
+        }
+      ],
+      "after": {
+        "Work.md": "- [ ] A ^aaaaaaaa\n  - [ ] A1 ^aaaaaaa1\n  - [/] A2 due:2026-10-25T9:30 ^aaaaaaa2\n    > see https://x.example\n  - [ ] A3 ^aaaaaaa3\n- [ ] B ^bbbbbbbb\n"
+      }
+    },
+    {
+      "name": "a task moved to another list takes its subtask along",
+      "lists": { "Work.md": "- [ ] A ^aaaaaaaa\n  - [ ] A1 ^aaaaaaa1\n- [ ] B ^bbbbbbbb\n", "Home.md": "- [ ] H ^hhhhhhhh\n" },
+      "files": { "pwork001": "Work", "phome001": "Home" },
+      "S": [
+        { "p": "pwork001", "name": "Work", "pos": "a0" },
+        { "p": "phome001", "name": "Home", "pos": "a1" },
+        { "t": "aaaaaaaa", "in": "pwork001", "pos": "a0", "text": "A" },
+        { "t": "aaaaaaa1", "in": "pwork001", "pos": "a0", "text": "A1", "parent": "aaaaaaaa" },
+        { "t": "bbbbbbbb", "in": "pwork001", "pos": "a1", "text": "B" },
+        { "t": "hhhhhhhh", "in": "phome001", "pos": "a0", "text": "H" }
+      ],
+      "R": [
+        { "p": "pwork001", "name": "Work", "pos": "a0" },
+        { "p": "phome001", "name": "Home", "pos": "a1" },
+        { "t": "aaaaaaaa", "in": "phome001", "pos": "a1", "text": "A" },
+        { "t": "aaaaaaa1", "in": "phome001", "pos": "a0", "text": "A1", "parent": "aaaaaaaa" },
+        { "t": "bbbbbbbb", "in": "pwork001", "pos": "a1", "text": "B" },
+        { "t": "hhhhhhhh", "in": "phome001", "pos": "a0", "text": "H" }
+      ],
+      "after": { "Work.md": "- [ ] B ^bbbbbbbb\n", "Home.md": "- [ ] H ^hhhhhhhh\n- [ ] A ^aaaaaaaa\n  - [ ] A1 ^aaaaaaa1\n" }
+    },
+    {
+      "name": "siblings reordered elsewhere",
+      "lists": { "Work.md": "- [ ] A ^aaaaaaaa\n- [ ] B ^bbbbbbbb\n- [ ] C ^cccccccc\n" },
+      "files": { "pwork001": "Work" },
+      "S": [
+        { "p": "pwork001", "name": "Work", "pos": "a0" },
+        { "t": "aaaaaaaa", "in": "pwork001", "pos": "a0", "text": "A" },
+        { "t": "bbbbbbbb", "in": "pwork001", "pos": "a1", "text": "B" },
+        { "t": "cccccccc", "in": "pwork001", "pos": "a2", "text": "C" }
+      ],
+      "R": [
+        { "p": "pwork001", "name": "Work", "pos": "a0" },
+        { "t": "aaaaaaaa", "in": "pwork001", "pos": "a0", "text": "A" },
+        { "t": "bbbbbbbb", "in": "pwork001", "pos": "a1", "text": "B" },
+        { "t": "cccccccc", "in": "pwork001", "pos": "Zz", "text": "C" }
+      ],
+      "after": { "Work.md": "- [ ] C ^cccccccc\n- [ ] A ^aaaaaaaa\n- [ ] B ^bbbbbbbb\n" }
+    },
+    {
+      "name": "a list renamed elsewhere: the file is renamed",
+      "lists": { "Home.md": "- [ ] H ^hhhhhhhh\n" },
+      "files": { "phome001": "Home" },
+      "S": [{ "p": "phome001", "name": "Home", "pos": "a0" }, { "t": "hhhhhhhh", "in": "phome001", "pos": "a0", "text": "H" }],
+      "R": [{ "p": "phome001", "name": "House", "pos": "a0" }, { "t": "hhhhhhhh", "in": "phome001", "pos": "a0", "text": "H" }],
+      "after": { "House.md": "- [ ] H ^hhhhhhhh\n", ".order": "House\n" },
+      "filesAfter": { "phome001": "House" }
+    },
+    {
+      "name": "a list renamed only in letter case: the same file gets the new name, not a copy \"Work (2)\"",
+      "lists": { "work.md": "- [ ] A ^aaaaaaaa\n" },
+      "files": { "pwork001": "work" },
+      "S": [{ "p": "pwork001", "name": "work", "pos": "a0" }, { "t": "aaaaaaaa", "in": "pwork001", "pos": "a0", "text": "A" }],
+      "R": [{ "p": "pwork001", "name": "Work", "pos": "a0" }, { "t": "aaaaaaaa", "in": "pwork001", "pos": "a0", "text": "A" }],
+      "after": { "Work.md": "- [ ] A ^aaaaaaaa\n", ".order": "Work\n" },
+      "filesAfter": { "pwork001": "Work" }
+    },
+    {
+      "name": "a new list from elsewhere becomes a file with its tasks in order",
+      "lists": { "Work.md": "- [ ] A ^aaaaaaaa\n" },
+      "files": { "pwork001": "Work" },
+      "S": [{ "p": "pwork001", "name": "Work", "pos": "a0" }, { "t": "aaaaaaaa", "in": "pwork001", "pos": "a0", "text": "A" }],
+      "R": [
+        { "p": "pwork001", "name": "Work", "pos": "a0" },
+        { "t": "aaaaaaaa", "in": "pwork001", "pos": "a0", "text": "A" },
+        { "p": "pgroc001", "name": "Groceries", "pos": "a1" },
+        { "t": "gggggg01", "in": "pgroc001", "pos": "a0", "text": "Milk" },
+        { "t": "gggggg02", "in": "pgroc001", "pos": "a1", "text": "Bread" },
+        { "t": "gggggg03", "in": "pgroc001", "pos": "a0", "text": "Rye", "parent": "gggggg02" }
+      ],
+      "after": {
+        "Work.md": "- [ ] A ^aaaaaaaa\n",
+        "Groceries.md": "- [ ] Milk ^gggggg01\n- [ ] Bread ^gggggg02\n  - [ ] Rye ^gggggg03\n",
+        ".order": "Work\nGroceries\n"
+      },
+      "filesAfter": { "pwork001": "Work", "pgroc001": "Groceries" }
+    },
+    {
+      "name": "a list deleted elsewhere moves to lists/.trash",
+      "lists": { "Work.md": "- [ ] A ^aaaaaaaa\n", "Old.md": "- [ ] O ^oooooooo\n" },
+      "files": { "pwork001": "Work", "pold0001": "Old" },
+      "S": [
+        { "p": "pwork001", "name": "Work", "pos": "a0" },
+        { "p": "pold0001", "name": "Old", "pos": "a1" },
+        { "t": "aaaaaaaa", "in": "pwork001", "pos": "a0", "text": "A" },
+        { "t": "oooooooo", "in": "pold0001", "pos": "a0", "text": "O" }
+      ],
+      "R": [
+        { "p": "pwork001", "name": "Work", "pos": "a0" },
+        { "p": "pold0001", "name": "Old", "pos": "a1", "deleted": true },
+        { "t": "aaaaaaaa", "in": "pwork001", "pos": "a0", "text": "A" },
+        { "t": "oooooooo", "in": "pold0001", "pos": "a0", "text": "O" }
+      ],
+      "after": { "Work.md": "- [ ] A ^aaaaaaaa\n", ".order": "Work\n" },
+      "trash": ["Old-"],
+      "filesAfter": { "pwork001": "Work" }
+    },
+    {
+      "name": "a list saved with CRLF keeps CRLF when a change from elsewhere is written",
+      "lists": { "Work.md": "- [ ] A ^aaaaaaaa\r\n  > note\r\n- [ ] B ^bbbbbbbb\r\n" },
+      "files": { "pwork001": "Work" },
+      "S": [
+        { "p": "pwork001", "name": "Work", "pos": "a0" },
+        { "t": "aaaaaaaa", "in": "pwork001", "pos": "a0", "text": "A", "notes": "note" },
+        { "t": "bbbbbbbb", "in": "pwork001", "pos": "a1", "text": "B" }
+      ],
+      "R": [
+        { "p": "pwork001", "name": "Work", "pos": "a0" },
+        { "t": "aaaaaaaa", "in": "pwork001", "pos": "a0", "text": "A", "notes": "note" },
+        { "t": "bbbbbbbb", "in": "pwork001", "pos": "a1", "text": "B edited", "status": "/" },
+        { "t": "cccccccc", "in": "pwork001", "pos": "a2", "text": "C" }
+      ],
+      "after": { "Work.md": "- [ ] A ^aaaaaaaa\r\n  > note\r\n- [/] B edited ^bbbbbbbb\r\n- [ ] C ^cccccccc\r\n" }
+    },
+    {
+      "name": "a new list whose name is taken by a local-only file gets \" (2)\"",
+      "lists": { "Work.md": "- [ ] A ^aaaaaaaa\n", "Notes.md": "my own notes\n", ".order": "Work\nNotes\n" },
+      "files": { "pwork001": "Work" },
+      "S": [{ "p": "pwork001", "name": "Work", "pos": "a0" }, { "t": "aaaaaaaa", "in": "pwork001", "pos": "a0", "text": "A" }],
+      "R": [
+        { "p": "pwork001", "name": "Work", "pos": "a0" },
+        { "t": "aaaaaaaa", "in": "pwork001", "pos": "a0", "text": "A" },
+        { "p": "pnote001", "name": "Notes", "pos": "a1" },
+        { "t": "nnnnnnn1", "in": "pnote001", "pos": "a0", "text": "From the phone" }
+      ],
+      "after": {
+        "Work.md": "- [ ] A ^aaaaaaaa\n",
+        "Notes.md": "my own notes\n",
+        "Notes (2).md": "- [ ] From the phone ^nnnnnnn1\n",
+        ".order": "Work\nNotes\nNotes (2)\n"
+      },
+      "filesAfter": { "pwork001": "Work", "pnote001": "Notes (2)" }
+    }
+  ],
+  "diff": [
+    {
+      "name": "edits to text, status, deadline and notes become field changes",
+      "lists": { "Work.md": "- [x] A edited due:2026-10-25T9:30 ^aaaaaaaa\n  > a note\n- [ ] B ^bbbbbbbb\n" },
+      "files": { "pwork001": "Work" },
+      "S": [
+        { "p": "pwork001", "name": "Work", "pos": "a0" },
+        { "t": "aaaaaaaa", "in": "pwork001", "pos": "a0", "text": "A" },
+        { "t": "bbbbbbbb", "in": "pwork001", "pos": "a1", "text": "B" }
+      ],
+      "changes": [
+        ["task", "aaaaaaaa", "text", "A edited"],
+        ["task", "aaaaaaaa", "status", "x"],
+        ["task", "aaaaaaaa", "due", { "date": "2026-10-25", "time": "9:30" }],
+        ["task", "aaaaaaaa", "notes", "a note"]
+      ]
+    },
+    {
+      "name": "moving one line gives only that task a new position",
+      "lists": { "Work.md": "- [ ] A ^aaaaaaaa\n- [ ] C ^cccccccc\n- [ ] B ^bbbbbbbb\n" },
+      "files": { "pwork001": "Work" },
+      "S": [
+        { "p": "pwork001", "name": "Work", "pos": "a0" },
+        { "t": "aaaaaaaa", "in": "pwork001", "pos": "a0", "text": "A" },
+        { "t": "bbbbbbbb", "in": "pwork001", "pos": "a1", "text": "B" },
+        { "t": "cccccccc", "in": "pwork001", "pos": "a2", "text": "C" }
+      ],
+      "changes": [["task", "bbbbbbbb", "place", { "project": "pwork001", "parent": null, "pos": "a3" }]]
+    },
+    {
+      "name": "indenting a line makes it a subtask",
+      "lists": { "Work.md": "- [ ] A ^aaaaaaaa\n  - [ ] B ^bbbbbbbb\n" },
+      "files": { "pwork001": "Work" },
+      "S": [
+        { "p": "pwork001", "name": "Work", "pos": "a0" },
+        { "t": "aaaaaaaa", "in": "pwork001", "pos": "a0", "text": "A" },
+        { "t": "bbbbbbbb", "in": "pwork001", "pos": "a1", "text": "B" }
+      ],
+      "changes": [["task", "bbbbbbbb", "place", { "project": "pwork001", "parent": "aaaaaaaa", "pos": "a0" }]]
+    },
+    {
+      "name": "a heading ends the nesting above it",
+      "lists": { "Work.md": "- [ ] A ^aaaaaaaa\n## Section\n  - [ ] B ^bbbbbbbb\n" },
+      "files": { "pwork001": "Work" },
+      "S": [
+        { "p": "pwork001", "name": "Work", "pos": "a0" },
+        { "t": "aaaaaaaa", "in": "pwork001", "pos": "a0", "text": "A" },
+        { "t": "bbbbbbbb", "in": "pwork001", "pos": "a0", "text": "B", "parent": "aaaaaaaa" }
+      ],
+      "changes": [["task", "bbbbbbbb", "place", { "project": "pwork001", "parent": null, "pos": "a1" }]]
+    },
+    {
+      "name": "a removed line becomes a delete",
+      "lists": { "Work.md": "- [ ] A ^aaaaaaaa\n" },
+      "files": { "pwork001": "Work" },
+      "S": [
+        { "p": "pwork001", "name": "Work", "pos": "a0" },
+        { "t": "aaaaaaaa", "in": "pwork001", "pos": "a0", "text": "A" },
+        { "t": "bbbbbbbb", "in": "pwork001", "pos": "a1", "text": "B" }
+      ],
+      "changes": [["task", "bbbbbbbb", "deleted", true]]
+    },
+    {
+      "name": "a new line (already with an id) becomes a new task after its sibling",
+      "lists": { "Work.md": "- [ ] A ^aaaaaaaa\n- [/] New one due:2026-11-02 ^nnnnnnnn\n" },
+      "files": { "pwork001": "Work" },
+      "S": [{ "p": "pwork001", "name": "Work", "pos": "a0" }, { "t": "aaaaaaaa", "in": "pwork001", "pos": "a0", "text": "A" }],
+      "changes": [
+        ["task", "nnnnnnnn", "place", { "project": "pwork001", "parent": null, "pos": "a1" }],
+        ["task", "nnnnnnnn", "text", "New one"],
+        ["task", "nnnnnnnn", "status", "/"],
+        ["task", "nnnnnnnn", "due", { "date": "2026-11-02", "time": "" }],
+        ["task", "nnnnnnnn", "notes", ""],
+        ["task", "nnnnnnnn", "deleted", false]
+      ]
+    },
+    {
+      "name": "a renamed file keeps its project and renames it",
+      "lists": { "House.md": "- [ ] H ^hhhhhhhh\n" },
+      "files": { "phome001": "Home" },
+      "S": [{ "p": "phome001", "name": "Home", "pos": "a0" }, { "t": "hhhhhhhh", "in": "phome001", "pos": "a0", "text": "H" }],
+      "changes": [["project", "phome001", "name", "House"]]
+    },
+    {
+      "name": "a list moved to lists/.trash (how the apps delete one) deletes its project; its tasks stay with it, restorable",
+      "lists": { "Work.md": "- [ ] A ^aaaaaaaa\n", ".trash/Old-20261019-120000.md": "- [ ] O ^oooooooo\n" },
+      "files": { "pwork001": "Work", "pold0001": "Old" },
+      "S": [
+        { "p": "pwork001", "name": "Work", "pos": "a0" },
+        { "p": "pold0001", "name": "Old", "pos": "a1" },
+        { "t": "aaaaaaaa", "in": "pwork001", "pos": "a0", "text": "A" },
+        { "t": "oooooooo", "in": "pold0001", "pos": "a0", "text": "O" }
+      ],
+      "changes": [["project", "pold0001", "deleted", true]]
+    },
+    {
+      "name": "the tab order of the lists folder becomes project positions",
+      "lists": { "Work.md": "- [ ] A ^aaaaaaaa\n", "Home.md": "- [ ] H ^hhhhhhhh\n", ".order": "Home\nWork\n" },
+      "files": { "pwork001": "Work", "phome001": "Home" },
+      "S": [
+        { "p": "pwork001", "name": "Work", "pos": "a0" },
+        { "p": "phome001", "name": "Home", "pos": "a1" },
+        { "t": "aaaaaaaa", "in": "pwork001", "pos": "a0", "text": "A" },
+        { "t": "hhhhhhhh", "in": "phome001", "pos": "a0", "text": "H" }
+      ],
+      "changes": [["project", "pwork001", "pos", "a2"]]
+    },
+    {
+      "name": "an impossible deadline in the file is sent as no deadline",
+      "lists": { "Work.md": "- [ ] A due:2026-02-30 ^aaaaaaaa\n" },
+      "files": { "pwork001": "Work" },
+      "S": [
+        { "p": "pwork001", "name": "Work", "pos": "a0" },
+        { "t": "aaaaaaaa", "in": "pwork001", "pos": "a0", "text": "A", "due": { "date": "2026-10-01", "time": "" } }
+      ],
+      "changes": [["task", "aaaaaaaa", "due", null]]
+    },
+    {
+      "name": "control characters in a line are not sent",
+      "lists": { "Work.md": "- [ ] A\u0001B ^aaaaaaaa\n" },
+      "files": { "pwork001": "Work" },
+      "S": [{ "p": "pwork001", "name": "Work", "pos": "a0" }, { "t": "aaaaaaaa", "in": "pwork001", "pos": "a0", "text": "x" }],
+      "changes": [["task", "aaaaaaaa", "text", "AB"]]
+    },
+    {
+      "name": "a CRLF file is read like any other",
+      "lists": { "Work.md": "- [x] A ^aaaaaaaa\r\n  > two\r\n  > lines\r\n" },
+      "files": { "pwork001": "Work" },
+      "S": [{ "p": "pwork001", "name": "Work", "pos": "a0" }, { "t": "aaaaaaaa", "in": "pwork001", "pos": "a0", "text": "A" }],
+      "changes": [["task", "aaaaaaaa", "status", "x"], ["task", "aaaaaaaa", "notes", "two\nlines"]]
+    },
+    {
+      "name": "a list being written right now is left alone: no changes, no deletes",
+      "lists": { "Work.md": "- [ ] A changed ^aaaaaaaa\n" },
+      "busy": ["Work.md"],
+      "files": { "pwork001": "Work" },
+      "S": [
+        { "p": "pwork001", "name": "Work", "pos": "a0" },
+        { "t": "aaaaaaaa", "in": "pwork001", "pos": "a0", "text": "A" },
+        { "t": "bbbbbbbb", "in": "pwork001", "pos": "a1", "text": "B" }
+      ],
+      "changes": [],
+      "skipped": true
+    },
+    {
+      "name": "most tasks vanishing at once pauses the deletes",
+      "lists": { "Big.md": "- [ ] T0 ^tttttt00\n" },
+      "files": { "pbig0001": "Big" },
+      "S": [
+        { "p": "pbig0001", "name": "Big", "pos": "a0" },
+        { "t": "tttttt00", "in": "pbig0001", "pos": "a0", "text": "T0" },
+        { "t": "tttttt01", "in": "pbig0001", "pos": "a1", "text": "T1" },
+        { "t": "tttttt02", "in": "pbig0001", "pos": "a2", "text": "T2" },
+        { "t": "tttttt03", "in": "pbig0001", "pos": "a3", "text": "T3" },
+        { "t": "tttttt04", "in": "pbig0001", "pos": "a4", "text": "T4" },
+        { "t": "tttttt05", "in": "pbig0001", "pos": "a5", "text": "T5" },
+        { "t": "tttttt06", "in": "pbig0001", "pos": "a6", "text": "T6" },
+        { "t": "tttttt07", "in": "pbig0001", "pos": "a7", "text": "T7" },
+        { "t": "tttttt08", "in": "pbig0001", "pos": "a8", "text": "T8" },
+        { "t": "tttttt09", "in": "pbig0001", "pos": "a9", "text": "T9" },
+        { "t": "tttttt10", "in": "pbig0001", "pos": "aA", "text": "T10" },
+        { "t": "tttttt11", "in": "pbig0001", "pos": "aB", "text": "T11" },
+        { "t": "tttttt12", "in": "pbig0001", "pos": "aC", "text": "T12" },
+        { "t": "tttttt13", "in": "pbig0001", "pos": "aD", "text": "T13" },
+        { "t": "tttttt14", "in": "pbig0001", "pos": "aE", "text": "T14" },
+        { "t": "tttttt15", "in": "pbig0001", "pos": "aF", "text": "T15" },
+        { "t": "tttttt16", "in": "pbig0001", "pos": "aG", "text": "T16" },
+        { "t": "tttttt17", "in": "pbig0001", "pos": "aH", "text": "T17" },
+        { "t": "tttttt18", "in": "pbig0001", "pos": "aI", "text": "T18" },
+        { "t": "tttttt19", "in": "pbig0001", "pos": "aJ", "text": "T19" },
+        { "t": "tttttt20", "in": "pbig0001", "pos": "aK", "text": "T20" },
+        { "t": "tttttt21", "in": "pbig0001", "pos": "aL", "text": "T21" },
+        { "t": "tttttt22", "in": "pbig0001", "pos": "aM", "text": "T22" },
+        { "t": "tttttt23", "in": "pbig0001", "pos": "aN", "text": "T23" },
+        { "t": "tttttt24", "in": "pbig0001", "pos": "aO", "text": "T24" },
+        { "t": "tttttt25", "in": "pbig0001", "pos": "aP", "text": "T25" },
+        { "t": "tttttt26", "in": "pbig0001", "pos": "aQ", "text": "T26" },
+        { "t": "tttttt27", "in": "pbig0001", "pos": "aR", "text": "T27" },
+        { "t": "tttttt28", "in": "pbig0001", "pos": "aS", "text": "T28" },
+        { "t": "tttttt29", "in": "pbig0001", "pos": "aT", "text": "T29" }
+      ],
+      "changes": [],
+      "guarded": 29
+    },
+    {
+      "name": "a list gone for a moment is no delete yet (moved out and back, a sync client re-downloading the folder)",
+      "lists": { "Work.md": "- [ ] A ^aaaaaaaa\n" },
+      "files": { "pwork001": "Work", "pold0001": "Old" },
+      "S": [
+        { "p": "pwork001", "name": "Work", "pos": "a0" },
+        { "p": "pold0001", "name": "Old", "pos": "a1" },
+        { "t": "aaaaaaaa", "in": "pwork001", "pos": "a0", "text": "A" },
+        { "t": "oooooooo", "in": "pold0001", "pos": "a0", "text": "O" }
+      ],
+      "changes": [],
+      "skipped": true
+    },
+    {
+      "name": "a list gone for two cycles and 10 seconds deletes its project",
+      "lists": { "Work.md": "- [ ] A ^aaaaaaaa\n" },
+      "files": { "pwork001": "Work", "pold0001": "Old" },
+      "S": [
+        { "p": "pwork001", "name": "Work", "pos": "a0" },
+        { "p": "pold0001", "name": "Old", "pos": "a1" },
+        { "t": "aaaaaaaa", "in": "pwork001", "pos": "a0", "text": "A" },
+        { "t": "oooooooo", "in": "pold0001", "pos": "a0", "text": "O" }
+      ],
+      "missing": { "pold0001": 20 },
+      "changes": [["project", "pold0001", "deleted", true]]
+    },
+    {
+      "name": "a list of 5+ tasks gone for good waits for a confirmation",
+      "lists": { "Work.md": "- [ ] A ^aaaaaaaa\n" },
+      "files": { "pwork001": "Work", "pold0001": "Old" },
+      "S": [
+        { "p": "pwork001", "name": "Work", "pos": "a0" },
+        { "p": "pold0001", "name": "Old", "pos": "a1" },
+        { "t": "aaaaaaaa", "in": "pwork001", "pos": "a0", "text": "A" },
+        { "t": "oooooo00", "in": "pold0001", "pos": "a0", "text": "O0" },
+        { "t": "oooooo01", "in": "pold0001", "pos": "a1", "text": "O1" },
+        { "t": "oooooo02", "in": "pold0001", "pos": "a2", "text": "O2" },
+        { "t": "oooooo03", "in": "pold0001", "pos": "a3", "text": "O3" },
+        { "t": "oooooo04", "in": "pold0001", "pos": "a4", "text": "O4" },
+        { "t": "oooooo05", "in": "pold0001", "pos": "a5", "text": "O5" }
+      ],
+      "missing": { "pold0001": 20 },
+      "changes": [],
+      "guarded": 6,
+      "guardAfter": ["project:pold0001"]
+    },
+    {
+      "name": "most of one list vanishing pauses the deletes, even when few tasks vanish overall",
+      "lists": { "Work.md": "- [ ] A ^aaaaaaaa\n", "Small.md": "- [ ] S0 ^ssssss00\n" },
+      "files": { "pwork001": "Work", "psmall01": "Small" },
+      "S": [
+        { "p": "pwork001", "name": "Work", "pos": "a1" },
+        { "p": "psmall01", "name": "Small", "pos": "a0" },
+        { "t": "aaaaaaaa", "in": "pwork001", "pos": "a0", "text": "A" },
+        { "t": "ssssss00", "in": "psmall01", "pos": "a0", "text": "S0" },
+        { "t": "ssssss01", "in": "psmall01", "pos": "a1", "text": "S1" },
+        { "t": "ssssss02", "in": "psmall01", "pos": "a2", "text": "S2" },
+        { "t": "ssssss03", "in": "psmall01", "pos": "a3", "text": "S3" },
+        { "t": "ssssss04", "in": "psmall01", "pos": "a4", "text": "S4" },
+        { "t": "ssssss05", "in": "psmall01", "pos": "a5", "text": "S5" },
+        { "t": "ssssss06", "in": "psmall01", "pos": "a6", "text": "S6" },
+        { "t": "ssssss07", "in": "psmall01", "pos": "a7", "text": "S7" }
+      ],
+      "changes": [],
+      "guarded": 7,
+      "guardAfter": [
+        "task:ssssss01", "task:ssssss02", "task:ssssss03", "task:ssssss04", "task:ssssss05", "task:ssssss06", "task:ssssss07"
+      ]
+    },
+    {
+      "name": "a confirmation deletes what was held back; what vanished since is weighed again",
+      "lists": { "Work.md": "- [ ] A ^aaaaaaaa\n", "Small.md": "- [ ] S0 ^ssssss00\n", "Other.md": "" },
+      "files": { "pwork001": "Work", "psmall01": "Small", "pother01": "Other" },
+      "S": [
+        { "p": "pwork001", "name": "Work", "pos": "a2" },
+        { "p": "psmall01", "name": "Small", "pos": "a1" },
+        { "p": "pother01", "name": "Other", "pos": "a0" },
+        { "t": "aaaaaaaa", "in": "pwork001", "pos": "a0", "text": "A" },
+        { "t": "ssssss00", "in": "psmall01", "pos": "a0", "text": "S0" },
+        { "t": "ssssss01", "in": "psmall01", "pos": "a1", "text": "S1" },
+        { "t": "ssssss02", "in": "psmall01", "pos": "a2", "text": "S2" },
+        { "t": "ssssss03", "in": "psmall01", "pos": "a3", "text": "S3" },
+        { "t": "ssssss04", "in": "psmall01", "pos": "a4", "text": "S4" },
+        { "t": "ssssss05", "in": "psmall01", "pos": "a5", "text": "S5" },
+        { "t": "ssssss06", "in": "psmall01", "pos": "a6", "text": "S6" },
+        { "t": "ssssss07", "in": "psmall01", "pos": "a7", "text": "S7" },
+        { "t": "qqqqqq00", "in": "pother01", "pos": "a0", "text": "Q0" },
+        { "t": "qqqqqq01", "in": "pother01", "pos": "a1", "text": "Q1" },
+        { "t": "qqqqqq02", "in": "pother01", "pos": "a2", "text": "Q2" },
+        { "t": "qqqqqq03", "in": "pother01", "pos": "a3", "text": "Q3" },
+        { "t": "qqqqqq04", "in": "pother01", "pos": "a4", "text": "Q4" },
+        { "t": "qqqqqq05", "in": "pother01", "pos": "a5", "text": "Q5" }
+      ],
+      "guard": [
+        "task:ssssss01", "task:ssssss02", "task:ssssss03", "task:ssssss04", "task:ssssss05", "task:ssssss06", "task:ssssss07"
+      ],
+      "allow": true,
+      "changes": [
+        ["task", "ssssss01", "deleted", true],
+        ["task", "ssssss02", "deleted", true],
+        ["task", "ssssss03", "deleted", true],
+        ["task", "ssssss04", "deleted", true],
+        ["task", "ssssss05", "deleted", true],
+        ["task", "ssssss06", "deleted", true],
+        ["task", "ssssss07", "deleted", true]
+      ],
+      "guarded": 6,
+      "guardAfter": ["task:qqqqqq00", "task:qqqqqq01", "task:qqqqqq02", "task:qqqqqq03", "task:qqqqqq04", "task:qqqqqq05"]
+    },
+    {
+      "name": "a field put back to its value from before the last plan is sent as of then: the other device's edit stays, this one is kept as a conflict",
+      "lists": { "Work.md": "- [ ] Pay rent ^aaaaaaaa\n" },
+      "files": { "pwork001": "Work" },
+      "S": [
+        { "p": "pwork001", "name": "Work", "pos": "a0" },
+        { "t": "aaaaaaaa", "in": "pwork001", "pos": "a0", "text": "Pay rent", "status": "x", "notes": "paid" }
+      ],
+      "planned": { "aaaaaaaa": { "age": 60, "fields": { "status": [" ", 50], "notes": ["", 40] } } },
+      "changes": [
+        ["task", "aaaaaaaa", "status", " ", { "base": 50, "ts": 50 }],
+        ["task", "aaaaaaaa", "notes", "", { "base": 40, "ts": 40 }]
+      ]
+    },
+    {
+      "name": "another edit of a field the last plan changed counts as made alongside it (newest wins, the other is kept)",
+      "lists": { "Work.md": "- [ ] My wording ^aaaaaaaa\n" },
+      "files": { "pwork001": "Work" },
+      "S": [
+        { "p": "pwork001", "name": "Work", "pos": "a0" },
+        { "t": "aaaaaaaa", "in": "pwork001", "pos": "a0", "text": "Phone wording" }
+      ],
+      "planned": { "aaaaaaaa": { "age": 60, "fields": { "text": ["Old wording", 50] } } },
+      "changes": [["task", "aaaaaaaa", "text", "My wording", { "base": 50 }]]
+    },
+    {
+      "name": "a task the last plan brought in, dropped by a save from an older copy, is a conflict (dated before it arrived), not a delete",
+      "lists": { "Work.md": "- [ ] A ^aaaaaaaa\n" },
+      "files": { "pwork001": "Work" },
+      "S": [
+        { "p": "pwork001", "name": "Work", "pos": "a0" },
+        { "t": "aaaaaaaa", "in": "pwork001", "pos": "a0", "text": "A" },
+        { "t": "bbbbbbbb", "in": "pwork001", "pos": "a1", "text": "Added on the phone" }
+      ],
+      "planned": { "bbbbbbbb": { "age": 60, "added": true, "addedTs": 99, "fields": {} } },
+      "changes": [["task", "bbbbbbbb", "deleted", true, { "ts": 99 }]]
+    },
+    {
+      "name": "a task an older copy puts back under its old parent goes back to the plan's place (dated before it)",
+      "lists": { "Work.md": "- [ ] B ^bbbbbbbb\n- [ ] A ^aaaaaaaa\n" },
+      "files": { "pwork001": "Work" },
+      "S": [
+        { "p": "pwork001", "name": "Work", "pos": "a0" },
+        { "t": "bbbbbbbb", "in": "pwork001", "pos": "a0", "text": "B" },
+        { "t": "aaaaaaaa", "in": "pwork001", "pos": "a0", "text": "A", "parent": "bbbbbbbb" }
+      ],
+      "planned": {
+        "aaaaaaaa": { "age": 60, "fields": { "place": [{ "project": "pwork001", "parent": null, "pos": "a1" }, 50] } }
+      },
+      "changes": [["task", "aaaaaaaa", "place", { "project": "pwork001", "parent": null, "pos": "a1" }, { "base": 50, "ts": 50 }]]
+    },
+    {
+      "name": "half an hour after a plan, an edit is an edit again",
+      "lists": { "Work.md": "- [ ] Pay rent ^aaaaaaaa\n" },
+      "files": { "pwork001": "Work" },
+      "S": [
+        { "p": "pwork001", "name": "Work", "pos": "a0" },
+        { "t": "aaaaaaaa", "in": "pwork001", "pos": "a0", "text": "Pay rent", "status": "x" }
+      ],
+      "planned": { "aaaaaaaa": { "age": 1900, "fields": { "status": [" ", 50] } } },
+      "changes": [["task", "aaaaaaaa", "status", " ", { "base": 100 }]]
+    }
+  ]
+}

@@ -1,0 +1,313 @@
+{
+  "about": [
+    "Reminder rules. Implementations: worker/src/reminders.js (computeReminders: the Worker's cron and the Linux/macOS app)",
+    "and desktop/rules.ps1 (Get-Reminders: the Windows widget). 'now' is UTC; JavaScript converts it with the IANA zone 'tz',",
+    "PowerShell with the Windows zone 'windowsTz'. Deadlines and the daily summary time are wall-clock times in that zone.",
+    "Each case lists the notifications due at that moment: the keys to record (so each one shows once), title, body, sub.",
+    "The Worker's cron runs every 5 minutes and passes lastRun = 23:55 for the daily summary; that is not part of the rules."
+  ],
+  "cases": [
+    {
+      "name": "15 minutes before a timed deadline",
+      "now": "2026-10-21T13:45:00Z",
+      "tz": "Europe/Berlin",
+      "windowsTz": "W. Europe Standard Time",
+      "notifyAt": "10:00",
+      "notified": [],
+      "tasks": [
+        { "id": "aaaaaaaa", "text": "Call the bank", "status": " ", "due": "2026-10-21", "dueTime": "16:00", "project": "Work" }
+      ],
+      "expect": [
+        { "keys": ["2026-10-21|soon|aaaaaaaa|16:00"], "title": "In 15 min", "body": "Call the bank", "sub": "Work · 16:00" }
+      ]
+    },
+    {
+      "name": "16 minutes before: nothing yet",
+      "now": "2026-10-21T13:44:00Z",
+      "tz": "Europe/Berlin",
+      "windowsTz": "W. Europe Standard Time",
+      "notifyAt": "10:00",
+      "notified": [],
+      "tasks": [
+        { "id": "aaaaaaaa", "text": "Call the bank", "status": " ", "due": "2026-10-21", "dueTime": "16:00", "project": "Work" }
+      ],
+      "expect": []
+    },
+    {
+      "name": "the early reminder shows once",
+      "now": "2026-10-21T13:50:00Z",
+      "tz": "Europe/Berlin",
+      "windowsTz": "W. Europe Standard Time",
+      "notifyAt": "10:00",
+      "notified": ["2026-10-21|soon|aaaaaaaa|16:00"],
+      "tasks": [
+        { "id": "aaaaaaaa", "text": "Call the bank", "status": " ", "due": "2026-10-21", "dueTime": "16:00", "project": "Work" }
+      ],
+      "expect": []
+    },
+    {
+      "name": "at the time",
+      "now": "2026-10-21T14:00:00Z",
+      "tz": "Europe/Berlin",
+      "windowsTz": "W. Europe Standard Time",
+      "notifyAt": "10:00",
+      "notified": ["2026-10-21|soon|aaaaaaaa|16:00"],
+      "tasks": [
+        { "id": "aaaaaaaa", "text": "Call the bank", "status": "/", "due": "2026-10-21", "dueTime": "16:00", "project": "Work" }
+      ],
+      "expect": [
+        {
+          "keys": ["2026-10-21|now|aaaaaaaa|16:00", "2026-10-21|soon|aaaaaaaa|16:00"],
+          "title": "Due now",
+          "body": "Call the bank",
+          "sub": "Work"
+        }
+      ]
+    },
+    {
+      "name": "a few minutes late",
+      "now": "2026-10-21T14:07:00Z",
+      "tz": "Europe/Berlin",
+      "windowsTz": "W. Europe Standard Time",
+      "notifyAt": "10:00",
+      "notified": [],
+      "tasks": [
+        { "id": "aaaaaaaa", "text": "Call the bank", "status": " ", "due": "2026-10-21", "dueTime": "16:00", "project": "Work" }
+      ],
+      "expect": [
+        {
+          "keys": ["2026-10-21|now|aaaaaaaa|16:00", "2026-10-21|soon|aaaaaaaa|16:00"],
+          "title": "Overdue since 16:00",
+          "body": "Call the bank",
+          "sub": "Work"
+        }
+      ]
+    },
+    {
+      "name": "still sent hours late, up to 12 h",
+      "now": "2026-10-21T20:30:00Z",
+      "tz": "Europe/Berlin",
+      "windowsTz": "W. Europe Standard Time",
+      "notifyAt": "10:00",
+      "notified": [],
+      "tasks": [
+        { "id": "aaaaaaaa", "text": "Call the bank", "status": "!", "due": "2026-10-21", "dueTime": "16:00", "project": "Work" }
+      ],
+      "expect": [
+        {
+          "keys": ["2026-10-21|now|aaaaaaaa|16:00", "2026-10-21|soon|aaaaaaaa|16:00"],
+          "title": "Overdue since 16:00",
+          "body": "Call the bank",
+          "sub": "Work"
+        }
+      ]
+    },
+    {
+      "name": "more than 12 h late: not any more",
+      "now": "2026-10-21T11:30:00Z",
+      "tz": "Europe/Berlin",
+      "windowsTz": "W. Europe Standard Time",
+      "notifyAt": "10:00",
+      "notified": ["2026-10-21|digest"],
+      "tasks": [
+        { "id": "bbbbbbbb", "text": "Early call", "status": " ", "due": "2026-10-21", "dueTime": "1:00", "project": "Work" }
+      ],
+      "expect": []
+    },
+    {
+      "name": "due today without a time waits for the daily summary",
+      "now": "2026-10-21T07:59:00Z",
+      "tz": "Europe/Berlin",
+      "windowsTz": "W. Europe Standard Time",
+      "notifyAt": "10:00",
+      "notified": [],
+      "tasks": [
+        { "id": "cccccccc", "text": "Water the plants", "status": " ", "due": "2026-10-21", "dueTime": "", "project": "Home" }
+      ],
+      "expect": []
+    },
+    {
+      "name": "the daily summary at its time",
+      "now": "2026-10-21T08:00:00Z",
+      "tz": "Europe/Berlin",
+      "windowsTz": "W. Europe Standard Time",
+      "notifyAt": "10:00",
+      "notified": [],
+      "tasks": [
+        { "id": "cccccccc", "text": "Water the plants", "status": " ", "due": "2026-10-21", "dueTime": "", "project": "Home" }
+      ],
+      "expect": [{ "keys": ["2026-10-21|digest"], "title": "Due today", "body": "Water the plants", "sub": "Home" }]
+    },
+    {
+      "name": "the daily summary shows once a day",
+      "now": "2026-10-21T15:00:00Z",
+      "tz": "Europe/Berlin",
+      "windowsTz": "W. Europe Standard Time",
+      "notifyAt": "10:00",
+      "notified": ["2026-10-21|digest"],
+      "tasks": [
+        { "id": "cccccccc", "text": "Water the plants", "status": " ", "due": "2026-10-21", "dueTime": "", "project": "Home" }
+      ],
+      "expect": []
+    },
+    {
+      "name": "a summary of several: open ones only, three lines and a count",
+      "now": "2026-10-21T08:30:00Z",
+      "tz": "Europe/Berlin",
+      "windowsTz": "W. Europe Standard Time",
+      "notifyAt": "10:00",
+      "notified": [],
+      "tasks": [
+        { "id": "d1111111", "text": "Pay rent", "status": " ", "due": "2026-10-21", "dueTime": "", "project": "Home" },
+        { "id": "d2222222", "text": "Report", "status": "/", "due": "2026-10-20", "dueTime": "9:00", "project": "Work" },
+        { "id": "d3333333", "text": "Done already", "status": "x", "due": "2026-10-21", "dueTime": "", "project": "Work" },
+        { "id": "d4444444", "text": "Later on", "status": ">", "due": "2026-10-21", "dueTime": "", "project": "Work" },
+        { "id": "d5555555", "text": "Waiting on legal", "status": "!", "due": "2026-10-21", "dueTime": "", "project": "Work" },
+        { "id": "d6666666", "text": "Buy stamps", "status": " ", "due": "2026-10-21", "dueTime": "", "project": "Home" }
+      ],
+      "expect": [
+        {
+          "keys": ["2026-10-21|digest"],
+          "title": "3 due today, 1 overdue",
+          "body": "Pay rent\nReport\nWaiting on legal\n+1 more",
+          "sub": "Saqme To Do"
+        }
+      ]
+    },
+    {
+      "name": "an invalid summary time means 10:00",
+      "now": "2026-10-21T08:00:00Z",
+      "tz": "Europe/Berlin",
+      "windowsTz": "W. Europe Standard Time",
+      "notifyAt": "25:99",
+      "notified": [],
+      "tasks": [
+        { "id": "cccccccc", "text": "Water the plants", "status": " ", "due": "2026-10-21", "dueTime": "", "project": "Home" }
+      ],
+      "expect": [{ "keys": ["2026-10-21|digest"], "title": "Due today", "body": "Water the plants", "sub": "Home" }]
+    },
+    {
+      "name": "a late summary time: not two minutes early",
+      "now": "2026-10-21T21:56:00Z",
+      "tz": "Europe/Berlin",
+      "windowsTz": "W. Europe Standard Time",
+      "notifyAt": "23:58",
+      "notified": [],
+      "tasks": [
+        { "id": "cccccccc", "text": "Water the plants", "status": " ", "due": "2026-10-21", "dueTime": "", "project": "Home" }
+      ],
+      "expect": []
+    },
+    {
+      "name": "a late summary time: at the minute",
+      "now": "2026-10-21T21:58:00Z",
+      "tz": "Europe/Berlin",
+      "windowsTz": "W. Europe Standard Time",
+      "notifyAt": "23:58",
+      "notified": [],
+      "tasks": [
+        { "id": "cccccccc", "text": "Water the plants", "status": " ", "due": "2026-10-21", "dueTime": "", "project": "Home" }
+      ],
+      "expect": [{ "keys": ["2026-10-21|digest"], "title": "Due today", "body": "Water the plants", "sub": "Home" }]
+    },
+    {
+      "name": "a timed deadline from yesterday goes into the summary",
+      "now": "2026-10-21T06:00:00Z",
+      "tz": "Europe/Berlin",
+      "windowsTz": "W. Europe Standard Time",
+      "notifyAt": "8:00",
+      "notified": [],
+      "tasks": [
+        {
+          "id": "eeeeeeee",
+          "text": "Send the invoice",
+          "status": " ",
+          "due": "2026-10-20",
+          "dueTime": "18:00",
+          "project": "Work"
+        }
+      ],
+      "expect": [{ "keys": ["2026-10-21|digest"], "title": "Overdue", "body": "Send the invoice", "sub": "Work" }]
+    },
+    {
+      "name": "just before midnight, a deadline early tomorrow",
+      "now": "2026-10-21T21:50:00Z",
+      "tz": "Europe/Berlin",
+      "windowsTz": "W. Europe Standard Time",
+      "notifyAt": "10:00",
+      "notified": [],
+      "tasks": [
+        { "id": "ffffffff", "text": "Night train", "status": " ", "due": "2026-10-22", "dueTime": "0:05", "project": "Travel" }
+      ],
+      "expect": [
+        { "keys": ["2026-10-22|soon|ffffffff|0:05"], "title": "In 15 min", "body": "Night train", "sub": "Travel · 0:05" }
+      ]
+    },
+    {
+      "name": "clocks went forward an hour ago: minutes count on the wall clock",
+      "now": "2026-03-29T01:05:00Z",
+      "tz": "Europe/Berlin",
+      "windowsTz": "W. Europe Standard Time",
+      "notifyAt": "10:00",
+      "notified": [],
+      "tasks": [
+        { "id": "gggggggg", "text": "Feed the cat", "status": " ", "due": "2026-03-29", "dueTime": "3:15", "project": "Home" }
+      ],
+      "expect": [
+        { "keys": ["2026-03-29|soon|gggggggg|3:15"], "title": "In 10 min", "body": "Feed the cat", "sub": "Home · 3:15" }
+      ]
+    },
+    {
+      "name": "the night clocks go back, first 2:50",
+      "now": "2026-10-25T00:50:00Z",
+      "tz": "Europe/Berlin",
+      "windowsTz": "W. Europe Standard Time",
+      "notifyAt": "10:00",
+      "notified": [],
+      "tasks": [
+        { "id": "hhhhhhhh", "text": "Check the boiler", "status": " ", "due": "2026-10-25", "dueTime": "3:00", "project": "Home" }
+      ],
+      "expect": [
+        { "keys": ["2026-10-25|soon|hhhhhhhh|3:00"], "title": "In 10 min", "body": "Check the boiler", "sub": "Home · 3:00" }
+      ]
+    },
+    {
+      "name": "another time zone",
+      "now": "2026-10-21T13:50:00Z",
+      "tz": "America/New_York",
+      "windowsTz": "Eastern Standard Time",
+      "notifyAt": "10:00",
+      "notified": ["2026-10-21|digest"],
+      "tasks": [
+        { "id": "iiiiiiii", "text": "Stand-up", "status": " ", "due": "2026-10-21", "dueTime": "10:00", "project": "Work" }
+      ],
+      "expect": [{ "keys": ["2026-10-21|soon|iiiiiiii|10:00"], "title": "In 10 min", "body": "Stand-up", "sub": "Work · 10:00" }]
+    },
+    {
+      "name": "a task the desktop knows only by project and text",
+      "now": "2026-10-21T13:55:00Z",
+      "tz": "Europe/Berlin",
+      "windowsTz": "W. Europe Standard Time",
+      "notifyAt": "10:00",
+      "notified": [],
+      "tasks": [
+        {
+          "id": "Work|Plan the week",
+          "text": "Plan the week",
+          "status": " ",
+          "due": "2026-10-21",
+          "dueTime": "16:00",
+          "project": "Work"
+        }
+      ],
+      "expect": [
+        {
+          "keys": ["2026-10-21|soon|Work|Plan the week|16:00"],
+          "title": "In 5 min",
+          "body": "Plan the week",
+          "sub": "Work · 16:00"
+        }
+      ]
+    }
+  ]
+}

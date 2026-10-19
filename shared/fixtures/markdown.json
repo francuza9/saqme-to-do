@@ -1,0 +1,244 @@
+{
+  "about": [
+    "The markdown list format (docs/file-format.md). Implementations: desktop/sync-core.ps1 (Read-Items, ConvertTo-MarkdownText,",
+    "Get-TextEol, Set-MissingIds) and worker/public/js/markdown.js (parseItems, formatItems, detectEol, setMissingIds).",
+    "cases: parse the file -> items; write the items with the file's line ending -> the same bytes (roundtrip) or the",
+    "expected file. items: [\"task\", level, mark, text, due, dueTime, id, notes] or [\"raw\", line].",
+    "stamp: give every task an id; ids missing in the file come back from `known` (text -> id) when free, duplicates and",
+    "ids `taken` by another list get new ones (\"<new>\": any new id, all different)."
+  ],
+  "cases": [
+    {
+      "file": "statuses.md",
+      "about": "every status",
+      "roundtrip": true,
+      "items": [
+        ["task", 0, " ", "To do", "", "", "aaaaaaa1", ""],
+        ["task", 0, "/", "In progress", "", "", "aaaaaaa2", ""],
+        ["task", 0, "x", "Done", "", "", "aaaaaaa3", ""],
+        ["task", 0, ">", "Postponed", "", "", "aaaaaaa4", ""],
+        ["task", 0, "!", "Blocked", "", "", "aaaaaaa5", ""],
+        ["task", 0, "-", "Failed", "", "", "aaaaaaa6", ""],
+        ["task", 0, "~", "Abandoned", "", "", "aaaaaaa7", ""]
+      ]
+    },
+    {
+      "file": "nested.md",
+      "about": "subtasks, three levels",
+      "roundtrip": true,
+      "items": [
+        ["task", 0, " ", "Plan the trip", "", "", "bbbbbbb1", ""],
+        ["task", 1, "/", "Book flights", "", "", "bbbbbbb2", ""],
+        ["task", 2, "x", "Compare prices", "", "", "bbbbbbb3", ""],
+        ["task", 2, " ", "Pick seats", "", "", "bbbbbbb4", ""],
+        ["task", 1, " ", "Hotel", "", "", "bbbbbbb5", ""],
+        ["task", 0, " ", "Pack", "", "", "bbbbbbb6", ""]
+      ]
+    },
+    {
+      "file": "notes.md",
+      "about": "notes with links, an empty note line, notes on subtasks",
+      "roundtrip": true,
+      "items": [
+        [
+          "task", 0, " ", "Reply to the vendor", "2026-10-17", "", "ccccccc1",
+          "Thread: https://mail.example.com/thread/123\n\nAlso see www.example.org/terms and the PDF."
+        ],
+        ["task", 1, " ", "Ask about the discount", "", "", "ccccccc2", "http://x.example/a?b=c&d=e#f"],
+        ["task", 0, "x", "Old note", "", "", "ccccccc3", "closed, but the note stays"]
+      ]
+    },
+    {
+      "file": "georgian.md",
+      "about": "Georgian text in headings, tasks and notes",
+      "roundtrip": true,
+      "items": [
+        ["raw", "# სამუშაო"],
+        [
+          "task", 0, " ", "ბიუჯეტის განხილვა ნინოსთან", "2026-10-21", "16:30", "ddddddd1",
+          "შეხვედრა ოფისში — https://example.ge/შეხვედრა"
+        ],
+        ["task", 0, "/", "Mixed ქართული and English", "", "", "ddddddd2", ""]
+      ]
+    },
+    {
+      "file": "structure.md",
+      "about": "headings, prose and blank lines stay where they are",
+      "roundtrip": true,
+      "items": [
+        ["raw", "# Work"],
+        ["raw", "Notes for the whole list can go anywhere as plain text."],
+        ["raw", ""],
+        ["task", 0, "/", "Ship the roadmap", "2026-10-25", "14:00", "eeeeeee1", ""],
+        ["task", 1, "x", "Collect feedback", "", "", "eeeeeee2", ""],
+        ["raw", ""],
+        ["raw", "## Later"],
+        ["task", 0, ">", "Clean up the old dashboards", "", "", "eeeeeee3", ""],
+        ["raw", ""],
+        ["raw", ""],
+        ["raw", "Trailing paragraph with two blank lines above."]
+      ]
+    },
+    {
+      "file": "crlf.md",
+      "about": "a file saved with CRLF line endings is written back with CRLF",
+      "roundtrip": true,
+      "items": [
+        ["raw", "# Work"],
+        ["raw", "Notes for the whole list can go anywhere as plain text."],
+        ["raw", ""],
+        ["task", 0, "/", "Ship the roadmap", "2026-10-25", "14:00", "eeeeeee1", ""],
+        ["task", 1, "x", "Collect feedback", "", "", "eeeeeee2", ""],
+        ["raw", ""],
+        ["raw", "## Later"],
+        ["task", 0, ">", "Clean up the old dashboards", "", "", "eeeeeee3", ""],
+        ["raw", ""],
+        ["raw", ""],
+        ["raw", "Trailing paragraph with two blank lines above."]
+      ]
+    },
+    {
+      "file": "crlf-notes.md",
+      "about": "CRLF with notes",
+      "roundtrip": true,
+      "items": [["task", 0, " ", "Reply", "", "", "ccccccc9", "first\n\nthird https://example.com"]]
+    },
+    {
+      "file": "invalid-due.md",
+      "about": "an impossible date is kept as written (sync treats it as no deadline)",
+      "roundtrip": true,
+      "items": [
+        ["task", 0, " ", "Impossible date", "2026-02-30", "", "fffffff1", ""],
+        ["task", 0, " ", "Date-like text 2026-10-21", "", "", "fffffff2", ""]
+      ]
+    },
+    {
+      "file": "not-tasks.md",
+      "about": "lines that look almost like tasks are text",
+      "roundtrip": true,
+      "items": [
+        ["raw", "> A quote before any task stays a line of its own"],
+        ["raw", "1. a numbered line is text"],
+        ["raw", "-not a bullet (no space)"],
+        ["raw", "+ plus is not a bullet"],
+        ["task", 0, " ", "Real task", "", "", "ggggggg1", ""]
+      ]
+    },
+    {
+      "file": "ai-edited.md",
+      "about": "what an editor or AI assistant writes: odd spacing, tabs, other bullets, X, missing ids, swapped id and deadline, empty tasks",
+      "expect": "ai-edited.expected.md",
+      "items": [
+        ["task", 0, "x", "Done thing", "", "", "hhhhhhh1", ""],
+        ["task", 0, " ", "Lots   of   inner   space", "", "", "", ""],
+        ["task", 1, " ", "Tab-indented subtask", "", "", "", ""],
+        ["task", 1, " ", "Three-space indent", "", "", "", ""],
+        ["task", 0, " ", "Buy milk", "", "", "", ""],
+        ["task", 0, " ", "Odd mark", "", "", "", ""],
+        ["task", 0, " ", "Shout", "2026-10-25", "9:05", "", ""],
+        ["task", 0, " ", "Id first", "2026-10-26", "", "hhhhhhh2", ""],
+        ["task", 0, " ", "Bad time", "2026-10-21", "", "", ""],
+        ["task", 0, " ", "Note without a space", "", "", "", "no space after the marker\n  deep note   "],
+        ["task", 0, " ", "", "", "", "", ""],
+        ["task", 0, " ", "", "", "", "", ""],
+        ["task", 0, " ", "[] not a checkbox", "", "", "", ""]
+      ]
+    },
+    {
+      "file": "bom.md",
+      "about": "a byte order mark is dropped; the line endings stay",
+      "expect": "bom.expected.md",
+      "items": [["raw", "# Title"], ["task", 0, " ", "A", "", "", "iiiiiii1", ""]]
+    },
+    {
+      "file": "mixed-eol.md",
+      "about": "mixed line endings: the first one wins",
+      "expect": "mixed-eol.expected.md",
+      "items": [
+        ["task", 0, " ", "A", "", "", "jjjjjjj1", ""],
+        ["task", 0, " ", "B", "", "", "jjjjjjj2", ""],
+        ["task", 0, " ", "C", "", "", "jjjjjjj3", ""]
+      ]
+    },
+    {
+      "file": "no-final-newline.md",
+      "about": "a missing last line break is added",
+      "expect": "no-final-newline.expected.md",
+      "items": [["task", 0, " ", "A", "", "", "kkkkkkk1", ""], ["task", 0, " ", "B", "", "", "kkkkkkk2", ""]]
+    },
+    {
+      "file": "odd-characters.md",
+      "about": "characters the two languages see differently unless told: a line or paragraph separator or a stray CR inside a task, U+0085, no-break and ideographic spaces, a byte order mark before a bullet, DUE in capitals, digits of other scripts",
+      "expect": "odd-characters.expected.md",
+      "items": [
+        ["task", 0, " ", "Line\u2028separator", "", "", "aaaaaaa1", ""],
+        ["task", 0, " ", "Stray\rreturn", "", "", "aaaaaaa2", ""],
+        ["task", 0, " ", "Next\u0085line", "", "", "aaaaaaa3", ""],
+        ["task", 1, " ", "Indented with no-break spaces", "", "", "aaaaaaa4", ""],
+        ["task", 0, " ", "Upper case marker", "2026-10-25", "9:30", "aaaaaaa5", ""],
+        ["task", 0, " ", "Not a date due:٢٠٢٦-10-25", "", "", "aaaaaaa6", ""],
+        ["task", 0, " ", "A zero-width no-break space before the bullet", "", "", "aaaaaaa7", ""],
+        ["task", 0, " ", "Ends in a next-line character\u0085", "", "", "aaaaaaa8", ""],
+        ["task", 0, " ", "Ideographic space", "", "", "aaaaaaa9", ""]
+      ]
+    },
+    {
+      "file": "verbatim.md",
+      "about": "never rewritten: YAML front matter, closed code fences and thematic breaks stay text; unknown status marks ([?], [<], [*]) count as to do and stay as written; a quote at a task's own depth is a paragraph. An unclosed fence is no fence (otherwise every task below it would vanish)",
+      "roundtrip": true,
+      "items": [
+        ["raw", "---"],
+        ["raw", "title: Work"],
+        ["raw", "tags:"],
+        ["raw", "  - Work"],
+        ["raw", "  - planning"],
+        ["raw", "---"],
+        ["raw", "# Work"],
+        ["task", 0, " ", "Plan the sprint", "", "", "vvvvvvv1", ""],
+        ["raw", "> A quote at the task's own depth is a paragraph, not a note"],
+        ["task", 0, " ", "A question, Obsidian style", "", "", "vvvvvvv2", ""],
+        ["task", 0, " ", "Scheduled", "", "", "vvvvvvv3", ""],
+        ["task", 1, " ", "Starred subtask", "", "", "vvvvvvv4", ""],
+        ["raw", "* * *"],
+        ["raw", "```markdown"],
+        ["raw", "- [ ] an example inside a code block"],
+        ["raw", "* x"],
+        ["raw", "```"],
+        ["raw", "~~~"],
+        ["raw", "- [x] tilde fence"],
+        ["raw", "~~~"],
+        ["raw", "___"],
+        ["task", 0, " ", "After a break", "", "", "vvvvvvv5", ""],
+        ["raw", "```"],
+        ["task", 0, " ", "an unclosed fence is no fence", "", "", "vvvvvvv6", ""]
+      ]
+    },
+    { "file": "empty.md", "about": "an empty list", "roundtrip": true, "items": [] }
+  ],
+  "stamp": [
+    {
+      "about": "reattach by text, replace duplicates and ids used elsewhere",
+      "text": "- [ ] Kept ^keptid01\n- [ ] Lost marker\n- [ ] Brand new\n- [ ] Dup ^keptid01\n- [ ] Elsewhere ^takenid1\n",
+      "known": { "Lost marker": "lostid01", "Brand new": "keptid01" },
+      "taken": ["takenid1"],
+      "changed": true,
+      "expect": ["keptid01", "lostid01", "<new>", "<new>", "<new>"]
+    },
+    {
+      "about": "nothing to do",
+      "text": "- [ ] A ^aaaaaaaa\n  - [ ] B ^bbbbbbbb\n",
+      "known": {},
+      "taken": [],
+      "changed": false,
+      "expect": ["aaaaaaaa", "bbbbbbbb"]
+    },
+    {
+      "about": "a text match is exact: another letter case is another task",
+      "text": "- [ ] call mom\n- [ ] Call Mom\n",
+      "known": { "Call Mom": "momid001" },
+      "taken": [],
+      "changed": true,
+      "expect": ["<new>", "momid001"]
+    }
+  ]
+}

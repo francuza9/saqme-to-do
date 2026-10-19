@@ -1,0 +1,2 @@
+# byte-exact samples (CRLF, BOM, no final newline): git must not normalise them
+markdown/** -text
