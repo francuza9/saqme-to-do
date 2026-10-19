@@ -314,7 +314,7 @@ function Set-Palette([string]$name) {
       @('Card','Card'), @('StripBg','Strip'), @('Edge','Edge'), @('Hover','Hover'), @('TabHover','TabHover'), @('TabInk','TabInk'),
       @('Ink','Ink'), @('Faint','Faint'), @('Line','Line'), @('Accent','Accent'), @('NoteBg','NoteBg'), @('NoteInk','NoteInk'),
       @('MenuBg','MenuBg'), @('MenuHover','MenuHover'), @('Red','Red'), @('RedSoft','RedSoft'), @('Amber','Amber'),
-      @('AmberSoft','AmberSoft'), @('CloseHover','CloseHover'), @('CloseGlyph','CloseGlyph'), @('Selected','Selected'), @('ButtonBg','ButtonBg'),
+      @('AmberSoft','AmberSoft'), @('CloseHover','CloseHover'), @('CloseGlyph','CloseGlyph'), @('Paper','Paper'), @('Selected','Selected'), @('ButtonBg','ButtonBg'),
       @('OnAccent','OnAccent'), @('Closed','Closed'))) {
     Set-Variable -Scope Script -Name $pair[0] -Value (Brush $T[$pair[1]])
   }
@@ -576,7 +576,7 @@ function New-Chip($st, [double]$size) {
   if ($st.Glyph) {
     $t = New-Object System.Windows.Controls.TextBlock
     $t.Text = $st.Glyph; $t.FontFamily = $MDL2; $t.FontSize = [math]::Round($size * 0.55)
-    $t.Foreground = $(if ($st.GlyphInk) { Brush $st.GlyphInk } else { $White }); $t.HorizontalAlignment = 'Center'; $t.VerticalAlignment = 'Center'
+    $t.Foreground = $(if ($st.GlyphInk) { Brush $st.GlyphInk } else { $OnAccent }); $t.HorizontalAlignment = 'Center'; $t.VerticalAlignment = 'Center'
     $b.Child = $t
   }
   return $b
@@ -1849,7 +1849,7 @@ function New-Toggle([bool]$on, [scriptblock]$onToggle, [string]$name = '') {
   if ($script:HasA11y) { $b.IsChecked = $on }
   $b.Width = 36; $b.Height = 20; $b.CornerRadius = New-Object System.Windows.CornerRadius(10); $b.Cursor = 'Hand'
   $b.Background = $(if ($on) { $Accent } else { $Line })
-  $k = New-Object System.Windows.Shapes.Ellipse; $k.Width = 14; $k.Height = 14; $k.Fill = $White
+  $k = New-Object System.Windows.Shapes.Ellipse; $k.Width = 14; $k.Height = 14; $k.Fill = $(if ($on) { $OnAccent } else { $Paper })
   $k.HorizontalAlignment = $(if ($on) { 'Right' } else { 'Left' }); $k.Margin = '3,0,3,0'
   $b.Child = $k; $b.Tag = @{ On = $on; F = $onToggle }
   $b.Add_MouseLeftButtonUp({ param($s, $e) $e.Handled = $true; & $s.Tag.F (-not $s.Tag.On) })
@@ -2233,7 +2233,7 @@ function Render-PairView {
   if (-not $syncCfg) { $t = New-Text 'Sync is not set up on this PC yet (Settings > Sync).' $TypeSize.body $Faint; $t.Margin = '8,6,8,6'; [void]$list.Children.Add($t); return }
   $link = ([string]$syncCfg['url']).TrimEnd('/') + '/#pair=' + [string]$syncCfg['token']
   $frame = New-Object System.Windows.Controls.Border
-  $frame.Background = $White; $frame.CornerRadius = New-Object System.Windows.CornerRadius($Tokens.Radius.tab); $frame.Padding = '8'
+  $frame.Background = $Paper; $frame.CornerRadius = New-Object System.Windows.CornerRadius($Tokens.Radius.tab); $frame.Padding = '8'
   $frame.HorizontalAlignment = 'Center'; $frame.Margin = '0,4,0,10'
   try { $frame.Child = New-QrImage $link } catch { $frame.Child = New-Text "Could not draw the QR code: $($_.Exception.Message)" $TypeSize.meta $Red }
   [void]$list.Children.Add($frame)

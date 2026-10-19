@@ -25,6 +25,7 @@ describe('design tokens', () => {
       expect(contrast(p.ink, p.selected), 'text on the selected row').toBeGreaterThanOrEqual(4.5);
       expect(contrast(p.onViolet, p.violet), 'primary button label').toBeGreaterThanOrEqual(4.5);
       expect(contrast(p.onDanger, p.danger), 'close button glyph on its red hover').toBeGreaterThanOrEqual(3);
+      expect(contrast(p.onViolet, p.violet), 'the knob of a switch that is on').toBeGreaterThanOrEqual(3);
     });
     it(`${name}: status chips and their glyphs meet WCAG 1.4.11 (3:1), also on hovered and selected rows`, () => {
       const p = palette(theme);
@@ -76,6 +77,12 @@ describe('design tokens', () => {
       ];
       expect(stray, file).toEqual([]);
     }
+    // every brush the widget uses is one Set-Palette defines (a missing one draws nothing, silently)
+    const ps = read('desktop/widget.ps1');
+    const defined = new Set([...ps.matchAll(/@\('(\w+)',\s*'\w+'\)/g)].map((m) => m[1]));
+    const tokenBrushes = /\$(Paper|White|Black|CloseGlyph|CloseHover|OnAccent|Accent|Card|StripBg|Edge|Hover|TabHover|TabInk|Ink|Faint|Line|NoteBg|NoteInk|MenuBg|MenuHover|Red|RedSoft|Amber|AmberSoft|Selected|ButtonBg|Closed)\b/g;
+    const used = new Set([...ps.matchAll(tokenBrushes)].map((m) => m[1]));
+    expect([...used].filter((n) => !defined.has(n)), 'brushes used but never defined').toEqual([]);
     // Colors.Black appears only as the opaque part of an opacity mask
     for (const line of read('desktop/widget.ps1').split('\n').filter((l) => /Colors\]::Black/.test(l))) expect(line).toMatch(/GradientStop/);
   });
