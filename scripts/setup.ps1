@@ -39,6 +39,8 @@ param(
   [string]$DataDir        # the app's data folder, when it is not the usual one (the app passes its own)
 )
 if ($FromApp) { $CloudOnly = $true }
+$SetupOptions = @($PSBoundParameters.GetEnumerator() | Where-Object { $_.Key -notin 'FromApp', 'ResultFile', 'DataDir' } |
+  ForEach-Object { if ($_.Value -is [System.Management.Automation.SwitchParameter]) { "-$($_.Key)" } else { "-$($_.Key) `"$($_.Value)`"" } }) -join ' '
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Off
 
@@ -97,6 +99,28 @@ function Get-SetupCommand([string]$options) {
   if ($PSScriptRoot -and (Test-Path -LiteralPath (Join-Path $PSScriptRoot '..\setup.cmd'))) { return "setup.cmd $options" }
   $u = "https://raw.githubusercontent.com/$Repo/$Branch/scripts/setup.ps1"
   return "powershell -NoProfile -ExecutionPolicy Bypass -Command `"& ([scriptblock]::Create((irm $u))) $options`""
+}
+# Inside an MSIX-packaged app (a Store app's terminal, an AI assistant's shell in a desktop app) Windows gives
+# AppData and HKCU a private copy per package: what setup wrote there (the data folder, registry entries) would
+# be invisible to the app started from the Start menu. Returns the package's name, or '' outside one.
+function Get-PackageContext {
+  if ($env:SAQME_SETUP_SANDBOX -and $env:SAQME_TEST_PACKAGE) { return $env:SAQME_TEST_PACKAGE }   # tests
+  try {
+    Add-Type -Namespace SaqmeSetup -Name Package -ErrorAction Stop -MemberDefinition '[DllImport("kernel32.dll", CharSet = CharSet.Unicode)] public static extern int GetCurrentPackageFullName(ref int length, System.Text.StringBuilder name);'
+    $len = 0
+    if ([SaqmeSetup.Package]::GetCurrentPackageFullName([ref]$len, $null) -ne 122) { return '' }   # 15700: no package
+    $name = New-Object System.Text.StringBuilder ($len + 1)
+    [void][SaqmeSetup.Package]::GetCurrentPackageFullName([ref]$len, $name)
+    return $name.ToString()
+  } catch { return '' }   # no such API (Windows 7): never packaged
+}
+function Assert-NotPackaged {
+  $pkg = Get-PackageContext
+  if (-not $pkg) { return }
+  $what = "Setup is running inside another app's package ($pkg), for example a terminal or an AI assistant started from that app. Windows keeps what such a program writes to AppData and the registry in that app's private copy, so Saqme started from the Start menu would not find it."
+  if ($FromApp) { Stop-Setup $what 'Quit Saqme (tray icon > Quit), start it from the Start menu, then choose Set up sync again.' }
+  $cmd = $(if ($PSScriptRoot -and (Test-Path -LiteralPath (Join-Path $PSScriptRoot '..\setup.cmd'))) { "`"$([IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..\setup.cmd')))`" $SetupOptions" } else { Get-SetupCommand $SetupOptions })
+  Stop-Setup $what "Run it from a normal window instead: double-click setup.cmd in File Explorer, or press Win+R and run: $($cmd.Trim())"
 }
 function Confirm-Step([string]$question) {
   if ($Yes) { return $true }
@@ -327,6 +351,7 @@ function Uninstall-App {
 # ---------------------------------------------------------------- main
 Write-Host ''
 Write-Host "  $AppName setup" -ForegroundColor Magenta
+Assert-NotPackaged
 if ($Uninstall) { Uninstall-App; exit 0 }
 if ($SkipCloud -and ($Cloud -or $CloudOnly)) { Stop-Setup '-SkipCloud cannot be combined with -Cloud or -CloudOnly.' 'Pick one (without -Cloud, setup leaves sync out anyway).' }
 $withCloud = $Cloud -or $CloudOnly -or $RotateToken -or $DeviceLogin   # those two only make sense with it

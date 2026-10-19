@@ -62,6 +62,12 @@ powershell -NoProfile -ExecutionPolicy Bypass -Command "& ([scriptblock]::Create
 **Option C — from a clone:** `git clone https://github.com/francuza9/saqme-to-do.git`, then `setup.cmd` in the
 repository folder.
 
+Run setup from File Explorer or a normal PowerShell / Terminal window. A shell that belongs to a Store
+(MSIX-packaged) app, such as the one an AI assistant in a desktop app uses, sees a private copy of `AppData`
+and the registry: anything installed from there would be invisible to Saqme started from the Start menu. Setup
+notices this, stops before changing anything and prints the command to run in a normal window instead (the
+app's **Set up sync** does the same when Saqme itself was started from such a shell).
+
 What setup does on Windows (no administrator rights needed, everything is per user):
 
 | Step | Where |
@@ -302,6 +308,7 @@ the next time it is opened with a connection.
 | Sync icon shows a red warning | Hover it for the reason. *Token rejected*: run setup's cloud part again (or pair again). *Server error*: wait a minute; it retries on its own. |
 | "N tasks vanished from the lists folder … deletions paused" | A list file was emptied or replaced in one go. Restore it (Recycle Bin, Trash, `lists/.trash`) — or, if it was on purpose, confirm: Windows **Settings > Sync > Delete them**; Linux/macOS **Delete them** in the window's settings, or `saqme allow-deletes`. |
 | Phone shows the welcome screen after installing | Expected on iPhone: type the pairing code (**Pair phone** on the computer, or the one Safari showed) into the field on that screen. *Wrong or expired*: show a new one; a code works once, for 10 minutes. Pasting the pairing link works too. |
+| Setup stops: "running inside another app's package" | It was started from a shell that belongs to a Store app (for example an AI assistant in a desktop app); Windows would keep what it installs in that app's private copy of `AppData`. Run the command it prints from File Explorer (double-click `setup.cmd`) or Win+R. In the app: quit Saqme from the tray icon, start it from the Start menu, then **Set up sync**. |
 | Linux/macOS window says it is "not connected" | It was opened from a bookmark. Open Saqme from the menu (or `saqme open`); that hands the window its key. |
 | Linux/macOS: "Port 47613 is used by another program" | Run setup again with `--port 47700` (any free port). |
 | Linux: no reminders | Install `libnotify-bin` (Debian/Ubuntu) or `libnotify` (Fedora) for `notify-send`, and check that `saqme status` says it is running. |

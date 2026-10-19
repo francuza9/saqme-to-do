@@ -110,6 +110,19 @@ try {
   Check ($r.Code -ne 0 -and (Test-Path $result) -and (Get-Content $result -Raw) -match '"ok":\s*false') 'a cloud part that stops reports failure'
   Remove-Item Env:\SAQME_SETUP_NODE
 
+  Write-Host 'inside another app''s package (MSIX: private AppData and registry)'
+  $env:SAQME_TEST_PACKAGE = 'Some.App_1.0.0.0_x64__test'
+  $before = (Get-ChildItem -LiteralPath $sb -Recurse -Force | Measure-Object).Count
+  $r = Invoke-Setup -Cloud -Yes
+  $okPkg = $r.Code -ne 0 -and $r.Out -match "inside another app's package \(Some\.App" -and $r.Out -match '\\setup\.cmd" -Cloud -Yes'
+  Check $okPkg 'setup stops, says why and gives the command for a normal window'
+  if (-not $okPkg) { Write-Host $r.Out }
+  Check ($before -eq (Get-ChildItem -LiteralPath $sb -Recurse -Force | Measure-Object).Count) '... before writing anything'
+  $r = Invoke-Setup -FromApp -ResultFile $result
+  Check ($r.Code -ne 0 -and (Get-Content $result -Raw) -match 'Start menu') 'from the app: it reports why, and what to do'
+  Remove-Item $result -ErrorAction SilentlyContinue
+  Remove-Item Env:\SAQME_TEST_PACKAGE
+
   Write-Host 'argument checks'
   $r = Invoke-Setup -SkipCloud -CloudOnly
   Check ($r.Code -ne 0 -and $r.Out -match 'cannot be combined') 'conflicting switches are refused'

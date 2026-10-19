@@ -2108,8 +2108,31 @@ function Find-SetupScript {
   }
   return $null
 }
+# Started from inside an MSIX-packaged app (e.g. by an AI assistant's shell in a desktop app), this process sees
+# that app's private copy of AppData and the registry: setup run from here would write there, where Saqme
+# started from the Start menu never looks. The package's name, or '' (SAQME_TEST_PACKAGE pretends, for tests).
+function Get-PackageContext {
+  if ($env:SAQME_TEST_PACKAGE) { return $env:SAQME_TEST_PACKAGE }
+  try {
+    if (-not ('SaqmeApp.Package' -as [type])) {
+      Add-Type -Namespace SaqmeApp -Name Package -ErrorAction Stop -MemberDefinition '[DllImport("kernel32.dll", CharSet = CharSet.Unicode)] public static extern int GetCurrentPackageFullName(ref int length, System.Text.StringBuilder name);'
+    }
+    $len = 0
+    if ([SaqmeApp.Package]::GetCurrentPackageFullName([ref]$len, $null) -ne 122) { return '' }   # 15700: no package
+    $name = New-Object System.Text.StringBuilder ($len + 1)
+    [void][SaqmeApp.Package]::GetCurrentPackageFullName([ref]$len, $name)
+    return $name.ToString()
+  } catch { return '' }
+}
+
 function Start-SyncSetup {
   if ($script:setupRun) { return }
+  $pkg = Get-PackageContext
+  if ($pkg) {
+    $script:setupOutcome = @{ message = "Saqme was started from inside another app ($pkg), so Windows would keep what setup writes in that app's private copy of your settings."
+                              next = 'Quit Saqme (tray icon > Quit), start it from the Start menu, then choose Set up sync again.' }
+    Render; return
+  }
   $setup = Find-SetupScript
   if (-not $setup) {
     $script:setupOutcome = @{ message = 'The setup script is not installed next to the app.'; next = 'Run setup.cmd -Cloud from the folder you installed the app from.' }
@@ -2646,6 +2669,11 @@ if ($SmokeTest) {
     $text = [IO.File]::ReadAllText($script:todo)
     if ($text -notmatch ('- \[ \] smoke task one due:\d{4}-\d{2}-\d{2}T9:00 \^' + $first.Id)) { throw "unexpected file content: $text" }
     foreach ($v in 'settings', 'keys', 'pair', 'conflicts', 'list') { $script:view = $v; Render }
+    # Set up sync from inside a packaged app explains itself instead of starting setup there
+    $env:SAQME_TEST_PACKAGE = 'Some.App_1.0.0.0_x64__test'
+    try { Start-SyncSetup } finally { Remove-Item Env:\SAQME_TEST_PACKAGE }
+    if ($script:setupRun -or [string]$script:setupOutcome.message -notmatch 'Some\.App_1\.0\.0\.0') { throw 'Set up sync started inside a package' }
+    $script:setupOutcome = $null
     Apply-Theme $(if ($script:themeName -eq 'dark') { 'light' } else { 'dark' })
     [void](New-QrImage 'https://saqme.example.workers.dev/#pair=0123456789abcdefghijklmnopqrstuvwxyzABCDEFG')
     Check-Reminders
