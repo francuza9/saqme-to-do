@@ -414,6 +414,125 @@ Test-Case 'a list deleted elsewhere stays when it changed while the plan waited'
   Assert-True (-not (Test-Path (Join-Path $d '.trash'))) 'nothing went to .trash'
 }
 
+Write-Host 'moving tasks in a list (drag and drop, Alt+Up / Alt+Down)'
+$MoveBase = "# Work`n- [ ] A ^aaaaaaaa`n  - [ ] A1 ^a1a1a1a1`n  - [ ] A2 ^a2a2a2a2`n- [ ] B ^bbbbbbbb`n- [ ] C ^cccccccc`n  - [ ] C1 ^c1c1c1c1`n`n## Later`n- [>] D ^dddddddd`n"
+function Find-Item($items, [string]$id) { return @($items | Where-Object { $_.Id -ceq $id })[0] }
+function Test-Move([string]$id, [string]$beforeId, [bool]$atEnd = $false) {
+  $items = Read-Items $MoveBase
+  $target = $(if ($beforeId) { Find-Item $items $beforeId } else { $null })
+  $ok = Move-ListBlock $items (Find-Item $items $id) $target $atEnd
+  return @{ Ok = $ok; Text = (ConvertTo-MarkdownText $items) }
+}
+Test-Case 'a task moves with its subtasks to just before the drop target' {
+  $r = Test-Move 'aaaaaaaa' 'cccccccc'
+  Assert-True $r.Ok 'moved'
+  Assert-Eq $r.Text "# Work`n- [ ] B ^bbbbbbbb`n- [ ] A ^aaaaaaaa`n  - [ ] A1 ^a1a1a1a1`n  - [ ] A2 ^a2a2a2a2`n- [ ] C ^cccccccc`n  - [ ] C1 ^c1c1c1c1`n`n## Later`n- [>] D ^dddddddd`n"
+  $r = Test-Move 'cccccccc' 'aaaaaaaa'   # upwards, past a task with subtasks
+  Assert-Eq $r.Text "# Work`n- [ ] C ^cccccccc`n  - [ ] C1 ^c1c1c1c1`n- [ ] A ^aaaaaaaa`n  - [ ] A1 ^a1a1a1a1`n  - [ ] A2 ^a2a2a2a2`n- [ ] B ^bbbbbbbb`n`n## Later`n- [>] D ^dddddddd`n"
+}
+Test-Case 'dropped among subtasks it becomes one; dropped among top-level tasks a subtask leaves its parent' {
+  Assert-Eq (Test-Move 'bbbbbbbb' 'a2a2a2a2').Text "# Work`n- [ ] A ^aaaaaaaa`n  - [ ] A1 ^a1a1a1a1`n  - [ ] B ^bbbbbbbb`n  - [ ] A2 ^a2a2a2a2`n- [ ] C ^cccccccc`n  - [ ] C1 ^c1c1c1c1`n`n## Later`n- [>] D ^dddddddd`n"
+  Assert-Eq (Test-Move 'cccccccc' 'a1a1a1a1').Text "# Work`n- [ ] A ^aaaaaaaa`n  - [ ] C ^cccccccc`n    - [ ] C1 ^c1c1c1c1`n  - [ ] A1 ^a1a1a1a1`n  - [ ] A2 ^a2a2a2a2`n- [ ] B ^bbbbbbbb`n`n## Later`n- [>] D ^dddddddd`n"
+  Assert-Eq (Test-Move 'a2a2a2a2' 'cccccccc').Text "# Work`n- [ ] A ^aaaaaaaa`n  - [ ] A1 ^a1a1a1a1`n- [ ] B ^bbbbbbbb`n- [ ] A2 ^a2a2a2a2`n- [ ] C ^cccccccc`n  - [ ] C1 ^c1c1c1c1`n`n## Later`n- [>] D ^dddddddd`n"
+}
+Test-Case 'dropped below the last task: to the end, at the top level, below sections' {
+  Assert-Eq (Test-Move 'a1a1a1a1' $null $true).Text "# Work`n- [ ] A ^aaaaaaaa`n  - [ ] A2 ^a2a2a2a2`n- [ ] B ^bbbbbbbb`n- [ ] C ^cccccccc`n  - [ ] C1 ^c1c1c1c1`n`n## Later`n- [>] D ^dddddddd`n- [ ] A1 ^a1a1a1a1`n"
+  Assert-Eq (Test-Move 'aaaaaaaa' $null $true).Text "# Work`n- [ ] B ^bbbbbbbb`n- [ ] C ^cccccccc`n  - [ ] C1 ^c1c1c1c1`n`n## Later`n- [>] D ^dddddddd`n- [ ] A ^aaaaaaaa`n  - [ ] A1 ^a1a1a1a1`n  - [ ] A2 ^a2a2a2a2`n"
+}
+Test-Case 'a drop that cannot be done changes nothing (onto itself, into its own subtasks, a target from another list)' {
+  foreach ($case in @(@('aaaaaaaa', 'aaaaaaaa'), @('aaaaaaaa', 'a1a1a1a1'), @('aaaaaaaa', 'a2a2a2a2'))) {
+    $r = Test-Move $case[0] $case[1]
+    Assert-True (-not $r.Ok) "$($case -join ' before ')"; Assert-Eq $r.Text $MoveBase
+  }
+  $items = Read-Items $MoveBase
+  $stale = (Read-Items $MoveBase)[4]   # the same task, but from another read: not in this list
+  Assert-True (-not (Move-ListBlock $items $items[1] $stale $false)) 'stale target'
+  Assert-True (-not (Move-ListBlock $items $stale $items[1] $false)) 'stale task'
+  Assert-True (-not (Move-ListBlock $items $items[0] $items[1] $false)) 'a heading is not a task'
+  Assert-Eq (ConvertTo-MarkdownText $items) $MoveBase
+}
+Test-Case 'Alt+Up / Alt+Down swap with the sibling and its subtasks, and stop at the ends' {
+  $items = Read-Items $MoveBase
+  Assert-True (Step-ListBlock $items (Find-Item $items 'bbbbbbbb') -1) 'B up'
+  Assert-Eq (ConvertTo-MarkdownText $items) "# Work`n- [ ] B ^bbbbbbbb`n- [ ] A ^aaaaaaaa`n  - [ ] A1 ^a1a1a1a1`n  - [ ] A2 ^a2a2a2a2`n- [ ] C ^cccccccc`n  - [ ] C1 ^c1c1c1c1`n`n## Later`n- [>] D ^dddddddd`n"
+  Assert-True (Step-ListBlock $items (Find-Item $items 'aaaaaaaa') 1) 'A down'
+  Assert-Eq (ConvertTo-MarkdownText $items) "# Work`n- [ ] B ^bbbbbbbb`n- [ ] C ^cccccccc`n  - [ ] C1 ^c1c1c1c1`n- [ ] A ^aaaaaaaa`n  - [ ] A1 ^a1a1a1a1`n  - [ ] A2 ^a2a2a2a2`n`n## Later`n- [>] D ^dddddddd`n"
+  Assert-True (Step-ListBlock $items (Find-Item $items 'a2a2a2a2') -1) 'A2 up'
+  $before = ConvertTo-MarkdownText $items
+  foreach ($c in @(@('bbbbbbbb', -1), @('a2a2a2a2', -1), @('a1a1a1a1', 1), @('aaaaaaaa', 1), @('c1c1c1c1', 1), @('dddddddd', -1))) {
+    Assert-True (-not (Step-ListBlock $items (Find-Item $items $c[0]) $c[1])) "$($c -join ' ') stops"
+  }
+  Assert-Eq (ConvertTo-MarkdownText $items) $before
+}
+
+# a list with headings, prose, notes, blank lines, three levels and closed / postponed tasks
+$RandomList = "---`ntitle: x`n---`n# Mixed`nIntro line`n- [ ] t01 ^taaaaa01`n  > a note`n  - [ ] t02 ^taaaaa02`n    - [x] t03 ^taaaaa03`n    - [ ] t04 ^taaaaa04`n  - [/] t05 ^taaaaa05`n- [>] t06 ^taaaaa06`n`n## Section`n- [!] t07 ^taaaaa07`n  - [ ] t08 ^taaaaa08`n- [-] t09 ^taaaaa09`n- [~] t10 ^taaaaa10`n  > note 1`n  > note 2`n  - [ ] t11 ^taaaaa11`n- [ ] t12 due:2026-10-20T9:00 ^taaaaa12`n`ntrailing prose`n"
+function Invoke-RandomMove($items, $rng) {
+  $tasks = @($items | Where-Object { $_.Kind -eq 'task' })
+  $a = $tasks[$rng.Next($tasks.Count)]
+  switch ($rng.Next(5)) {
+    0 { return (Move-ListBlock $items $a $tasks[$rng.Next($tasks.Count)] $false) }
+    1 { return (Move-ListBlock $items $a $items[$rng.Next($items.Count)] $false) }   # any row, headings too
+    2 { return (Move-ListBlock $items $a $null $true) }
+    3 { return (Step-ListBlock $items $a -1) }
+    default { return (Step-ListBlock $items $a 1) }
+  }
+}
+function Get-Fingerprint($items) {   # every task by id: its text, status, deadline and notes
+  return (@($items | Where-Object { $_.Kind -eq 'task' } | ForEach-Object { "$($_.Id)=$($_.Mark)|$($_.Text)|$($_.Due)T$($_.DueTime)|$($_.Notes)" } | Sort-Object) -join "`n")
+}
+Test-Case 'thousands of random drags and nudges keep every task with its text, status, deadline and notes' {
+  $items = Read-Items $RandomList
+  $raws = @($items | Where-Object { $_.Kind -eq 'raw' } | ForEach-Object { $_.Raw }) -join "`n"
+  $want = Get-Fingerprint $items
+  $rng = New-Object System.Random 20261019
+  $moved = 0
+  for ($k = 1; $k -le 2000; $k++) {
+    $n = $items.Count
+    if (Invoke-RandomMove $items $rng) { $moved++ }
+    if ($items.Count -ne $n) { throw "move $k changed the number of items" }
+    if ($k % 50 -eq 0) {
+      $back = Read-Items (ConvertTo-MarkdownText $items)   # also as written to the file and read again
+      Assert-Eq (Get-Fingerprint $back) $want "after $k moves"
+      Assert-Eq (@($back | Where-Object { $_.Kind -eq 'raw' } | ForEach-Object { $_.Raw }) -join "`n") $raws 'headings and prose stay'
+    }
+  }
+  Assert-True ($moved -gt 1000) "most moves happen ($moved)"
+}
+
+# what the server does with the changes: they become the synced rows
+function Confirm-Outbox($st) {
+  foreach ($c in @($st.Outbox)) {
+    $k = "$($c['kind']):$($c['id'])"
+    if (-not $st.R.ContainsKey($k)) { $st.R[$k] = New-EmptyRow $c['kind'] $c['id'] }
+    foreach ($f in @($c['fields'].Keys)) { $st.R[$k]['fields'][$f] = @{ v = $c['fields'][$f]['v']; ts = [long]$c['fields'][$f]['ts'] } }
+    $st.S[$k] = Copy-Row $st.R[$k]
+  }
+  $st.Outbox.Clear()
+}
+Test-Case 'moving tasks around reaches the server as new places, never as deletes' {
+  $d = New-TempLists
+  Write-List $d 'Mixed' $RandomList
+  $st = New-SyncState
+  [void](Add-LocalDiff $st (Read-LocalLists $d 0) '' -Clock 1000)
+  Confirm-Outbox $st
+  $rng = New-Object System.Random 7
+  for ($round = 1; $round -le 8; $round++) {
+    $items = Read-Items (Read-List $d 'Mixed')
+    for ($k = 0; $k -lt 6; $k++) { [void](Invoke-RandomMove $items $rng) }
+    Write-List $d 'Mixed' (ConvertTo-MarkdownText $items)
+    $diff = Add-LocalDiff $st (Read-LocalLists $d 0) '' -Clock (1000 + 1000 * $round)
+    Assert-Eq $diff.Deletes 0 "round $round deletes"
+    foreach ($c in $st.Outbox) {
+      Assert-Eq $c['kind'] 'task' "round $round"
+      Assert-Eq (@($c['fields'].Keys) -join ',') 'place' "round $round, $($c['id']): only its place changes"
+    }
+    Confirm-Outbox $st
+  }
+  $live = @($st.R.Values | Where-Object { $_['kind'] -eq 'task' -and -not (Get-Field $_ 'deleted')['v'] })
+  Assert-Eq $live.Count 12 'all twelve tasks live on the server'
+}
+
 Write-Host 'reading files'
 Test-Case 'a list in a legacy code page or UTF-16 is read as written' {
   $d = New-TempLists

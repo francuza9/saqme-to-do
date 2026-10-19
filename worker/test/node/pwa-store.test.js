@@ -46,6 +46,31 @@ describe('phone app store', () => {
     expect(flights.fields.place.v.parent).toBe(trip);   // still under it
   });
 
+  it('many random moves (touch drag, move to project) keep every task: never deleted, each in its tree once', async () => {
+    const s = await newStore();
+    const projects = [s.addProject('Home'), s.addProject('Work')];
+    const ids = [];
+    for (let i = 0; i < 18; i++) {
+      const project = projects[i % 2];
+      const parents = ids.filter((id) => s.get('task', id).fields.place.v.project === project);
+      const parentId = i % 3 && parents.length ? parents[(i * 7) % parents.length] : null;
+      ids.push(s.addTask(project, { parentId, text: `task ${i}` }));
+    }
+    let seed = 20261019;
+    const rnd = (n) => { seed = (seed * 1103515245 + 12345) % 2147483648; return seed % n; };
+    for (let k = 0; k < 600; k++) {
+      const id = ids[rnd(ids.length)];
+      const projectId = projects[rnd(2)];
+      const inProject = s.tasks().filter((t) => !t.fields.deleted.v && t.fields.place.v.project === projectId).map((t) => t.id);
+      const parentId = rnd(3) ? null : inProject[rnd(inProject.length || 1)] ?? null;
+      s.moveTask(id, { projectId, parentId: parentId === id ? null : parentId, index: rnd(6) });
+      const live = s.tasks().filter((t) => !t.fields.deleted.v);
+      expect(live.length, `after move ${k}`).toBe(ids.length);
+      expect(projects.reduce((n, p) => n + s.tree(p).byId.size, 0), `every task in one tree, after move ${k}`).toBe(ids.length);
+    }
+    for (const ob of s.outbox.values()) expect(ob.fields.deleted?.v ?? false).toBe(false);
+  });
+
   it('a write to the database that fails is kept, retried and reported until it works', async () => {
     vi.useFakeTimers();
     const s = await newStore();

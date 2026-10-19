@@ -818,46 +818,16 @@ function End-Drag([bool]$apply) {
   if ($apply -and $d.Ph.Visibility -eq 'Visible') { Move-Task $d.Item $d.Target $d.End }
   Render
 }
-# move a task (with subtasks) to sit just before $target, adopting its level; $atEnd -> after the last task
+# move a task (with subtasks) to sit just before $target, adopting its level; $atEnd -> after the last task.
+# A drop that cannot be done (sync-core.ps1 Move-ListBlock) changes nothing.
 function Move-Task($it, $target, [bool]$atEnd) {
-  if ($target -eq $it) { return }
-  $i = $script:items.IndexOf($it); if ($i -lt 0) { return }
-  $end = Subtree-End $i
-  if ($target) { $ti = $script:items.IndexOf($target); if ($ti -gt $i -and $ti -lt $end) { return } }   # into own subtree
-  $block = $script:items.GetRange($i, $end - $i)
-  $script:items.RemoveRange($i, $end - $i)
-  if ($atEnd -or -not $target) {
-    $pos = $script:items.Count
-    # place after the last top-level task's subtree
-    for ($k = $script:items.Count - 1; $k -ge 0; $k--) { if ($script:items[$k].Kind -eq 'task' -and $script:items[$k].Level -eq 0) { $pos = Subtree-End $k; break } }
-    $newLevel = 0
-  } else {
-    $pos = $script:items.IndexOf($target); $newLevel = $target.Level
-  }
-  $delta = $newLevel - $it.Level
-  foreach ($b in $block) { $b.Level += $delta }
-  $script:items.InsertRange($pos, $block)
+  if (-not (Move-ListBlock $script:items $it $target $atEnd)) { return }
   $script:sel = $it
   Save-Items
 }
 # Alt+Up / Alt+Down: swap with the previous / next sibling
 function Nudge-Task($it, [int]$dir) {
-  $i = $script:items.IndexOf($it); if ($i -lt 0) { return }
-  $L = $it.Level; $end = Subtree-End $i; $len = $end - $i
-  if ($dir -lt 0) {
-    $k = $i - 1
-    while ($k -ge 0 -and $script:items[$k].Kind -eq 'task' -and $script:items[$k].Level -gt $L) { $k-- }
-    if ($k -lt 0 -or $script:items[$k].Kind -ne 'task' -or $script:items[$k].Level -ne $L) { return }
-    $block = $script:items.GetRange($i, $len); $script:items.RemoveRange($i, $len)
-    $script:items.InsertRange($k, $block)
-  } else {
-    if ($end -ge $script:items.Count) { return }
-    $n = $script:items[$end]
-    if ($n.Kind -ne 'task' -or $n.Level -ne $L) { return }
-    $nEnd = Subtree-End $end
-    $block = $script:items.GetRange($i, $len); $script:items.RemoveRange($i, $len)
-    $script:items.InsertRange($nEnd - $len, $block)
-  }
+  if (-not (Step-ListBlock $script:items $it $dir)) { return }
   $script:sel = $it; Save-Items; Render
 }
 
@@ -896,7 +866,7 @@ function Move-ToProject($it, [string]$proj) {
   Commit-Edit
   $i = $script:items.IndexOf($it); if ($i -lt 0) { return }
   $end = Subtree-End $i
-  $block = $script:items.GetRange($i, $end - $i)
+  $block = $script:items.GetRange($i, $end - $i).ToArray()
   $dest = Proj-Path $proj
   try {
     $existing = $(if (Test-Path -LiteralPath $dest) { [IO.File]::ReadAllText($dest, [Text.Encoding]::UTF8) } else { '' })
@@ -2683,6 +2653,59 @@ if ($SmokeTest) {
     $first.Mark = '/'; Save-Items
     $after = [IO.File]::ReadAllText($script:todo)
     if ($after -notmatch 'added by an assistant' -or $after -notmatch '- \[/\] smoke task one') { throw "outside edit lost: $after" }
+    # Drag and drop through the code the mouse handlers run (Start-Drag / Drag-Move / End-Drag) and Alt+Up/Down:
+    # a list never loses a task (1.0.0 lost every dragged task, and sync sent them as deletes)
+    $homeList = $script:proj
+    Write-TextFileAtomic (Proj-Path 'Drag check') ("- [ ] P one ^pppppp01`n  - [ ] P sub a ^pppppp02`n  - [x] P sub b ^pppppp03`n  - [ ] P sub c ^pppppp04`n" +
+      "- [ ] Q two ^qqqqqq01`n- [ ] R three ^rrrrrr01`n- [>] S later ^ssssss01`n- [x] T done ^tttttt01`n")
+    Switch-Project 'Drag check'
+    $script:cfg.showCompleted = '1'; Render
+    $layout = { $outer.Measure((New-Object System.Windows.Size(420, 1200))); $outer.Arrange((New-Object System.Windows.Rect(0, 0, 420, 1200))); $outer.UpdateLayout() }
+    $fileText = { [IO.File]::ReadAllText($script:todo) }
+    $ids = { $a = [string[]]@((Read-Items (& $fileText)) | Where-Object { $_.Kind -eq 'task' -and $_.Text } | ForEach-Object { [string]$_.Id }); [Array]::Sort($a, [StringComparer]::Ordinal); $a -join ',' }
+    $all = & $ids
+    if ($all.Split(',').Count -ne 8) { throw "drag check list: $all" }
+    $rowOf = { param($id) @($list.Children | Where-Object { (Is-TaskRow $_) -and $_.Tag.Id -ceq $id })[0] }
+    $dragTo = {   # (not $drag: this runs at script scope, where $drag is the widget's own)
+      param([string]$from, [string]$to, [string]$where)
+      & $layout
+      Start-Drag (& $rowOf $from).Child.Children[5]
+      & $layout
+      if ($where -eq 'end') { $y = 100000 } else {
+        $dst = & $rowOf $to
+        $top = $dst.TranslatePoint((New-Object System.Windows.Point(0, 0)), $list).Y
+        $y = $(if ($where -eq 'above') { $top + 1 } else { $top + $dst.ActualHeight - 1 })
+      }
+      $ev = New-Object psobject -Property @{ Y = $y }
+      $ev | Add-Member -MemberType ScriptMethod -Name GetPosition -Value { param($rel) New-Object System.Windows.Point(4, $this.Y) }
+      Drag-Move $ev; End-Drag $true
+      if ((& $ids) -ne $all) { throw "drag $from $where $to lost tasks:`n$(& $fileText)" }
+    }
+    $order = { (@((Read-Items (& $fileText)) | Where-Object { $_.Kind -eq 'task' } | ForEach-Object { ('  ' * $_.Level) + $_.Id.Substring(0, 1) + $_.Id.Substring(7) }) -join ' ') }
+    & $dragTo 'pppppp01' 'qqqqqq01' 'below'      # a task with subtasks, between top-level tasks
+    if ((& $order) -ne 'q1 p1   p2   p3   p4 r1 s1 t1') { throw "drag below: $(& $order)" }
+    & $dragTo 'rrrrrr01' 'pppppp02' 'above'      # into a parent
+    if ((& $order) -ne 'q1 p1   r1   p2   p3   p4 s1 t1') { throw "drag into a parent: $(& $order)" }
+    & $dragTo 'rrrrrr01' $null 'end'             # out again, to the end
+    & $dragTo 'pppppp04' 'qqqqqq01' 'above'      # a subtask out of its parent
+    if ((& $order) -ne 'p4 q1 p1   p2   p3 s1 t1 r1') { throw "drag out of a parent: $(& $order)" }
+    $t0 = & $fileText
+    & $dragTo 'pppppp01' 'pppppp02' 'above'      # into its own subtasks: cancelled, nothing changes
+    if ((& $fileText) -cne $t0) { throw 'a drop into its own subtasks changed the list' }
+    Nudge-Task @($script:items | Where-Object { $_.Id -eq 'qqqqqq01' })[0] -1
+    Nudge-Task @($script:items | Where-Object { $_.Id -eq 'pppppp01' })[0] 1
+    if ((& $ids) -ne $all) { throw "Alt+Up/Down lost tasks:`n$(& $fileText)" }
+    # and random drags between all kinds of rows
+    $rng = New-Object System.Random 19
+    for ($k = 0; $k -lt 30; $k++) {
+      & $layout
+      $rows = @($list.Children | Where-Object { (Is-TaskRow $_) -and $_.Child.Children[5].Child })
+      & $dragTo $rows[$rng.Next($rows.Count)].Tag.Id $rows[$rng.Next($rows.Count)].Tag.Id @('above', 'below')[$rng.Next(2)]
+    }
+    Switch-Project $homeList
+    Remove-Item -LiteralPath (Proj-Path 'Drag check') -Force
+    Render
+    Write-Output 'DRAG OK'
     $first = @($script:items | Where-Object { $_.Kind -eq 'task' -and $_.Text -eq 'smoke task one' })[0]
     if ($script:sync) {
       # with a sync config in the data dir: the real loop must push our task, and a change made on

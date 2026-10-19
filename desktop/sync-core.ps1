@@ -334,6 +334,65 @@ function Merge-ListText([string]$baseText, $mine, [string]$theirsText) {
   return (ConvertTo-MarkdownText $result 0 (Get-TextEol $theirsText))
 }
 
+# ---------------------------------------------------------------- moving tasks inside a list (the widget)
+# A task moves with its subtasks as one block (drag and drop, Alt+Up / Alt+Down). These never drop an item: a
+# move that cannot be done (a target that is not in this list, or inside the moved block) changes nothing and
+# returns $false. The block is copied before the list changes: ArrayList.GetRange is only a view of the list,
+# which the RemoveRange that follows invalidates. (Using that view lost the dragged tasks: every drag in 1.0.0
+# saved the list without them, and sync sent them as deletes.)
+
+# Moves $it (with its subtasks) to just before $target, taking its level; $atEnd or no target: after the last
+# top-level task's subtree, at the top level.
+function Move-ListBlock($items, $it, $target, [bool]$atEnd) {
+  $i = $items.IndexOf($it)
+  if ($i -lt 0 -or $it.Kind -ne 'task') { return $false }
+  $end = Get-SubtreeEnd $items $i
+  $toEnd = $atEnd -or $null -eq $target
+  if (-not $toEnd) {
+    if ($target -eq $it) { return $false }
+    $ti = $items.IndexOf($target)
+    if ($ti -lt 0 -or $target.Kind -ne 'task') { return $false }     # not in this list (any more)
+    if ($ti -gt $i -and $ti -lt $end) { return $false }               # into its own subtree
+  }
+  $count = $items.Count
+  $block = $items.GetRange($i, $end - $i).ToArray()
+  $items.RemoveRange($i, $end - $i)
+  if ($toEnd) {
+    $pos = $items.Count
+    for ($k = $items.Count - 1; $k -ge 0; $k--) { if ($items[$k].Kind -eq 'task' -and $items[$k].Level -eq 0) { $pos = Get-SubtreeEnd $items $k; break } }
+    $newLevel = 0
+  } else {
+    $pos = $items.IndexOf($target); $newLevel = $target.Level
+  }
+  $delta = $newLevel - $it.Level
+  foreach ($b in $block) { $b.Level += $delta }
+  $items.InsertRange($pos, $block)
+  if ($items.Count -ne $count) { throw "a move changed the number of items ($count -> $($items.Count))" }
+  return $true
+}
+
+# Swaps $it (with its subtasks) with the previous ($dir < 0) or next sibling and its subtasks.
+function Step-ListBlock($items, $it, [int]$dir) {
+  $i = $items.IndexOf($it)
+  if ($i -lt 0 -or $it.Kind -ne 'task') { return $false }
+  $L = $it.Level; $end = Get-SubtreeEnd $items $i; $len = $end - $i
+  if ($dir -lt 0) {
+    $k = $i - 1
+    while ($k -ge 0 -and $items[$k].Kind -eq 'task' -and $items[$k].Level -gt $L) { $k-- }
+    if ($k -lt 0 -or $items[$k].Kind -ne 'task' -or $items[$k].Level -ne $L) { return $false }
+    $at = $k
+  } else {
+    if ($end -ge $items.Count -or $items[$end].Kind -ne 'task' -or $items[$end].Level -ne $L) { return $false }
+    $at = (Get-SubtreeEnd $items $end) - $len
+  }
+  $count = $items.Count
+  $block = $items.GetRange($i, $len).ToArray()
+  $items.RemoveRange($i, $len)
+  $items.InsertRange($at, $block)
+  if ($items.Count -ne $count) { throw "a move changed the number of items ($count -> $($items.Count))" }
+  return $true
+}
+
 # the list (other than $except) holding most of these ids: where an open list went when renamed outside
 function Find-ListWithIds([string]$listsDir, $ids, [string]$except) {
   $best = $null; $bestHits = 0
