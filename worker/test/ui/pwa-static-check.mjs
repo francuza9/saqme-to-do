@@ -107,6 +107,18 @@ let workerUp = false;
 try { workerUp = (await fetch(`${worker}/api/health`)).ok; } catch { /* not running */ }
 if (!workerUp) console.log(`  --   pairing skipped: no Worker at ${worker} (npm run dev)`);
 else {
+  // not paired, a list shared from elsewhere: this copy sends them to the invite's own page, and uses nothing up
+  const projects = (await (await fetch(`${worker}/api/sync`, { method: 'POST', headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' }, body: JSON.stringify({ deviceId: 'static-check', cursor: 0, changes: [{ kind: 'project', id: 'staticp1', fields: { name: { v: 'Static check', ts: Date.now(), base: -1 }, pos: { v: 'z0', ts: Date.now(), base: -1 } } }] }) })).json());
+  check(!!projects.cursor, 'a list on the Worker to share');
+  const inv = await (await fetch(`${worker}/api/shares/invite`, { method: 'POST', headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' }, body: JSON.stringify({ projectId: 'staticp1', alias: 'Static', access: 'view' }) })).json();
+  await page.click('.setting:has-text("Join a shared list") .btn');
+  await page.fill('#sheet input.field', inv.link);
+  await page.click('#sheet .btn.primary:has-text("Join")');
+  await page.waitForSelector('#sheet:has-text("Open the invite link instead")');
+  check(await page.isVisible(`#sheet a[href="${inv.link}"]`), 'not paired: a list from another address opens from its invite page');
+  await page.click('#sheet .btn:has-text("Not now")');
+  const claim = await fetch(`${worker}/api/shares/claim`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ code: inv.code }) });
+  check(claim.ok, 'and the invite was not used up');
   await page.fill('.field-row input', `${worker}/#pair=${token}`);
   await page.click('.field-row .btn.primary');
   await page.waitForSelector('#sheet:has-text("Sync with")');

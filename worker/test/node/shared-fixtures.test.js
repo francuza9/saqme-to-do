@@ -11,7 +11,7 @@ import {
   parseItems, formatItems, detectEol, setMissingIds, cleanTime, cleanText, cleanNotes, cleanProjectName, toFileName, isValidDate,
 } from '../../public/js/markdown.js';
 import * as model from '../../public/js/model.js';
-import { parsePairingLink } from '../../public/js/pairing.js';
+import { parsePairingLink, parseInviteLink, serverLabel } from '../../public/js/pairing.js';
 import { keyBetween, isValidKey, rekey } from '../../public/js/keys.js';
 import { normalizeText, normalizeNotes, isValidDate as serverValidDate } from '../../src/merge.js';
 import {
@@ -147,6 +147,8 @@ describe('text.json: value rules (every JavaScript copy)', () => {
   check('projectName', { 'markdown.cleanProjectName': cleanProjectName, 'model.cleanProjectName': model.cleanProjectName });
   check('fileName', { 'markdown.toFileName': toFileName });
   check('pairingLink', { 'pairing.parsePairingLink': (s) => parsePairingLink(s) });
+  check('inviteLink', { 'pairing.parseInviteLink': (s) => parseInviteLink(s) });
+  check('serverLabel', { 'pairing.serverLabel': (s) => serverLabel(s) });
 });
 
 // ---------------------------------------------------------------- the lists-folder engine

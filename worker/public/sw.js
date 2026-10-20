@@ -3,11 +3,11 @@
 // next launch without version bumps and the app still opens with no connection. /api is never cached.
 // Paths are relative to this file, so the app also works from a sub-folder (e.g. GitHub Pages).
 
-const CACHE = 'saqme-shell-v4';
+const CACHE = 'saqme-shell-v5';
 const SHELL = [
   './', 'css/tokens.css', 'css/app.css', 'fonts/FiraGO-Regular.ttf', 'fonts/FiraGO-Italic.ttf', 'fonts/FiraGO-Medium.ttf',
   'fonts/FiraGO-SemiBold.ttf', 'js/app.js', 'js/store.js', 'js/model.js', 'js/keys.js', 'js/dates.js', 'js/icons.js',
-  'js/markdown.js', 'js/pairing.js', 'js/zip.js', 'js/qr.js', 'js/theme.js', 'manifest.webmanifest', 'icons/glyph.png', 'icons/apple-touch-icon.png',
+  'js/markdown.js', 'js/pairing.js', 'js/zip.js', 'js/qr.js', 'js/theme.js', 'js/join.js', 'manifest.webmanifest', 'icons/glyph.png', 'icons/apple-touch-icon.png',
   'icons/icon-192.png', 'icons/favicon-64.png',
 ];
 const SCOPE = new URL('./', self.location).pathname;
@@ -43,6 +43,8 @@ async function networkFirst(request, cacheKey) {
 self.addEventListener('fetch', (event) => {
   const url = new URL(event.request.url);
   if (event.request.method !== 'GET' || url.origin !== self.location.origin || url.pathname.startsWith(`${SCOPE}api/`)) return;
+  // the invite page of a shared list (join.html) is a page of its own, never the app shell
+  if (/^\/join(\.html|\/)?$/.test(url.pathname.slice(SCOPE.length - 1))) return;
   const key = event.request.mode === 'navigate' ? SCOPE : url.pathname;
   event.respondWith(networkFirst(event.request, key));
 });

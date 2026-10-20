@@ -34,6 +34,10 @@ const ICONS = {
   cloudErr: S('<path d="M4.6 12.5h7a2.9 2.9 0 0 0 .4-5.8A4 4 0 0 0 4.3 7a2.8 2.8 0 0 0 .3 5.5z"/><path d="M8 7.3v2"/><circle cx="8" cy="11" r=".5" fill="currentColor"/>'),
   conflict: S('<path d="M8 2.5 14 13H2z"/><path d="M8 6.5v3"/><circle cx="8" cy="11.3" r=".5" fill="currentColor"/>'),
   phone: S('<rect x="4.5" y="1.5" width="7" height="13" rx="1.8"/><path d="M7.2 12.3h1.6"/>'),
+  people: S('<circle cx="6" cy="5.6" r="2.2"/><path d="M2 13c.3-2.3 1.9-3.7 4-3.7s3.7 1.4 4 3.7"/><path d="M10.4 3.6a2.1 2.1 0 1 1 .5 4.1M11.6 9.5c1.3.4 2.2 1.6 2.4 3.5"/>'),
+  share: S('<circle cx="11.8" cy="3.8" r="1.8"/><circle cx="4.2" cy="8" r="1.8"/><circle cx="11.8" cy="12.2" r="1.8"/><path d="m5.8 7.1 4.4-2.4M5.8 8.9l4.4 2.4"/>'),
+  leave: S('<path d="M6.5 2.5H3.5a1 1 0 0 0-1 1v9a1 1 0 0 0 1 1h3"/><path d="M10 5l3 3-3 3M13 8H6"/>'),
+  eye: S('<path d="M1.8 8s2.3-4.3 6.2-4.3S14.2 8 14.2 8s-2.3 4.3-6.2 4.3S1.8 8 1.8 8z"/><circle cx="8" cy="8" r="1.8"/>'),
 };
 
 const cache = new Map();

@@ -1,0 +1,52 @@
+<!doctype html>
+<html lang="en" data-theme="dark">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>Join a shared list · Saqme To Do</title>
+  <!-- the page an invite link opens (worker/src/shares.js); the same policy as the app (worker/public/_headers) -->
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'self'; base-uri 'none'; form-action 'none'">
+  <meta name="color-scheme" content="dark light">
+  <meta name="referrer" content="no-referrer">
+  <meta name="robots" content="noindex">
+  <link rel="icon" type="image/png" href="icons/favicon-64.png">
+  <link rel="stylesheet" href="css/tokens.css">
+  <link rel="stylesheet" href="css/app.css">
+  <script src="js/theme.js"></script>
+  <script type="module" src="js/join.js"></script>
+</head>
+<body>
+  <main id="app" class="card join-page">
+    <div class="welcome">
+      <img src="icons/apple-touch-icon.png" alt="">
+      <h1>Join a shared list</h1>
+      <p id="what">Someone shares a to-do list with you in Saqme To Do. It stays in step with theirs: what either of you changes shows up for the other.</p>
+      <div class="join-ways" id="ways" hidden>
+        <section class="join-way" aria-labelledby="wayBrowser">
+          <h2 id="wayBrowser">Use it now, in this browser</h2>
+          <p>Nothing to install, no account, no sync of your own. The list opens here and works offline too. On a phone, add the page to your Home Screen to keep it, and allow notifications to be reminded of its deadlines.</p>
+          <a class="btn primary" id="openBrowser" href="#">Use it in this browser</a>
+        </section>
+        <section class="join-way" aria-labelledby="wayApp">
+          <h2 id="wayApp">You have Saqme To Do</h2>
+          <p><b>On a computer</b> (Windows, macOS, Linux): Open in Saqme To Do; it asks before it joins. <b>On a phone</b>: Copy invite, open Saqme, then Settings › Sync › Join a shared list. Neither needs sync of your own.</p>
+          <div class="btn-row">
+            <a class="btn" id="openApp" href="#">Open in Saqme To Do</a>
+            <button class="btn" id="copy" type="button">Copy invite</button>
+          </div>
+        </section>
+        <section class="join-way" aria-labelledby="wayInstall">
+          <h2 id="wayInstall">Install Saqme To Do</h2>
+          <p>Free and open source: your lists are plain markdown files on your computer, no account needed. Install it with one command, then open this link again and choose Open in Saqme To Do.</p>
+          <p class="join-cmd"><b>Windows</b>, in PowerShell:<br><code>powershell -NoProfile -ExecutionPolicy Bypass -Command "irm https://raw.githubusercontent.com/francuza9/saqme-to-do/main/scripts/setup.ps1 | iex"</code></p>
+          <p class="join-cmd"><b>macOS, Linux</b>, in a terminal:<br><code>curl -fsSL https://raw.githubusercontent.com/francuza9/saqme-to-do/main/scripts/setup.sh | bash</code></p>
+          <a class="btn" href="https://github.com/francuza9/saqme-to-do/blob/main/docs/setup.md" target="_blank" rel="noopener noreferrer">Install instructions</a>
+          <p>Started in the browser already? Its list menu has <b>Move to my Saqme app</b>: the list moves over with no new invite.</p>
+        </section>
+      </div>
+      <p id="note" class="join-note">The invite works once: whoever uses it first joins.</p>
+      <p id="status" role="status" aria-live="polite"></p>
+    </div>
+  </main>
+</body>
+</html>

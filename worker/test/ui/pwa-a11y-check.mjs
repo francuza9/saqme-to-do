@@ -66,6 +66,32 @@ for (const scheme of ['dark', 'light']) {
   await page.keyboard.press('Escape');
   await page.click('#logo'); await page.waitForTimeout(200); await axe(page, `${scheme} settings`);
   await page.click('text=Recently deleted'); await page.waitForTimeout(200); await axe(page, `${scheme} recently deleted`);
+  await page.click('#logo'); await page.waitForSelector('.row');
+  await page.dispatchEvent('.tab.active', 'contextmenu');
+  await page.click('#sheet .menu-item:has-text("Share")');
+  await page.waitForSelector('#sheet:has-text("Shared with")'); await page.waitForTimeout(300);
+  await axe(page, `${scheme} share sheet`);
+  await page.keyboard.press('Escape');
+  await ctx.close();
+}
+// shared lists, for someone without Saqme: the invite page, joining in the browser, a view-only list
+const IPHONE_UA = 'Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1';
+for (const scheme of ['dark', 'light']) {
+  const inv = await (await fetch(`${base}/api/shares/invite`, {
+    method: 'POST', headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' }, body: JSON.stringify({ projectId: projects.Work, alias: `a11y ${scheme}`, access: 'view' }),
+  })).json();
+  const ctx = await phone(scheme, { userAgent: IPHONE_UA });
+  const page = await ctx.newPage();
+  await page.goto(inv.link);
+  await page.waitForSelector('#ways:not([hidden])');
+  await axe(page, `${scheme} invite page`);
+  await page.click('#openBrowser');
+  await page.waitForSelector('#sheet:has-text("Join shared list?")');
+  await axe(page, `${scheme} join sheet`);
+  await page.click('#sheet .btn.primary');
+  await page.waitForSelector('.row');
+  await page.waitForTimeout(300);
+  await axe(page, `${scheme} view-only shared list`);
   await ctx.close();
 }
 {

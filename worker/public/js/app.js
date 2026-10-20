@@ -9,7 +9,7 @@ import {
 import { parseDue, dueLabel, dueLong, dueTone, quickDates } from './dates.js';
 import { icon, STATUS_GLYPH } from './icons.js';
 import { makeZip, readZip } from './zip.js';
-import { parsePairingLink, normalizePairingCode } from './pairing.js';
+import { parsePairingLink, normalizePairingCode, parseInviteLink, serverLabel } from './pairing.js';
 
 // Inside another site's frame the app does not start: a page could trick taps onto it (clickjacking). The
 // Worker forbids framing with a header; a copy on a static host (GitHub Pages) can only do it here.
@@ -128,6 +128,46 @@ function render() {
   if (fk && (document.activeElement === document.body || !document.activeElement?.isConnected)) focusKey(fk);
 }
 
+// ---------------------------------------------------------------- shared lists
+// A list someone shares with this device ("with me": its binding, from the store or, in the Linux/macOS window,
+// from the local app), or one of this device's own lists it shares with others ("by me"). docs/sync.md.
+function sharing(projectId) {
+  const s = store.shareOf(projectId) ?? ui.local?.shares?.find((x) => x.projectId === projectId);
+  if (s) return { withMe: s };
+  if (store.sharedByMe(projectId) || ui.local?.sharedByMe?.includes(projectId)) return { byMe: true };
+  return null;
+}
+const readOnly = (projectId) => sharing(projectId)?.withMe?.access === 'view';
+const hostOf = (server) => { try { return new URL(server).host; } catch { return server || location.host; } };
+/**
+ * A list's name as shown: one shared with this device whose name another list here has says whose it is,
+ * "Groceries (from nuca)". (In the Linux/macOS window it is the file's name, which already does.)
+ */
+function listName(p) {
+  const name = p.fields.name.v;
+  const sh = store.shareOf(p.id);
+  if (!sh) return name;
+  const lower = name.toLowerCase();
+  const clash = store.projects().some((x) => x.id !== p.id && x.fields.name.v.toLowerCase() === lower && (store.shareOf(x.id)?.server ?? '') !== sh.server);
+  return clash ? `${name} (from ${serverLabel(sh.server)})` : name;
+}
+/** A list used here in the browser from its owner's address (no sync of one's own), not through a sync service. */
+const inBrowser = (sh) => !ui.local && sh?.via === 'direct';
+const ACCESS = {
+  edit: { name: 'Can edit', help: 'They can add, change, check off and delete tasks in this list.' },
+  view: { name: 'Can view', help: 'They see the list and its updates, but can\'t change anything.' },
+};
+const SHARE_NEEDS_SYNC = 'Sharing needs sync with your own Cloudflare account (Settings, Sync): a shared list lives on your sync service, where the people you share it with sync it from.';
+const canShare = () => (ui.local ? !!ui.local.cloud : !!store.meta.token);
+
+/** The local app's API for the Linux/macOS window, the phone app's own server otherwise. */
+const shareApi = {
+  list: (pid) => api(ui.local ? `local/shares?project=${pid}` : `shares?project=${pid}`),
+  invite: (pid, alias, access) => api(ui.local ? 'local/shares/invite' : 'shares/invite', { projectId: pid, alias, access }),
+  update: (id, access) => api(ui.local ? 'local/shares/update' : 'shares/update', { id, access }),
+  revoke: (id) => api(ui.local ? 'local/shares/revoke' : 'shares/revoke', { id }),
+};
+
 // ---------------------------------------------------------------- tabs
 function renderTabs() {
   const cur = currentProject();
@@ -135,8 +175,13 @@ function renderTabs() {
   const tabs = store.projects().map((p) => {
     const n = openCount(tasks, p.id);
     const isCur = cur && p.id === cur.id;
-    const t = h('button', { class: `tab${isCur ? ' active' : ''}`, dataset: { id: p.id, fk: `tab:${p.id}` }, 'aria-current': isCur ? 'page' : null },
-      h('span', { class: 'name' }, p.fields.name.v), n ? h('span', { class: 'count' }, n, h('span', { class: 'sr-only' }, ' open')) : null);
+    const sh = sharing(p.id);
+    const shTitle = sh?.withMe ? `Shared with you · ${ACCESS[sh.withMe.access]?.name ?? ''}` : sh ? 'Shared' : '';
+    const t = h('button', { class: `tab${isCur ? ' active' : ''}`, dataset: { id: p.id, fk: `tab:${p.id}` }, 'aria-current': isCur ? 'page' : null, title: shTitle || null },
+      h('span', { class: 'name' }, listName(p)),
+      sh ? h('span', { class: 'shared-badge', 'aria-hidden': 'true' }, icon(sh.withMe?.access === 'view' ? 'eye' : 'people')) : null,
+      sh ? h('span', { class: 'sr-only' }, `, ${shTitle.toLowerCase()}`) : null,
+      n ? h('span', { class: 'count' }, n, h('span', { class: 'sr-only' }, ' open')) : null);
     t.addEventListener('click', () => {
       if (ui.view === 'list' && ui.project === p.id) return;
       ui.view = 'list';
@@ -146,6 +191,7 @@ function renderTabs() {
       els.list.scrollTop = 0;
     });
     t.addEventListener('dblclick', () => tabMenu(p.id));
+    t.addEventListener('contextmenu', (e) => { e.preventDefault(); commitAll(); tabMenu(p.id); });
     onLongPress(t, () => tabMenu(p.id));
     return t;
   });
@@ -162,13 +208,273 @@ function tabMenu(id) {
   if (!p) return;
   const list = store.projects();
   const i = list.findIndex((x) => x.id === id);
-  sheet(p.fields.name.v, [
-    menuItem('edit', 'Rename', () => projectNameSheet(id)),
+  const moves = [
     i > 0 && menuItem('back', 'Move left', () => store.moveProject(id, -1)),
     i < list.length - 1 && menuItem('chevron', 'Move right', () => store.moveProject(id, 1)),
+  ];
+  const sh = sharing(id)?.withMe;
+  if (sh) {
+    // someone else's list: its name and its deletion are theirs; leaving takes it off this device only
+    sheet(listName(p), [
+      h('p', { class: 'sheet-note' }, `Shared with you from ${hostOf(sh.server)} · ${ACCESS[sh.access]?.name}. ${ACCESS[sh.access]?.help.replace('They', 'You').replace('they', 'you')}`),
+      ...moves,
+      inBrowser(sh) ? menuItem('share', 'Move to my Saqme app', () => moveToAppSheet(sh), { keepOpen: true }) : null,
+      h('div', { class: 'menu-sep' }),
+      menuItem('leave', 'Leave this list', () => confirmLeave(id), { danger: true }),
+    ]);
+    return;
+  }
+  sheet(p.fields.name.v, [
+    canShare() ? menuItem('share', 'Share…', () => shareSheet(id), { keepOpen: true })
+      : menuItem('share', 'Share…', () => {}, { disabled: true, hint: 'needs sync', title: SHARE_NEEDS_SYNC }),
+    menuItem('edit', 'Rename', () => projectNameSheet(id)),
+    ...moves,
     h('div', { class: 'menu-sep' }),
     menuItem('trash', 'Delete project', () => confirmDeleteProject(id), { danger: true }),
   ]);
+}
+
+function confirmLeave(projectId, share = null) {
+  const p = projectId ? store.get('project', projectId) : null;
+  const sh = share ?? sharing(projectId)?.withMe;
+  if (!sh) return;
+  const where = ui.local ? 'this computer' : inBrowser(sh) ? 'this browser' : 'this app (and your other phones paired with your sync)';
+  sheet(`Leave “${p ? listName(p) : sh.name}”?`, [
+    h('p', {}, `It goes from ${where}. Nothing changes in the owner's list. To see it here again, you need a new invite.`),
+    h('div', { class: 'btn-row' },
+      h('button', { class: 'btn', onclick: closeSheet }, 'Cancel'),
+      h('button', { class: 'btn primary', onclick: async () => {
+        closeSheet();
+        try {
+          // (its reminders end with the key, on the owner's server)
+          if (ui.local) { await api('local/leave', { id: sh.id }); await loadLocalInfo(); } else store.leaveShare(sh.id);
+          toast(`Left “${p?.fields.name.v ?? sh.name}”`);
+        } catch (e) { toast(`Could not leave: ${e.message}`); }
+        render();
+      } }, 'Leave')),
+  ]);
+}
+
+/** The owner's Share sheet: invite someone (one-time link), see who has it, change or end their access. */
+async function shareSheet(projectId) {
+  const p = store.get('project', projectId);
+  if (!p) return;
+  const state = { access: 'edit', invite: null, people: null, error: '' };
+  const name = h('input', { class: 'field', placeholder: 'Their name, e.g. Nuca', maxLength: 60, autocapitalize: 'words', 'aria-label': 'Their name (only you see it)', enterKeyHint: 'done' });
+  const draw = () => {
+    if (els.sheetWrap.hidden && state.drawn) return;   // closed meanwhile
+    state.drawn = true;
+    const accessPick = h('div', { class: 'segmented share-access', role: 'group', 'aria-label': 'Access' },
+      ...Object.entries(ACCESS).map(([v, a]) => h('button', {
+        class: v === state.access ? 'on' : '', 'aria-pressed': String(v === state.access), title: a.help, dataset: { fk: `access:${v}` },
+        onclick: () => { state.access = v; draw(); },
+      }, a.name)));
+    const create = async () => {
+      const alias = name.value.trim();
+      if (!alias) { name.classList.add('bad'); name.focus(); return; }
+      try {
+        state.invite = await shareApi.invite(projectId, alias, state.access);
+        name.value = '';
+        if (ui.local) loadLocalInfo();
+        else if (!store.sharedByMe(projectId)) store.setMeta({ shared: [...(store.meta.shared ?? []), projectId] });
+        await refresh();
+      } catch (e) { state.error = e.message; draw(); }
+    };
+    name.onkeydown = (e) => { if (e.key === 'Enter') { e.preventDefault(); create(); } };
+    name.oninput = () => name.classList.remove('bad');
+    const out = [
+      h('p', { class: 'sheet-note' }, 'They get a link that works once, for 24 hours. The list stays on your sync service; they sync it from there with a key that reaches this list only.'),
+      h('div', { class: 'field-row' }, name),
+      h('div', { class: 'field-row' }, accessPick),
+      h('p', { class: 'sheet-note' }, ACCESS[state.access].help),
+      h('div', { class: 'btn-row' }, h('button', { class: 'btn primary', onclick: create }, 'Create invite link')),
+      state.error ? h('div', { class: 'callout', role: 'alert' }, state.error) : null,
+    ];
+    if (state.invite) out.push(inviteBlock(state.invite));
+    out.push(h('h3', { class: 'sheet-label' }, 'Shared with'));
+    if (!state.people) out.push(h('p', { class: 'sheet-note' }, 'Loading…'));
+    else if (!state.people.length) out.push(h('p', { class: 'sheet-note' }, 'Nobody yet.'));
+    for (const s of state.people ?? []) out.push(personRow(s, refresh));
+    out.push(h('div', { class: 'btn-row' }, h('button', { class: 'btn', onclick: closeSheet }, 'Done')));
+    const focusName = document.activeElement === name;
+    sheet(`Share “${p.fields.name.v}”`, out);
+    if (focusName) name.focus();
+  };
+  const refresh = async () => {
+    try { state.people = (await shareApi.list(projectId)).shares; state.error = ''; } catch (e) { state.people = state.people ?? []; state.error = e.message; }
+    store.sync({ force: true });
+    draw();
+  };
+  draw();
+  name.focus();
+  await refresh();
+}
+
+/** The invite just made: its link (copy, QR on larger screens), and what it does. */
+function inviteBlock(inv) {
+  const box = h('input', { class: 'field', value: inv.link, readOnly: true, 'aria-label': 'Invite link', onfocus: (e) => e.target.select() });
+  const block = h('div', { class: 'invite' },
+    h('p', { class: 'sheet-note' }, h('b', {}, `Invite for ${inv.share.alias}`), ` · ${ACCESS[inv.share.access].name} · works once, until ${new Date(inv.expiresAt).toLocaleString([], { weekday: 'short', hour: '2-digit', minute: '2-digit' })}`),
+    h('div', { class: 'field-row' }, box, h('button', { class: 'btn primary', onclick: () => copyText(inv.link, 'Invite link copied') }, 'Copy')),
+    h('p', { class: 'sheet-note' }, 'Send it to them yourself (a message, an email). Whoever opens it first joins, so send it to them only.'));
+  if (matchMedia('(min-width: 560px) and (pointer: fine)').matches) {
+    import('./qr.js').then(({ qrMatrix, qrToSvg }) => {
+      const svg = qrToSvg(qrMatrix(inv.link, 'M'), { margin: 4, scale: 5 });
+      block.append(h('img', { class: 'qr', alt: 'QR code with the invite link', src: `data:image/svg+xml;charset=utf-8,${encodeURIComponent(svg)}` }));
+    }).catch(() => {});
+  }
+  return block;
+}
+
+/** One person a list is shared with: name, access (changeable), joined or invited, and revoke / cancel. */
+function personRow(s, refresh) {
+  const when = (ms) => new Date(ms).toLocaleDateString([], { day: 'numeric', month: 'short' });
+  const state = s.state === 'joined' ? `joined ${when(s.joinedAt)}` : s.state === 'pending' ? `invited ${when(s.createdAt)}, not joined yet` : 'invite expired';
+  const act = async (fn, done) => { try { await fn(); toast(done); } catch (e) { toast(e.message); } await refresh(); };
+  const access = h('div', { class: 'segmented small', role: 'group', 'aria-label': `Access for ${s.alias}` },
+    ...Object.entries(ACCESS).map(([v, a]) => h('button', {
+      class: v === s.access ? 'on' : '', 'aria-pressed': String(v === s.access), title: a.help,
+      onclick: () => { if (v !== s.access) act(() => shareApi.update(s.id, v), `${s.alias}: ${a.name.toLowerCase()}`); },
+    }, a.name)));
+  const end = s.state === 'joined'
+    ? h('button', { class: 'btn danger', title: 'Their key stops working now; the list stays on their device as their own copy.', onclick: () => act(() => shareApi.revoke(s.id), `${s.alias} no longer has the list`) }, 'Revoke')
+    : h('button', { class: 'btn', onclick: () => act(() => shareApi.revoke(s.id), s.state === 'pending' ? 'Invite cancelled' : 'Removed') }, s.state === 'pending' ? 'Cancel invite' : 'Remove');
+  return h('div', { class: 'person' },
+    h('div', { class: 'who' }, h('div', { class: 'what' }, s.alias), h('div', { class: 'sub' }, state)),
+    h('div', { class: 'btn-row' }, access, end));
+}
+
+/** Join a list someone shares: the invite link pasted (or found on the clipboard). */
+function joinSheet(prefill = '') {
+  const input = h('input', { class: 'field', value: prefill, placeholder: 'https://…/join#code=…', 'aria-label': 'Invite link', autocapitalize: 'off', autocomplete: 'off', spellcheck: false });
+  const go = () => {
+    const inv = parseInviteLink(input.value);
+    if (!inv) { input.classList.add('bad'); toast('That is not an invite link (it looks like https://…/join#code=…).'); return; }
+    confirmJoin(input.value.trim(), inv);
+  };
+  input.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); go(); } });
+  input.addEventListener('input', () => input.classList.remove('bad'));
+  const paste = navigator.clipboard?.readText ? h('button', { class: 'btn', onclick: async () => {
+    try { input.value = (await navigator.clipboard.readText()).trim(); input.classList.remove('bad'); } catch { toast('Paste it into the field instead.'); }
+  } }, 'Paste') : null;
+  sheet('Join a shared list', [
+    h('p', { class: 'sheet-note' }, ui.local || store.meta.token
+      ? 'Paste the invite link someone sent you. The list then shows here as a tab and stays in step with theirs.'
+      : 'Paste the invite link someone sent you. Without a sync of your own, this app opens lists of this address only; for any other, open the invite link itself and choose “Use it in this browser” there.'),
+    h('div', { class: 'field-row' }, input, paste),
+    h('div', { class: 'btn-row' }, h('button', { class: 'btn', onclick: closeSheet }, 'Cancel'), h('button', { class: 'btn primary', onclick: go }, 'Join')),
+  ]);
+  if (!prefill) input.focus();
+}
+
+/** Says whose server the list comes from before the one-time code is used up. */
+function confirmJoin(link, inv) {
+  const host = hostOf(inv.server);
+  if (!ui.local && !store.meta.token && inv.server !== location.origin) {
+    // no sync of its own: this app reaches its own address only (its security policy), so the list opens there
+    sheet('Open the invite link instead', [
+      h('p', {}, `This list is on ${host}. Without a sync of your own, open the invite link itself: its page has “Use it in this browser”, with nothing to install and no account. Or pair this app with your own sync first (Settings, Sync), then join here.`),
+      h('div', { class: 'btn-row' },
+        h('button', { class: 'btn', onclick: closeSheet }, 'Not now'),
+        h('a', { class: 'btn primary', href: `${inv.server}/join#code=${inv.code}`, rel: 'noreferrer' }, 'Open the invite')),
+    ]);
+    return;
+  }
+  const how = ui.local ? 'This computer syncs it with them directly.'
+    : store.meta.token ? `Your sync service (${hostOf(store.meta.server || location.origin)}) keeps it in step with theirs for this app and your other phones, and reminds you of its deadlines.`
+      : 'It stays in this browser: no account and no sync of your own needed. Later, the list\'s menu can move it to your Saqme app.';
+  sheet('Join shared list?', [
+    h('p', {}, `A list shared from ${host} shows here as a new tab. ${how} What you change in it goes to ${host}, which belongs to the person who shared it: they (and only they) can see your changes.`),
+    h('div', { class: 'btn-row' },
+      h('button', { class: 'btn', onclick: closeSheet }, 'Not now'),
+      h('button', { class: 'btn primary', onclick: async (e) => {
+        e.target.disabled = true;
+        try {
+          if (ui.local) {
+            const r = await api('local/join', { link });
+            closeSheet();
+            toast(`Joined “${r.name}”. It shows up in a few seconds.`);
+            setTimeout(loadLocalInfo, 2500);
+          } else {
+            const s = await store.joinShare(link);
+            closeSheet();
+            ui.view = 'list'; ui.project = s.projectId; ls.set('project', s.projectId);
+            toast(`Joined “${s.name}”`);
+            syncSharePush();
+          }
+          render();
+        } catch (err) { e.target.disabled = false; toast(err.message); }
+      } }, 'Join')),
+  ]);
+}
+
+/**
+ * "Move to my Saqme app" (a list used here in the browser): a one-time link for the same share. Another app of this
+ * person opens it like an invite and takes the list over (no new invite); this browser then stops syncing it.
+ */
+async function moveToAppSheet(sh) {
+  const p = store.get('project', sh.projectId);
+  const title = `Move “${p ? listName(p) : sh.name}” to your Saqme app`;
+  sheet(title, [h('p', { class: 'sheet-note', role: 'status' }, 'Getting a link…')]);
+  let m;
+  try {
+    await store.sync({ force: true });   // (what was changed here goes first)
+    m = await store.transferShare(sh.id);
+  } catch (e) {
+    if (e.ended) { closeSheet(); return; }   // (the store says what happened)
+    sheet(title, [h('p', {}, `Could not get a link: ${e.message}`), h('div', { class: 'btn-row' }, h('button', { class: 'btn primary', onclick: closeSheet }, 'OK'))]);
+    return;
+  }
+  const inv = parseInviteLink(m.link);
+  const box = h('input', { class: 'field', value: m.link, readOnly: true, 'aria-label': 'Move link', onfocus: (e) => e.target.select() });
+  const block = h('div', { class: 'invite' }, h('div', { class: 'field-row' }, box, h('button', { class: 'btn primary', onclick: () => copyText(m.link, 'Link copied') }, 'Copy')));
+  const computer = matchMedia('(pointer: fine)').matches;
+  if (computer) {
+    import('./qr.js').then(({ qrMatrix, qrToSvg }) => {
+      const svg = qrToSvg(qrMatrix(m.link, 'M'), { margin: 4, scale: 5 });
+      block.append(h('img', { class: 'qr', alt: 'QR code with the move link', src: `data:image/svg+xml;charset=utf-8,${encodeURIComponent(svg)}` }));
+    }).catch(() => {});
+  }
+  sheet(title, [
+    h('p', {}, 'Your Saqme app takes this list over, with its tasks and your access: no new invite needed. This browser stops syncing it then, and it goes from here.'),
+    h('ol', { class: 'steps' },
+      h('li', {}, h('b', {}, 'Saqme on this computer: '), 'Open in Saqme To Do (it asks first).'),
+      h('li', {}, h('b', {}, 'The phone app: '), 'copy the link, then in Saqme: Settings › Sync › Join a shared list.'),
+      h('li', {}, h('b', {}, 'Another computer: '), 'send yourself the link and open it there.')),
+    block,
+    h('p', { class: 'sheet-note' }, `The link works once, until ${new Date(m.expiresAt).toLocaleString([], { weekday: 'short', hour: '2-digit', minute: '2-digit' })}.`),
+    h('div', { class: 'btn-row' },
+      inv && computer ? h('a', { class: 'btn', href: `saqme://join?server=${encodeURIComponent(inv.server)}&code=${inv.code}` }, 'Open in Saqme To Do') : null,
+      h('button', { class: 'btn primary', onclick: closeSheet }, 'Done')),
+  ]);
+}
+
+/** #join=<code>: the join page's "Open in browser" (this copy of the app is served by the owner's server). */
+function readJoinLink() {
+  const m = /^#join=([A-Za-z0-9_-]{22,64})$/.exec(location.hash);
+  if (!m) return;
+  history.replaceState(null, '', location.pathname);
+  const link = `${location.origin}/#join=${m[1]}`;
+  const inv = parseInviteLink(link);   // (null for a copy served over plain http from elsewhere)
+  if (inv) confirmJoin(link, inv);
+}
+
+/**
+ * On open and when the app comes back: an invite link on the clipboard -> "Join shared list?". Only where the
+ * browser lets a page read the clipboard without asking (permission granted); elsewhere (iPhone) it is the
+ * Paste button in Settings › Sync › Join a shared list.
+ */
+async function checkClipboardForInvite() {
+  if (ui.local || !navigator.clipboard?.readText || !els.sheetWrap.hidden) return;
+  try {
+    const perm = await navigator.permissions?.query({ name: 'clipboard-read' });
+    if (perm?.state !== 'granted') return;
+    const text = (await navigator.clipboard.readText()).trim();
+    const inv = parseInviteLink(text);
+    if (!inv || ls.get(`invite.${inv.code.slice(0, 12)}`)) return;
+    ls.set(`invite.${inv.code.slice(0, 12)}`, 'offered');
+    confirmJoin(text, inv);
+  } catch { /* not allowed here */ }
 }
 
 function projectNameSheet(id) {
@@ -219,7 +525,7 @@ function statusText() {
   const st = store.status;
   const pending = store.pendingCount();
   switch (st.state) {
-    case 'unpaired': return 'Not paired — changes stay on this device';
+    case 'unpaired': return browserShares().length ? 'Not paired — the lists shared with you here sync with their owner, your own lists stay on this device' : 'Not paired — changes stay on this device';
     case 'syncing': return 'Syncing…';
     case 'offline': return `Offline${pending ? ` · ${pending} change${pending > 1 ? 's' : ''} waiting` : ''}`;
     case 'error': return `Sync error: ${st.message}`;
@@ -234,15 +540,15 @@ function renderStatus() {
   els.sync.replaceChildren(icon(name));
   els.sync.title = statusText();
   els.sync.setAttribute('aria-label', statusText());
-  const n = store.conflicts().length;
+  const n = store.conflicts().length + allNotices().length;
   els.conflicts.hidden = n === 0;
   els.conflicts.replaceChildren(icon('conflict'), h('span', {}, n));
-  els.conflicts.title = `${n} sync conflict${n === 1 ? '' : 's'}`;
+  els.conflicts.title = `${n} sync conflict${n === 1 ? '' : 's'} or change${n === 1 ? '' : 's'} not saved`;
 }
 
 // ---------------------------------------------------------------- main view
 function renderMain() {
-  const showAdd = ui.view === 'list' && !!currentProject() && !showWelcome();
+  const showAdd = ui.view === 'list' && !!currentProject() && !showWelcome() && !readOnly(currentProject().id);
   els.addBar.hidden = !showAdd;
   if (ui.view === 'list' && showWelcome()) return renderWelcome();
   if (ui.view === 'settings') return renderSettings();
@@ -271,10 +577,21 @@ function renderTasks() {
   }
   if (store.saveError) frag.push(saveWarning());
   if (isIOS() && !isStandalone() && ls.get('installHint') !== 'off') frag.push(installHint());
+  const shared = sharing(proj.id)?.withMe;
+  if (shared) {
+    const st = store.shareStatus.get(shared.id) ?? shared.status;
+    const trouble = st?.state === 'paused' ? ' Not synced while this app is not paired: your sync service keeps it in step. Pair it again in Settings, Sync; what you change meanwhile waits here.'
+      : st && (st.state === 'offline' || st.state === 'error') ? ` Not synced right now: ${st.message || st.state}.` : '';
+    if (shared.access === 'view' || trouble) {
+      frag.push(h('div', { class: 'callout shared-note', role: trouble ? 'status' : null },
+        shared.access === 'view' ? h('b', {}, 'View only. ') : null,
+        `Shared with you from ${hostOf(shared.server)}.${shared.access === 'view' ? ' You see the changes as they are made, but can\'t change it.' : ''}${trouble}`));
+    }
+  }
   const tree = store.tree(proj.id);
   const { active, postponed, closed } = sections(tree);
   const draft = ui.editing?.draft;
-  const name = proj.fields.name.v;
+  const name = listName(proj);
   frag.push(h('h1', { class: 'sr-only' }, name));
   const list = (label, items) => (items.length ? h('div', { class: 'tasks', role: 'list', 'aria-label': label }, items) : null);
   const activeItems = [];
@@ -296,7 +613,7 @@ function renderTasks() {
     if (show) { const items = []; for (const n of closed) renderNode(items, n, 'closed'); frag.push(list('Completed', items)); }
   }
   if (!ui.visible.length && !draft) {
-    frag.push(h('div', { class: 'empty-state' }, 'No tasks here yet. Add one below.'));
+    frag.push(h('div', { class: 'empty-state' }, readOnly(proj.id) ? 'No tasks here yet.' : 'No tasks here yet. Add one below.'));
   }
   els.list.replaceChildren(...frag.filter(Boolean));
   if (ui.sel && !ui.visible.includes(ui.sel)) ui.sel = null;
@@ -350,6 +667,7 @@ function taskRow(node, section, draft = null) {
   const notes = t?.fields.notes.v ?? '';
   const open = node ? isOpen(node) : false;
   const depth = node ? node.depth : draft.depth;
+  const ro = !!t && readOnly(t.fields.place.v.project);   // a view-only shared list: read, never change
   // the row takes keyboard focus as one unit (arrow keys move it), and says what it is in one phrase
   const row = h('div', {
     class: `row${id && ui.sel === id ? ' sel' : ''}`, dataset: { id: id ?? '', fk: id ? `row:${id}` : '' }, style: { '--depth': String(depth) },
@@ -366,7 +684,7 @@ function taskRow(node, section, draft = null) {
 
   // grip: only for manually ordered (active) tasks, like the desktop; pointer only (the task menu moves tasks)
   const grip = h('span', { class: 'grip', 'aria-hidden': 'true' });
-  if (node && section === 'active' && rank(mark) === 0) {
+  if (node && section === 'active' && rank(mark) === 0 && !ro) {
     grip.append(icon('grip'));
     grip.addEventListener('pointerdown', (e) => startDrag(e, id, row));
   }
@@ -379,14 +697,17 @@ function taskRow(node, section, draft = null) {
   } else { chev.disabled = true; chev.setAttribute('aria-hidden', 'true'); chev.removeAttribute('aria-expanded'); }
   row.append(chev);
 
-  const chipBtn = h('button', { class: 'chip-btn', 'aria-label': `Status: ${st.name}`, 'aria-haspopup': 'dialog', dataset: { fk: id ? `chip:${id}` : '' } }, chip(mark));
-  if (node) chipBtn.addEventListener('click', () => { commitAll(); statusSheet(id); });
+  const chipBtn = ro
+    ? h('span', { class: 'chip-btn', role: 'img', 'aria-label': `Status: ${st.name}` }, chip(mark))
+    : h('button', { class: 'chip-btn', 'aria-label': `Status: ${st.name}`, 'aria-haspopup': 'dialog', dataset: { fk: id ? `chip:${id}` : '' } }, chip(mark));
+  if (node && !ro) chipBtn.addEventListener('click', () => { commitAll(); statusSheet(id); });
   row.append(chipBtn);
 
   // text and its meta line share one column, so long titles get the full width (docs/design.md)
   const main = h('div', { class: 'main' });
   const editingThis = draft || (ui.editing && ui.editing.id === id);
   if (editingThis) main.append(editor(node, draft));
+  else if (ro) main.append(h('span', { class: `text t-${st.key}${t.fields.text.v ? '' : ' empty'}` }, t.fields.text.v || 'Untitled'));
   else {
     // a button: tapping it (or Enter / Space on it) edits the text
     const text = h('button', { class: `text t-${st.key}${t.fields.text.v ? '' : ' empty'}`, dataset: { fk: `text:${id}` } }, t.fields.text.v || 'Untitled');
@@ -401,11 +722,11 @@ function taskRow(node, section, draft = null) {
       const tone = dueTone(due, rank(mark) === 2);
       const urgent = tone === 'over' || tone === 'soon';
       const shown = dueLabel(due.date) + (due.time ? ` ${due.time}` : '');
-      const b = h('button', {
-        class: urgent ? `pill ${tone}` : 'due', title: `Deadline: ${dueLong(due)}`, dataset: { fk: `due:${id}` }, 'aria-haspopup': 'dialog',
+      const b = h(ro ? 'span' : 'button', {
+        class: urgent ? `pill ${tone}` : 'due', title: `Deadline: ${dueLong(due)}`, dataset: { fk: ro ? '' : `due:${id}` }, 'aria-haspopup': ro ? null : 'dialog',
         'aria-label': `Deadline: ${shown}${tone === 'over' ? ', overdue' : ''}`,   // the state in words, not only in colour
       }, shown);
-      b.addEventListener('click', () => { commitAll(); dueSheet(id); });
+      if (!ro) b.addEventListener('click', () => { commitAll(); dueSheet(id); });
       meta.push(b);
     }
     if (hasKids) {
@@ -417,11 +738,11 @@ function taskRow(node, section, draft = null) {
   }
   row.append(main);
 
-  const more = h('button', { class: 'more', 'aria-label': 'Task menu', 'aria-haspopup': 'dialog', dataset: { fk: id ? `more:${id}` : '' } });
-  if (node) { more.append(icon('more')); more.addEventListener('click', () => { commitAll(); rowMenu(id); }); }
+  const more = ro ? h('span', { class: 'more', 'aria-hidden': 'true' }) : h('button', { class: 'more', 'aria-label': 'Task menu', 'aria-haspopup': 'dialog', dataset: { fk: id ? `more:${id}` : '' } });
+  if (node && !ro) { more.append(icon('more')); more.addEventListener('click', () => { commitAll(); rowMenu(id); }); }
   row.append(more);
 
-  if (node) {
+  if (node && !ro) {
     onLongPress(row, () => { commitAll(); rowMenu(id); });
     row.addEventListener('contextmenu', (e) => { e.preventDefault(); commitAll(); rowMenu(id); });
   }
@@ -475,7 +796,11 @@ function notesBlock(node) {
   return wrap;
 }
 
+/** A task of a view-only shared list: nothing about it can be changed here. */
+const roTask = (id) => { const t = store.get('task', id); return !!t && readOnly(t.fields.place.v.project); };
+
 function beginNotes(id) {
+  if (roTask(id)) return;
   commitAll();
   setOpen(id, true);
   const t = store.get('task', id);
@@ -530,7 +855,7 @@ function showEditor(editing) {
 }
 
 function beginEdit(id) {
-  if (ui.editing && ui.editing.id === id) return;
+  if ((ui.editing && ui.editing.id === id) || roTask(id)) return;
   commitAll();
   ui.sel = id;
   showEditor({ id });
@@ -720,22 +1045,24 @@ document.addEventListener('keydown', (e) => {
   else if (!e.shiftKey && (document.activeElement === last || !els.sheet.contains(document.activeElement))) { e.preventDefault(); first.focus(); }
 });
 
-function menuItem(iconName, label, fn, { danger = false, hint = '', current = false, keepOpen = false } = {}) {
+/** disabled + title: shown, but explains (in its tooltip and to screen readers) why it does nothing here. */
+function menuItem(iconName, label, fn, { danger = false, hint = '', current = false, keepOpen = false, disabled = false, title = '' } = {}) {
   return h('button', {
     class: `menu-item${danger ? ' danger' : ''}${current ? ' current' : ''}`, 'aria-current': current ? 'true' : null,
+    disabled, title: title || null, 'aria-description': title || null,
     onclick: () => { if (!keepOpen) closeSheet(); fn(); },
   }, typeof iconName === 'string' ? icon(iconName) : iconName, h('span', {}, label), hint ? h('span', { class: 'hint' }, hint) : null);
 }
 
 function statusSheet(id) {
   const t = store.get('task', id);
-  if (!t) return;
+  if (!t || roTask(id)) return;
   sheet(t.fields.text.v, STATUSES.map((s) => menuItem(chip(s.mark), s.name, () => store.setTask(id, { status: s.mark }), { current: s.mark === t.fields.status.v })));
 }
 
 function dueSheet(id) {
   const t = store.get('task', id);
-  if (!t) return;
+  if (!t || roTask(id)) return;
   const due = t.fields.due.v;
   const set = (v) => { store.setTask(id, { due: v }); closeSheet(); };
   const keepTime = (date) => ({ date, time: due?.time ?? '' });
@@ -766,14 +1093,14 @@ function dueSheet(id) {
 
 function rowMenu(id) {
   const t = store.get('task', id);
-  if (!t) return;
+  if (!t || roTask(id)) return;
   ui.sel = id;
   const ctx = nodeOf(id);
   const node = ctx?.node;
   const sibs = node ? (node.parent ? node.parent.kids : ctx.tree.roots) : [];
   const i = sibs.indexOf(node);
   const projectId = t.fields.place.v.project;
-  const others = store.projects().filter((p) => p.id !== projectId);
+  const others = store.projects().filter((p) => p.id !== projectId && !readOnly(p.id) && !(ui.local && sharing(p.id)?.withMe));
   sheet(t.fields.text.v, [
     menuItem('edit', 'Edit', () => beginEdit(id)),
     menuItem('calendar', 'Deadline…', () => dueSheet(id), { keepOpen: true }),
@@ -792,11 +1119,13 @@ function rowMenu(id) {
 
 function moveSheet(id) {
   const t = store.get('task', id);
-  const others = store.projects().filter((p) => p.id !== t.fields.place.v.project);
-  sheet('Move to project', others.map((p) => menuItem('move', p.fields.name.v, () => {
+  // (the Linux/macOS window moves tasks between its lists files; a shared one is synced by its own engine there,
+  // so a move into or out of one is a copy plus a delete, like here, but done by the lists folder: not offered)
+  const others = store.projects().filter((p) => p.id !== t.fields.place.v.project && !readOnly(p.id) && !(ui.local && sharing(p.id)?.withMe));
+  sheet('Move to project', others.map((p) => menuItem('move', listName(p), () => {
     store.moveTask(id, { projectId: p.id, parentId: null });
-    toast(`Moved to ${p.fields.name.v}`);
-  })));
+    toast(`Moved to ${listName(p)}`);
+  }, { hint: sharing(p.id)?.withMe ? 'shared' : '' })));
 }
 
 // ---------------------------------------------------------------- drag to reorder (grip handle)
@@ -902,18 +1231,20 @@ document.addEventListener('keydown', (e) => {
   const vis = ui.visible;
   const i = ui.sel ? vis.indexOf(ui.sel) : -1;
   const sel = ui.sel && store.get('task', ui.sel);
+  // (a view-only list: arrows and opening / closing work, changes do not)
+  const edit = sel && !roTask(sel.id) ? sel : null;
   const mod = e.ctrlKey || e.metaKey;
-  if (e.altKey && (e.key === 'ArrowUp' || e.key === 'ArrowDown') && sel) { e.preventDefault(); nudge(sel.id, e.key === 'ArrowUp' ? -1 : 1); return; }
-  if (mod && e.key.toLowerCase() === 'd' && sel) { e.preventDefault(); dueSheet(sel.id); return; }
-  if (mod && e.key.toLowerCase() === 'i' && sel) { e.preventDefault(); beginNotes(sel.id); return; }
-  if (mod && e.key.toLowerCase() === 'm' && sel) { e.preventDefault(); rowMenu(sel.id); return; }
+  if (e.altKey && (e.key === 'ArrowUp' || e.key === 'ArrowDown') && edit) { e.preventDefault(); nudge(edit.id, e.key === 'ArrowUp' ? -1 : 1); return; }
+  if (mod && e.key.toLowerCase() === 'd' && edit) { e.preventDefault(); dueSheet(edit.id); return; }
+  if (mod && e.key.toLowerCase() === 'i' && edit) { e.preventDefault(); beginNotes(edit.id); return; }
+  if (mod && e.key.toLowerCase() === 'm' && edit) { e.preventDefault(); rowMenu(edit.id); return; }
   if (mod && e.key.toLowerCase() === 'n') { e.preventDefault(); els.add.focus(); return; }
   if (mod) return;
   switch (e.key) {
     case 'ArrowDown': e.preventDefault(); if (vis.length) ui.sel = vis[Math.min(i + 1, vis.length - 1)]; break;
     case 'ArrowUp': e.preventDefault(); if (vis.length) ui.sel = vis[Math.max(i - 1, 0)]; break;
-    case 'Enter': if (sel) { e.preventDefault(); beginEdit(sel.id); } return;
-    case ' ': if (sel) { e.preventDefault(); store.setTask(sel.id, { status: rank(sel.fields.status.v) === 2 ? ' ' : 'x' }); } return;
+    case 'Enter': if (edit) { e.preventDefault(); beginEdit(edit.id); } return;
+    case ' ': if (edit) { e.preventDefault(); store.setTask(edit.id, { status: rank(edit.fields.status.v) === 2 ? ' ' : 'x' }); } return;
     case 'ArrowRight': if (sel) { setOpen(sel.id, true); } break;
     case 'ArrowLeft': if (sel) { setOpen(sel.id, false); } break;
     case 'Escape': ui.sel = null; break;
@@ -959,7 +1290,7 @@ function renderSettings() {
 
   out.push(label('Reminders'));
   const at = h('input', { class: 'time-input', type: 'time', value: store.setting('notifyAt', '10:00').padStart(5, '0'), 'aria-label': 'Daily summary time' });
-  at.addEventListener('change', () => { if (at.value) store.setSetting('notifyAt', `${+at.value.slice(0, 2)}:${at.value.slice(3, 5)}`); });
+  at.addEventListener('change', () => { if (at.value) { store.setSetting('notifyAt', `${+at.value.slice(0, 2)}:${at.value.slice(3, 5)}`); syncSharePush(); } });
   out.push(setting('Daily summary at', 'Tasks due today or overdue, one notification (shared with the desktop)', at));
   out.push(...notificationSettings());
 
@@ -974,13 +1305,15 @@ function renderSettings() {
       out.push(setting('Server', store.meta.server ? new URL(store.meta.server).host : location.host, h('button', { class: 'btn danger', title: turnOffHelp('device'), onclick: confirmUnpair }, 'Unpair')));
     } else out.push(pairingField());
   }
+  out.push(...sharedListSettings());
 
   out.push(label('Data'));
   if (store.saveError) out.push(saveWarning());
   out.push(setting('Export lists', 'Markdown files in a zip, the same format as the desktop app', h('button', { class: 'btn', onclick: exportLists }, 'Export')));
   out.push(setting('Import lists', 'Markdown files or a zip of them. Tasks already here are skipped.', h('button', { class: 'btn', onclick: importLists }, 'Import')));
   const n = store.conflicts().length;
-  out.push(linkRow('Conflicts', n ? `${n} change${n > 1 ? 's' : ''} made on two devices at once` : 'None', () => { ui.view = 'conflicts'; render(); }));
+  const nn = allNotices().length;
+  out.push(linkRow('Conflicts', [n ? `${n} change${n > 1 ? 's' : ''} made on two devices at once` : '', nn ? `${nn} not saved in a shared list` : ''].filter(Boolean).join(', ') || 'None', () => { ui.view = 'conflicts'; render(); }));
   out.push(linkRow('Recently deleted', 'Restore deleted tasks and projects', () => { ui.view = 'trash'; render(); }));
 
   out.push(label('About'));
@@ -990,6 +1323,26 @@ function renderSettings() {
       ? 'Saqme To Do. Your lists live in your own Cloudflare account; this device keeps a full offline copy and syncs in the background.'
       : 'Saqme To Do. Your lists are stored on this device only. Export them now and then, or pair with your own sync to keep a copy elsewhere.'));
   els.list.replaceChildren(...out);
+}
+
+/** Settings › Sync: join a list someone shares, and the lists shared with this device (each can be left). */
+function sharedListSettings() {
+  const out = [label('Shared lists')];
+  out.push(setting('Join a shared list', ui.local ? 'Paste the invite link someone sent you (or run saqme join LINK). Works without cloud sync too.'
+    : store.meta.token ? 'Paste the invite link someone sent you. Your sync service keeps the list for this app and your other phones.'
+      : 'Paste the invite link someone sent you. No sync of your own needed: open the invite link itself, and its page opens the list in this browser.',
+  h('button', { class: 'btn', onclick: () => joinSheet() }, 'Join…')));
+  const mine = ui.local ? (ui.local.shares ?? []) : store.shares();
+  for (const s of mine) {
+    const p = store.get('project', s.projectId);
+    const st = store.shareStatus.get(s.id) ?? s.status;
+    const status = st?.state === 'offline' || st?.state === 'error' || st?.state === 'paused' ? ` · ${st.message || st.state}` : '';
+    const where = inBrowser(s) ? ' · in this browser' : '';
+    const leave = h('button', { class: 'btn danger', onclick: () => confirmLeave(s.projectId, s) }, 'Leave');
+    out.push(setting(p && !ui.local ? listName(p) : (p?.fields.name.v ?? s.name), `From ${hostOf(s.server)} · ${ACCESS[s.access]?.name ?? s.access}${where}${status}`,
+      inBrowser(s) ? h('div', { class: 'btn-row' }, h('button', { class: 'btn', onclick: () => moveToAppSheet(s) }, 'Move to my Saqme app'), leave) : leave));
+  }
+  return out;
 }
 
 // ---------------------------------------------------------------- the Linux/macOS app (local server)
@@ -1133,8 +1486,23 @@ async function loadLocalInfo() {
   try {
     const cfg = await api('config');
     const was = JSON.stringify(ui.local);
+    const sharesWere = JSON.stringify([ui.local?.shares, ui.local?.sharedByMe, ui.local?.notices]);
     ui.local = cfg.local ?? null;
     if (JSON.stringify(ui.local) !== was && ui.view === 'settings' && !ui.editing) requestRender();
+    // lists shared with this computer (and by it) change tabs, badges and what can be edited: everywhere
+    else if (JSON.stringify([ui.local?.shares, ui.local?.sharedByMe, ui.local?.notices]) !== sharesWere) requestRender();
+    for (const ended of ui.local?.ended ?? []) {
+      if (ls.get(`ended.${ended.id}`)) continue;
+      ls.set(`ended.${ended.id}`, '1');
+      store.dispatchEvent(Object.assign(new Event('shareended'), { detail: ended }));
+    }
+    // a saqme://join link this computer was asked to open (`saqme invite`): ask here, once
+    const inv = ui.local?.invite && parseInviteLink(ui.local.invite.link);
+    if (inv && !ls.get(`invite.${inv.code.slice(0, 12)}`) && els.sheetWrap.hidden) {
+      ls.set(`invite.${inv.code.slice(0, 12)}`, 'offered');
+      api('local/invite/decline', {}).catch(() => {});
+      confirmJoin(ui.local.invite.link, inv);
+    }
   } catch { /* offline or not ours: keep what we had */ }
 }
 
@@ -1274,18 +1642,48 @@ function notificationSettings() {
   }
   const perm = Notification.permission;
   const on = perm === 'granted' && ls.get('push') === '1';
-  if (!store.meta.token) {
+  const browserOnly = !store.meta.token && browserShares().length > 0;   // reminders from the lists' owner's server
+  if (!store.meta.token && !browserOnly) {
     out.push(setting('Notifications', 'Pair this device first.', null));
   } else if (perm === 'denied') {
     out.push(setting('Notifications', 'Blocked. Allow them in iPhone Settings → Notifications → Saqme.', null));
   } else if (on) {
-    out.push(setting('Notifications', 'On for this device', h('button', { class: 'btn', onclick: testPush }, 'Send test')));
+    out.push(setting('Notifications', browserOnly ? 'On for the lists shared with you here' : 'On for this device', h('button', { class: 'btn', onclick: testPush }, 'Send test')));
     out.push(setting('', '', h('button', { class: 'btn danger', onclick: async () => { await disablePush(); render(); } }, 'Turn off')));
   } else {
-    out.push(setting('Notifications', isIOS() && !isStandalone() ? 'Install the app to the Home Screen first (Share → Add to Home Screen).' : 'Reminders 15 minutes before timed deadlines, and a daily summary.',
-      h('button', { class: 'btn primary', onclick: enablePush }, 'Enable')));
+    out.push(setting('Notifications', isIOS() && !isStandalone() ? 'Install the app to the Home Screen first (Share → Add to Home Screen).'
+      : browserOnly ? 'Reminders for the lists shared with you here: 15 minutes before timed deadlines, and a daily summary at your time. Their owner\'s sync service sends them; it learns this browser\'s push address and time zone.'
+        : 'Reminders 15 minutes before timed deadlines, and a daily summary.',
+    h('button', { class: 'btn primary', onclick: enablePush }, 'Enable')));
   }
   return out;
+}
+
+/** The lists used here in the browser from their owner's address (no sync of one's own). */
+const browserShares = () => (ui.local ? [] : store.shares().filter((s) => s.via === 'direct'));
+
+/**
+ * Reminders for those lists come from their owner's server: a push subscription made with each list's key, with this
+ * phone's time zone and summary time (sent again when either changes). Only while this app has no sync of its own:
+ * paired, its own server reminds of them (worker/src/remotes.js).
+ */
+async function syncSharePush({ quiet = true } = {}) {
+  if (store.meta.token || ls.get('push') !== '1' || !pushSupported() || Notification.permission !== 'granted') return;
+  const tz = Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC';
+  const notifyAt = store.setting('notifyAt', '10:00');
+  for (const s of browserShares()) {
+    if (s.push?.endpoint && s.push.tz === tz && s.push.notifyAt === notifyAt) continue;
+    try {
+      const reg = await navigator.serviceWorker.ready;
+      const cfg = await store.shareCall(s, 'config');
+      if (!cfg.vapidPublicKey) throw new Error('the list\'s sync service has no push keys');
+      let sub = await reg.pushManager.getSubscription();
+      if (!sub) sub = await reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: b64ToBytes(cfg.vapidPublicKey) });
+      await store.shareCall(s, 'push/subscribe', { subscription: sub.toJSON(), tz, notifyAt });
+      s.push = { endpoint: sub.endpoint, tz, notifyAt };
+      store.setMeta({ shares: store.shares() });
+    } catch (e) { if (!quiet && !e.ended) throw e; }
+  }
 }
 
 function b64ToBytes(s) {
@@ -1309,6 +1707,15 @@ async function enablePush() {
   // must be the first await-free call inside the tap handler, or iOS refuses to ask
   const permission = await Notification.requestPermission();
   if (permission !== 'granted') { toast('Notifications were not allowed'); render(); return; }
+  if (!store.meta.token) {
+    try {
+      ls.set('push', '1');
+      await syncSharePush({ quiet: false });
+      toast('Notifications are on');
+    } catch (e) { ls.set('push', '0'); toast(`Could not enable notifications: ${e.message}`); }
+    render();
+    return;
+  }
   try {
     const reg = await navigator.serviceWorker.ready;
     const cfg = await api('/api/config');
@@ -1332,6 +1739,11 @@ async function disablePush() {
     const sub = await reg?.pushManager.getSubscription();
     if (sub) {
       if (store.meta.token) await api('/api/push/unsubscribe', { endpoint: sub.endpoint }).catch(() => {});
+      for (const s of browserShares().filter((x) => x.push)) {
+        await store.shareCall(s, 'push/unsubscribe', { endpoint: sub.endpoint }).catch(() => {});
+        delete s.push;
+      }
+      store.setMeta({ shares: store.shares() });
       await sub.unsubscribe();
     }
   } catch { /* already gone */ }
@@ -1341,7 +1753,8 @@ async function testPush() {
   try {
     const reg = await navigator.serviceWorker.ready;
     const sub = await reg.pushManager.getSubscription();
-    const r = await api('/api/push/test', { endpoint: sub?.endpoint });
+    const viaShare = !store.meta.token && browserShares().find((s) => s.push);
+    const r = viaShare ? await store.shareCall(viaShare, 'push/test', { endpoint: sub?.endpoint }) : await api('/api/push/test', { endpoint: sub?.endpoint });
     toast(r.sent ? 'Test sent — it should arrive in a few seconds' : 'Nothing sent: this device is not subscribed any more');
   } catch (e) { toast(`Test failed: ${e.message}`); }
 }
@@ -1378,11 +1791,35 @@ function describe(field, v) {
   return v || '(empty)';
 }
 
+/** Changes a shared list's server did not take (the list became view-only, or its owner deleted it). */
+function allNotices() { return [...store.notices(), ...(ui.local?.notices ?? [])]; }
+
+function renderNotices(out) {
+  for (const n of allNotices()) {
+    const p = store.get('project', n.projectId);
+    const what = { text: 'Text', status: 'Status', due: 'Deadline', notes: 'Notes', deleted: 'Delete', new: 'New task' }[n.field] ?? n.field;
+    const value = n.field === 'deleted' ? 'Deleted' : describe(n.field, n.value);
+    out.push(h('div', { class: 'conflict-item' },
+      h('div', { class: 'what' }, n.text || 'Untitled'),
+      h('div', { class: 'sub' }, `Not saved · ${what} · in “${p?.fields.name.v ?? n.list ?? 'a shared list'}” · ${ago(n.at)}`),
+      h('div', { class: 'choice' }, h('div', { class: 'who' }, 'Your version, not saved'), value),
+      h('p', { class: 'sheet-note' }, n.reason === 'this shared list is view-only' ? 'The list is view-only for you, so the owner\'s version stays.' : `The owner's server did not take it: ${n.reason}.`),
+      h('div', { class: 'btn-row' },
+        h('button', { class: 'btn', onclick: () => copyText(String(n.field === 'deleted' ? n.text : value), 'Copied') }, 'Copy'),
+        h('button', { class: 'btn primary', onclick: async () => {
+          if (n.local) { try { await api('local/notices/dismiss', { id: n.id }); await loadLocalInfo(); } catch (e) { toast(e.message); } } else store.dismissNotice(n.id);
+          render();
+        } }, 'Dismiss'))));
+  }
+}
+
 function renderConflicts() {
   const out = [viewHeader('Conflicts', 'settings')];
   const list = store.conflicts();
-  if (!list.length) out.push(h('div', { class: 'empty-state' }, 'No conflicts. Edits made on two devices at the same time show up here.'));
-  else out.push(h('div', { class: 'callout' }, 'The same thing was changed on two devices before they synced. The newest change won; the other one is kept here so you can pick it instead.'));
+  const notices = allNotices();
+  if (!list.length && !notices.length) out.push(h('div', { class: 'empty-state' }, 'No conflicts. Edits made on two devices at the same time show up here.'));
+  else if (list.length) out.push(h('div', { class: 'callout' }, 'The same thing was changed on two devices before they synced. The newest change won; the other one is kept here so you can pick it instead.'));
+  renderNotices(out);
   for (const c of list) {
     const t = store.get('task', c.task);
     const cur = c.field === 'deleted' ? t.fields.deleted.v : t.fields[c.field]?.v;
@@ -1421,7 +1858,8 @@ function renderWelcome() {
       // (in the installed app the camera would open the link in the browser, not here)
       h('li', {}, isStandalone() ? 'Type the code it shows below.' : 'Type the code it shows below, or scan its QR code with the camera.'),
       isIOS() && !isStandalone() ? h('li', {}, 'On iPhone, add Saqme to the Home Screen first (', h('b', {}, 'Share'), ' › ', h('b', {}, 'Add to Home Screen'), '), open it from there and type the code in it.') : null),
-    pairingField()));
+    pairingField(),
+    h('p', {}, 'Someone sent you an invite to a shared list? ', h('button', { class: 'linkish', onclick: () => joinSheet() }, 'Join it'), '.')));
 }
 
 function pair(token, server = '') {
@@ -1480,9 +1918,30 @@ store.addEventListener('rejected', (e) => {
   toast(`Not saved${t ? ` (“${t.fields.text.v.slice(0, 40)}”)` : ''}: ${r.reason}`);
 });
 store.addEventListener('status', () => { renderStatus(); if (ui.view === 'settings' && !ui.editing) requestRender(); });
+store.addEventListener('readonly', () => toast('This list is view-only: only its owner can change it.'));
+store.addEventListener('shareended', (e) => {
+  const { name, kept, elsewhere, gone } = e.detail;
+  sheet(`“${name}” is no longer shared with you`, [
+    h('p', {}, gone ? 'Your sync service does not have it any more (it was set up again, or this app was paired with another one). It stays here as your own list; ask its owner for a new invite to share it again.'
+      : elsewhere ? 'Its owner stopped sharing it. Your other phone kept it as your own list, and it comes here with your sync: changes no longer go to them.'
+        : kept ? 'Its owner stopped sharing it. It stays here as your own list: changes no longer go to them, and theirs no longer come here.'
+          : 'Its owner stopped sharing it, and had deleted it.'),
+    h('div', { class: 'btn-row' }, h('button', { class: 'btn primary', onclick: closeSheet }, 'OK')),
+  ]);
+  render();
+});
+store.addEventListener('sharemoved', (e) => {
+  sheet(`“${e.detail.name}” moved to your Saqme app`, [
+    h('p', {}, 'Your Saqme app took this list over, so this browser no longer syncs it, and it is gone from here. Open it in Saqme from now on.'),
+    h('div', { class: 'btn-row' }, h('button', { class: 'btn primary', onclick: closeSheet }, 'OK')),
+  ]);
+  render();
+});
 store.addEventListener('savefailed', () => { requestRender(); announce('Changes are not saved on this phone right now.'); });
 store.addEventListener('saved', requestRender);
-window.addEventListener('hashchange', () => { readPairingLink(); readClaimLink(); });
+window.addEventListener('hashchange', () => { readPairingLink(); readClaimLink(); readJoinLink(); });
+document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') checkClipboardForInvite(); });
+window.addEventListener('focus', () => checkClipboardForInvite());
 setInterval(() => { if (document.visibilityState === 'visible' && !ui.editing) requestRender(); }, 60_000);   // relative dates
 
 if ('serviceWorker' in navigator) {
@@ -1497,13 +1956,18 @@ await store.open();
 navigator.storage?.persist?.().catch(() => {});
 readPairingLink();
 await readClaimLink();
+readJoinLink();
 if (!store.meta.token && !store.projects().length) {
   // served by the Linux/macOS app but opened by hand (a bookmark): say how to connect instead of offering sync
   try { ui.localUnpaired = (await (await fetch('api/health', { cache: 'no-store' })).json()).local === true; } catch { /* static host: no API */ }
 }
 render();
 loadLocalInfo();
+checkClipboardForInvite();
 // the local app's sync status, while its settings are on screen (a Worker's answer never changes: no polling there)
 setInterval(() => { if (ui.local && document.visibilityState === 'visible' && ui.view === 'settings') loadLocalInfo(); }, 5000);
+// (and its shared lists, less often, anywhere: access can change, a share can end, an invite link can come in)
+setInterval(() => { if (ui.local && document.visibilityState === 'visible' && ui.view !== 'settings') loadLocalInfo(); }, 3000);
 store.startAuto();
 syncTimeZone();
+syncSharePush();

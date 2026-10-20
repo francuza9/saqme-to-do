@@ -201,6 +201,66 @@ await page.tap('#sheet .btn.primary');
   await safari.close();
 }
 
+// shared lists: the owner shares Errands view-only; someone without Saqme opens the invite in their browser
+{
+  if (await page.isVisible('.view-header')) await page.tap('#logo');   // (from Settings back to the lists)
+  await page.tap('.tab:has-text("Errands")');
+  await page.dispatchEvent('.tab:has-text("Errands")', 'contextmenu');
+  await page.waitForSelector('#sheet .menu-item:has-text("Share")');
+  await page.tap('#sheet .menu-item:has-text("Share")');
+  await page.waitForSelector('#sheet:has-text("Shared with")');
+  await page.fill('#sheet input.field', 'Nuca');
+  await page.tap('#sheet [data-fk="access:view"]');
+  await page.tap('#sheet .btn.primary:has-text("Create invite link")');
+  await page.waitForSelector('#sheet .invite input');
+  const link = await page.inputValue('#sheet .invite input');
+  check(/\/join#code=[A-Za-z0-9_-]{22}$/.test(link), `Share: a one-time invite link (${link})`);
+  await page.waitForSelector('#sheet .person:has-text("not joined yet")');
+  check(await page.isVisible('#sheet .person:has-text("Nuca")'), 'Share: the person is listed, invited');
+  await page.tap('#sheet .btn:has-text("Done")');
+  await page.waitForTimeout(1500);   // (a sync brings the "shared" badge)
+  check(await page.isVisible('.tab:has-text("Errands") .shared-badge'), 'the shared list has a badge on its tab');
+
+  const guest = await browser.newContext({ ...devices['iPhone 14'], colorScheme: 'dark' });
+  const gp = await guest.newPage();
+  gp.on('pageerror', (e) => errors.push(e.message));
+  await gp.goto(link);
+  await gp.waitForSelector('#ways:not([hidden])');
+  const ways = await gp.textContent('#ways');
+  check(/Use it now, in this browser/.test(ways) && /no account/i.test(ways) && /Install Saqme To Do/.test(ways) && /curl -fsSL/.test(ways), 'join page: use it in the browser, open it in Saqme, or install Saqme');
+  await gp.tap('#openBrowser');
+  await gp.waitForSelector('#sheet:has-text("Join shared list?")');
+  check(/no account and no sync of your own/.test(await gp.textContent('#sheet')), 'in the browser: joining needs no account and no sync');
+  await gp.tap('#sheet .btn.primary:has-text("Join")');
+  await gp.waitForSelector('.tab:has-text("Errands")');
+  await gp.waitForSelector('.row', { timeout: 8000 }).catch(() => {});
+  check(await gp.isVisible('.callout.shared-note:has-text("View only")') && await gp.isHidden('#addBar'), 'a view-only list: says so, and no add bar');
+  check(await gp.isVisible('.tab:has-text("Errands") .shared-badge'), 'the person sees the badge too');
+  await gp.dispatchEvent('.tab:has-text("Errands")', 'contextmenu');
+  await gp.waitForSelector('#sheet .menu-item:has-text("Leave this list")');
+  check(!(await gp.isVisible('#sheet .menu-item:has-text("Delete")')) && !(await gp.isVisible('#sheet .menu-item:has-text("Rename")')), 'its menu: Leave instead of Delete, no Rename');
+  await gp.tap('#sheet .menu-item:has-text("Move to my Saqme app")');
+  await gp.waitForSelector('#sheet:has-text("works once")');
+  check(/\/join#code=/.test(await gp.inputValue('#sheet .invite input')), 'Move to my Saqme app: a one-time link for the same list');
+  await gp.tap('#sheet .btn.primary:has-text("Done")');
+  await gp.screenshot({ path: '/tmp/saqme-qa/ui-shared-guest.png' });
+
+  await page.dispatchEvent('.tab:has-text("Errands")', 'contextmenu');
+  await page.tap('#sheet .menu-item:has-text("Share")');
+  await page.waitForSelector('#sheet .person:has-text("joined")');
+  check(true, 'the owner sees them as joined');
+  await page.tap('#sheet .btn:has-text("Done")');
+
+  await gp.dispatchEvent('.tab:has-text("Errands")', 'contextmenu');
+  await gp.tap('#sheet .menu-item:has-text("Leave this list")');
+  await gp.tap('#sheet .btn.primary:has-text("Leave")');
+  await gp.waitForTimeout(300);
+  check((await gp.$$('.tab')).length === 0, 'leaving takes the list off the browser');
+  await guest.close();
+  await page.tap('#logo');   // back to Settings for what follows
+  await page.waitForSelector('.view-header');
+}
+
 // theme switch
 await page.tap('.segmented button:has-text("Light")');
 check((await page.getAttribute('html', 'data-theme')) === 'light', 'theme switch');

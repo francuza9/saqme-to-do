@@ -15,7 +15,12 @@
     "fileName (a project name -> its list file name; reserved device names and empty names get \"Project \" in front):",
     "  ConvertTo-FileName, markdown.js toFileName.",
     "pairingLink (a pairing link or a bare key -> {key, server}, or null: https only, plain http just on this computer,",
-    "  no user name in the address): desktop/sync-core.ps1 Get-PairingLink, worker/public/js/pairing.js parsePairingLink."
+    "  no user name in the address): desktop/sync-core.ps1 Get-PairingLink, worker/public/js/pairing.js parsePairingLink.",
+    "inviteLink (an invite to a shared list -> {server, code}, or null: https://<server>/join#code=..., https://<server>/#join=...",
+    "  or saqme://join?server=<encoded origin>&code=...; the same rules for the server as pairing links):",
+    "  desktop/sync-core.ps1 Get-InviteLink, worker/public/js/pairing.js parseInviteLink.",
+    "serverLabel (a sync server's short name, for a shared list whose name another list has: \"Groceries (from nuca)\"; the",
+    "  account part of a workers.dev address, else the host without www. or saqme.): Get-ServerLabel, pairing.js serverLabel."
   ],
   "cleanText": [
     ["  Call\tthe\r\nbank  ", "Call the bank"],
@@ -151,5 +156,43 @@
     ["https://saqme.me.workers.dev/#pair=tooshort", null],
     ["ftp://saqme.me.workers.dev/#pair=kkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkk", null],
     ["", null]
+  ],
+  "inviteLink": [
+    ["https://saqme.owner.workers.dev/join#code=cccccccccccccccccccccc", { "server": "https://saqme.owner.workers.dev", "code": "cccccccccccccccccccccc" }],
+    ["https://saqme.owner.workers.dev/join/#code=cc-cc_cccccccccccccccc", { "server": "https://saqme.owner.workers.dev", "code": "cc-cc_cccccccccccccccc" }],
+    ["https://saqme.owner.workers.dev/join?from=qr#code=cccccccccccccccccccccc", { "server": "https://saqme.owner.workers.dev", "code": "cccccccccccccccccccccc" }],
+    ["https://saqme.owner.workers.dev/#join=cccccccccccccccccccccc", { "server": "https://saqme.owner.workers.dev", "code": "cccccccccccccccccccccc" }],
+    ["https://saqme.owner.workers.dev#join=cccccccccccccccccccccc", { "server": "https://saqme.owner.workers.dev", "code": "cccccccccccccccccccccc" }],
+    ["  https://SAQME.owner.workers.dev:443/join#code=cccccccccccccccccccccc\n", { "server": "https://saqme.owner.workers.dev", "code": "cccccccccccccccccccccc" }],
+    ["saqme://join?server=https%3A%2F%2Fsaqme.owner.workers.dev&code=cccccccccccccccccccccc", { "server": "https://saqme.owner.workers.dev", "code": "cccccccccccccccccccccc" }],
+    ["saqme://join/?code=cccccccccccccccccccccc&server=https%3A%2F%2Fsaqme.owner.workers.dev%2F", { "server": "https://saqme.owner.workers.dev", "code": "cccccccccccccccccccccc" }],
+    ["http://localhost:8787/join#code=cccccccccccccccccccccc", { "server": "http://localhost:8787", "code": "cccccccccccccccccccccc" }],
+    ["saqme://join?server=http%3A%2F%2F127.0.0.1%3A8787&code=cccccccccccccccccccccc", { "server": "http://127.0.0.1:8787", "code": "cccccccccccccccccccccc" }],
+    ["http://saqme.owner.workers.dev/join#code=cccccccccccccccccccccc", null],
+    ["https://saqme.owner.workers.dev@evil.example/join#code=cccccccccccccccccccccc", null],
+    ["https://user:pw@saqme.owner.workers.dev/join#code=cccccccccccccccccccccc", null],
+    ["https://saqme.owner.workers.dev/other#code=cccccccccccccccccccccc", null],
+    ["https://saqme.owner.workers.dev/join#join=cccccccccccccccccccccc", null],
+    ["https://saqme.owner.workers.dev/join#code=short", null],
+    ["https://saqme.owner.workers.dev/join#code=cccccccccccccccccccccc&x=1", null],
+    ["https://saqme.owner.workers.dev/#pair=kkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkk", null],
+    ["saqme://join?server=https%3A%2F%2Fuser%40evil.example&code=cccccccccccccccccccccc", null],
+    ["saqme://join?server=http%3A%2F%2Fevil.example&code=cccccccccccccccccccccc", null],
+    ["saqme://join?server=https%3A%2F%2Fsaqme.owner.workers.dev%2Fpath&code=cccccccccccccccccccccc", null],
+    ["saqme://join?server=https%3A%2F%2Fsaqme.owner.workers.dev", null],
+    ["saqme://open", null],
+    ["", null]
+  ],
+  "serverLabel": [
+    ["https://saqme.nuca.workers.dev", "nuca"],
+    ["https://saqme-todo.nuca.workers.dev/", "nuca"],
+    ["https://nuca.workers.dev", "nuca"],
+    ["https://SAQME.Nuca.Workers.Dev", "nuca"],
+    ["https://todo.example.com", "todo.example.com"],
+    ["https://www.example.com", "example.com"],
+    ["https://saqme.example.org", "example.org"],
+    ["http://localhost:8787", "localhost:8787"],
+    ["not a link", "not a link"],
+    ["", ""]
   ]
 }

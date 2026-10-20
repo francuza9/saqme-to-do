@@ -24,6 +24,25 @@ describe('repository name', () => {
   });
 });
 
+describe('saqme:// links (invites to shared lists open the app)', () => {
+  const sh = read('scripts/setup.sh');
+  it('setup registers them on Windows, Linux and macOS, and removes them again', () => {
+    expect(read('scripts/setup.ps1')).toMatch(/\$p = "\$Reg\\Classes\\saqme"[\s\S]*'URL Protocol'/);
+    expect(sh).toMatch(/MimeType=x-scheme-handler\/saqme;/);
+    expect(sh).toMatch(/Exec="\$BIN" invite %u/);
+    // macOS: an AppleScript applet takes the link (a shell-script app cannot) and hands it to `saqme invite`
+    expect(sh).toMatch(/on open location theURL[\s\S]*" invite " & quoted form of theURL/);
+    expect(sh).toMatch(/CFBundleURLSchemes:0 string saqme/);
+    expect(sh).toMatch(/"\$LSREGISTER" -f "\$MAC_INVITE_APP"/);
+    expect(sh).toMatch(/"\$LSREGISTER" -u "\$MAC_INVITE_APP"[\s\S]*rm -rf "\$MAC_APP" "\$MAC_INVITE_APP"/);
+    expect(sh).toMatch(/install_mac_invite_handler\n/);
+  });
+  it('the invite page names the installers of this repository', () => {
+    expect(FILES).toContain('worker/public/join.html');
+    expect(references(read('worker/public/join.html')).map((r) => r.form)).toEqual(['raw', 'raw']);
+  });
+});
+
 describe('README images', () => {
   const readme = read('README.md');
   it('are plain <img> tags: the GitHub mobile app shows <picture> / srcset as a broken image', () => {

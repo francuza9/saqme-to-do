@@ -292,6 +292,35 @@ h2.completed-heading { margin: 0; font: inherit; }
 .sheet .steps li { margin: var(--space-2) 0; }
 .sheet img.qr { display: block; width: min(260px, 70vw); height: auto; margin: var(--space-2) auto var(--space-4); border-radius: var(--r-control); image-rendering: pixelated; }
 
+/* shared lists: the badge on a tab, the Share sheet (invite, people), the menu item that explains why not */
+.tab .shared-badge { display: inline-grid; align-self: center; color: var(--smoke); }
+.tab .shared-badge svg { width: 13px; height: 13px; }
+.tab.active .shared-badge { color: var(--violet); }
+.menu-item:disabled { opacity: .55; }
+.sheet p.sheet-note { margin: var(--space-1) var(--space-4) var(--space-3); font-size: var(--t-meta-size); line-height: var(--t-meta-line); }
+.sheet .sheet-label { margin: var(--space-5) var(--space-4) var(--space-2); color: var(--smoke); font-size: var(--t-small-size); line-height: var(--t-small-line); font-weight: 600; text-transform: uppercase; letter-spacing: .04em; }
+.sheet .share-access { margin: 0 auto 0 0; }
+.invite { margin: var(--space-3) var(--space-2) 0; padding: var(--space-2) 0; border-radius: var(--r-control); background: var(--note-bg); }
+.person { margin: 0 var(--space-2); padding: var(--space-3) var(--space-2); border-bottom: 1px solid var(--line); }
+.person .who { padding: 0 var(--space-2); }
+.person .what { overflow-wrap: anywhere; font-weight: 500; }
+.person .sub { margin-top: var(--space-1); color: var(--smoke); font-size: var(--t-meta-size); line-height: var(--t-meta-line); }
+.person .btn-row { align-items: center; }
+.segmented.small button { min-height: 32px; padding: var(--space-1) var(--space-3); font-size: var(--t-meta-size); }
+.linkish { color: var(--violet); font-weight: 600; text-decoration: underline; text-underline-offset: 2px; }
+/* join.html: the page an invite link opens */
+.join-page { overflow-y: auto; }
+.join-ways { display: flex; flex-direction: column; gap: var(--space-4); width: 100%; max-width: 460px; text-align: left; }
+.join-ways .btn, .sheet a.btn { text-decoration: none; }
+.join-way { display: flex; flex-direction: column; align-items: flex-start; gap: var(--space-2); padding: var(--space-4); border-radius: var(--r-control); background: var(--note-bg); }
+.join-way h2 { margin: 0; color: var(--ink); font-size: var(--t-body-size); line-height: var(--t-body-line); font-weight: 600; }
+.welcome .join-way p { margin: 0; color: var(--note-ink); }
+.welcome .join-way b { color: var(--ink); font-weight: 600; }
+.join-way .btn-row { display: flex; flex-wrap: wrap; gap: var(--space-2); }
+.join-cmd code { display: block; margin-top: var(--space-1); padding: var(--space-2); border-radius: var(--r-control); background: var(--surface); color: var(--ink); font-size: var(--t-small-size); line-height: var(--t-small-line); overflow-wrap: anywhere; user-select: all; -webkit-user-select: all; }
+.welcome .join-note { color: var(--smoke); font-size: var(--t-meta-size); line-height: var(--t-meta-line); }
+.text:not(button) { cursor: default; }   /* a view-only list's task: read, not edited */
+
 /* toast */
 .toast {
   position: fixed; left: 50%; bottom: calc(env(safe-area-inset-bottom) + 76px); z-index: 30; transform: translateX(-50%);
