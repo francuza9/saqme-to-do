@@ -7,6 +7,7 @@
 // Only open tasks count (to do, in progress, blocked). Times are wall-clock in the user's time zone.
 
 import { sendPush } from './push.js';
+import { pollRemotes, remoteDueTasks, pruneRemotes } from './remotes.js';
 
 const ACTIVE = new Set([' ', '/', '!']);
 const DAY = 1440;
@@ -131,6 +132,14 @@ function outcomeStatements(db, updates) {
     return db.prepare('UPDATE push_subscriptions SET failures = failures + 1 WHERE endpoint = ?1').bind(endpoint);
   });
 }
+// the same for the subscriptions made with a share's key (table share_push)
+function shareOutcomeStatements(db, shareId, updates) {
+  return updates.map(([kind, endpoint]) => {
+    if (kind === 'ok') return db.prepare('UPDATE share_push SET failures = 0 WHERE share_id = ?1 AND endpoint = ?2').bind(shareId, endpoint);
+    if (kind === 'gone') return db.prepare('DELETE FROM share_push WHERE share_id = ?1 AND endpoint = ?2').bind(shareId, endpoint);
+    return db.prepare('UPDATE share_push SET failures = failures + 1 WHERE share_id = ?1 AND endpoint = ?2').bind(shareId, endpoint);
+  });
+}
 
 async function loadSubs(env, only) {
   const q = 'SELECT endpoint, p256dh, auth FROM push_subscriptions';
@@ -150,48 +159,121 @@ export async function pushToAll(env, payload, { only } = {}) {
   return { sent: r.sent, failed: r.failed, subscriptions: subs.length };
 }
 
-/** Cron entry point. Cheap when nobody subscribed. */
-export async function runReminders(env, nowMs = Date.now()) {
-  const db = env.DB;
-  const subsCount = await db.prepare('SELECT count(*) AS n FROM push_subscriptions').first('n');
-  if (!subsCount) return { reminders: 0 };
-  const vapid = await loadVapid(env);
-  if (!vapid) return { reminders: 0 };
-  const [settingsRes, notifiedRes, subsRes] = await db.batch([
-    db.prepare('SELECT key, value FROM settings'),
-    db.prepare('SELECT key FROM notified WHERE at > ?1').bind(nowMs - 8 * 86_400_000),
-    db.prepare('SELECT endpoint, p256dh, auth FROM push_subscriptions'),
-  ]);
-  const settings = Object.fromEntries(settingsRes.results.map((r) => [r.key, r.value]));
-  const tz = settings.tz || 'UTC';
-  const today = localClock(tz, nowMs);
-  const horizon = new Date((dayNumber(today.date) + 1) * 86_400_000).toISOString().slice(0, 10);
-  const { results } = await db.prepare(
-    `SELECT t.id, t.text, t.status, t.due, t.due_time, p.name AS project
+/** tomorrow in `tz`, as YYYY-MM-DD: deadlines up to then can be due now */
+const horizonOf = (tz, nowMs) => new Date((dayNumber(localClock(tz, nowMs).date) + 1) * 86_400_000).toISOString().slice(0, 10);
+
+const DUE_TASKS = `SELECT t.id, t.text, t.status, t.due, t.due_time, p.name AS project
        FROM tasks t JOIN projects p ON p.id = t.project_id
-      WHERE t.due IS NOT NULL AND t.deleted = 0 AND p.deleted = 0 AND t.status IN (' ', '/', '!') AND t.due <= ?1`,
-  ).bind(horizon).all();
-  const tasks = results.map((r) => ({ id: r.id, text: r.text, status: r.status, due: r.due, dueTime: r.due_time, project: r.project }));
-  const notified = new Set(notifiedRes.results.map((r) => r.key));
-  const due = computeReminders(tasks, { tz, notifyAt: settings.notifyAt || '10:00', nowMs, notified, lastRun: 23 * 60 + 55 });   // the */5 cron's last run
+      WHERE t.due IS NOT NULL AND t.deleted = 0 AND p.deleted = 0 AND t.status IN (' ', '/', '!') AND t.due <= ?1`;
+const asTask = (r) => ({ id: r.id, text: r.text, status: r.status, due: r.due, dueTime: r.due_time, project: r.project });
+
+/**
+ * Sends what is due to `subs`, a handful per run (the free plan's per-invocation limits; the rest go 5 minutes
+ * later). Dedupe keys are claimed first, so overlapping runs can never notify twice; prefix: a namespace for them.
+ */
+async function deliver(db, vapid, due, subs, { prefix = '', budget, after, nowMs, outcomes }) {
   let count = 0;
-  const after = [];
-  // a handful per run keeps the cron inside the free plan's per-invocation limits; the rest go 5 minutes later
   for (const r of due.slice(0, 8)) {
-    // claim the keys first, so overlapping runs can never notify twice
+    if (budget.left < subs.length) break;
+    const keys = r.keys.map((k) => prefix + k);
     const claimed = await db.prepare(
       `INSERT INTO notified (key, at) SELECT value, ?2 FROM json_each(?1) WHERE true ON CONFLICT(key) DO NOTHING RETURNING key`,
-    ).bind(JSON.stringify(r.keys), nowMs).all();
-    if (!claimed.results.some((x) => x.key === r.keys[0])) continue;
-    const res = await sendToAll(vapid, subsRes.results, { title: r.title, body: r.body, tag: r.tag, sub: r.sub, url: '/' });
-    after.push(...outcomeStatements(db, res.updates));
+    ).bind(JSON.stringify(keys), nowMs).all();
+    if (!claimed.results.some((x) => x.key === keys[0])) continue;
+    budget.left -= subs.length;
+    const res = await sendToAll(vapid, subs, { title: r.title, body: r.body, tag: r.tag, sub: r.sub, url: '/' });
+    after.push(...outcomes(res.updates));
     if (!res.sent && res.failed) {
       // nothing got through: give the keys back so the next run tries again
       after.push(db.prepare('DELETE FROM notified WHERE key IN (SELECT value FROM json_each(?1))').bind(JSON.stringify(claimed.results.map((x) => x.key))));
     } else count++;
   }
+  return count;
+}
+
+/**
+ * Reminders of shared lists for the people who use them in the browser from this Worker's address (no Worker
+ * of their own): pushes to the subscriptions made with their share's key, with their own summary time and time
+ * zone, for that list only. Not for a share whose key is used through its person's own Worker (relayed in the
+ * last week): that one reminds them, and two would notify twice.
+ */
+async function shareReminders(env, vapid, nowMs, notified, budget, after) {
+  const db = env.DB;
+  const { results } = await db.prepare(
+    `SELECT sp.share_id, sp.endpoint, sp.p256dh, sp.auth, sp.tz, sp.notify_at, s.project_id FROM share_push sp JOIN shares s ON s.id = sp.share_id
+      WHERE s.revoked_at IS NULL AND s.token_hash IS NOT NULL AND (s.relayed_at IS NULL OR s.relayed_at < ?1)
+      ORDER BY sp.created_at DESC`,
+  ).bind(nowMs - 7 * 86_400_000).all();
+  const byShare = new Map();
+  for (const r of results) (byShare.get(r.share_id) ?? byShare.set(r.share_id, []).get(r.share_id)).push(r);
+  let count = 0;
+  for (const [shareId, subs] of byShare) {
+    if (budget.left < subs.length) break;
+    const { tz, notify_at: notifyAt, project_id: projectId } = subs[0];   // (the newest subscription's settings)
+    const { results: rows } = await db.prepare(`${DUE_TASKS} AND t.project_id = ?2`).bind(horizonOf(tz, nowMs), projectId).all();
+    const prefix = `s:${shareId}|`;
+    const mine = new Set([...notified].filter((k) => k.startsWith(prefix)).map((k) => k.slice(prefix.length)));
+    const due = computeReminders(rows.map(asTask), { tz, notifyAt, nowMs, notified: mine, lastRun: 23 * 60 + 55 });
+    count += await deliver(db, vapid, due, subs, { prefix, budget, after, nowMs, outcomes: (u) => shareOutcomeStatements(db, shareId, u) });
+  }
+  return count;
+}
+
+/**
+ * Cron entry point. Cheap when nobody subscribed. Your own reminders include the lists others share with you
+ * that your phones joined (src/remotes.js: their deadlines are read from their owners' Workers first).
+ */
+export async function runReminders(env, nowMs = Date.now()) {
+  const db = env.DB;
+  const [ownCount, shareCount] = await db.batch([
+    db.prepare('SELECT count(*) AS n FROM push_subscriptions'),
+    db.prepare('SELECT count(*) AS n FROM share_push'),
+  ]);
+  const own = ownCount.results[0].n;
+  const shared = shareCount.results[0].n;
+  if (!own && !shared) return { reminders: 0 };
+  const vapid = await loadVapid(env);
+  if (!vapid) return { reminders: 0 };
+  const budget = { left: 40 };   // subrequests this run may make (the free plan allows 50 per invocation)
+  const after = [];
+  let count = 0;
+  const notifiedRes = await db.prepare('SELECT key FROM notified WHERE at > ?1').bind(nowMs - 8 * 86_400_000).all();
+  const notified = new Set(notifiedRes.results.map((r) => r.key));
+  if (own) {
+    const polls = { left: Math.min(6, budget.left) };   // (at most 6 of them for reading shared lists)
+    const before = polls.left;
+    await pollRemotes(env, nowMs, polls);
+    budget.left -= before - polls.left;
+    const [settingsRes, subsRes] = await db.batch([
+      db.prepare('SELECT key, value FROM settings'),
+      db.prepare('SELECT endpoint, p256dh, auth FROM push_subscriptions'),
+    ]);
+    const settings = Object.fromEntries(settingsRes.results.map((r) => [r.key, r.value]));
+    const tz = settings.tz || 'UTC';
+    const horizon = horizonOf(tz, nowMs);
+    const { results } = await db.prepare(DUE_TASKS).bind(horizon).all();
+    const tasks = [...results.map(asTask), ...(await remoteDueTasks(env, horizon))];
+    const due = computeReminders(tasks, { tz, notifyAt: settings.notifyAt || '10:00', nowMs, notified, lastRun: 23 * 60 + 55 });   // the */5 cron's last run
+    count += await deliver(db, vapid, due, subsRes.results, { budget, after, nowMs, outcomes: (u) => outcomeStatements(db, u) });
+  }
+  if (shared) count += await shareReminders(env, vapid, nowMs, notified, budget, after);
   after.push(db.prepare('DELETE FROM notified WHERE at < ?1').bind(nowMs - 8 * 86_400_000));
   after.push(db.prepare('DELETE FROM push_subscriptions WHERE failures >= 500'));
+  after.push(db.prepare('DELETE FROM share_push WHERE failures >= 500'));
+  after.push(pruneRemotes(db, nowMs));
   await db.batch(after);
   return { reminders: count };
+}
+
+/** One-off push to the subscriptions of one share (its "Send test" button, in the browser). */
+export async function pushToShare(env, shareId, payload, { only } = {}) {
+  const vapid = await loadVapid(env);
+  if (!vapid) return { sent: 0, failed: 0, error: 'VAPID keys are not configured' };
+  const subs = (only
+    ? await env.DB.prepare('SELECT endpoint, p256dh, auth FROM share_push WHERE share_id = ?1 AND endpoint = ?2').bind(shareId, only).all()
+    : await env.DB.prepare('SELECT endpoint, p256dh, auth FROM share_push WHERE share_id = ?1').bind(shareId).all()).results;
+  const r = await sendToAll(vapid, subs, payload);
+  const stmts = shareOutcomeStatements(env.DB, shareId, r.updates);
+  if (stmts.length) await env.DB.batch(stmts);
+  return { sent: r.sent, failed: r.failed, subscriptions: subs.length };
 }

@@ -201,7 +201,8 @@ function makeConflict(taskId, field, loser, winner, deviceId, now) {
  * Mutates state, returns { touched: Map(key -> row), conflicts: [], rejected: [] }.
  */
 export function applyChanges(state, changes, { now, deviceId = '' }) {
-  const out = { touched: new Map(), conflicts: [], rejected: [] };
+  // movedOut: { task, project } for tasks that left a project (people it is shared with are told, src/sync.js)
+  const out = { touched: new Map(), conflicts: [], rejected: [], movedOut: [] };
   const ordered = changes
     .map((c, i) => ({ c, i, k: KIND_ORDER[c?.kind] ?? 9 }))
     .sort((a, b) => a.k - b.k || a.i - b.i)
@@ -268,6 +269,8 @@ function applyTask(state, row, ch, isNew, out, deviceId, now) {
     } else {
       const r = mergeField(row.fields.place, f.place, deviceId);
       if (r.take) {
+        const from = row.fields.place.v?.project;
+        if (!isNew && from && from !== p.project) out.movedOut.push({ task: row.id, project: from });
         row.fields.place = { v: p, ts: r.ts, dev: deviceId };
         state.parents.set(row.id, p.parent);
       }

@@ -34,12 +34,15 @@ const SQL = {
   settings: upsertSql('settings', SETTING_COLS, 'key'),
   conflictsNew: upsertSql('conflicts', CONFLICT_COLS, 'id', { ignore: true }),
   conflictsUpd: upsertSql('conflicts', CONFLICT_COLS, 'id'),
+  movedOut: `INSERT INTO moved_out (project_id, task_id, seq) SELECT json_extract(value, '$.project_id'), json_extract(value, '$.task_id'),
+    json_extract(value, '$.seq') FROM json_each(?1) WHERE true ON CONFLICT(project_id, task_id) DO UPDATE SET seq = excluded.seq`,
 };
 
 const metaMap = (rows) => Object.fromEntries(rows.map((r) => [r.key, r.value]));
 
-export async function loadState(db, changes) {
-  const taskIds = new Set();
+/** extraTaskIds: rows a shared list's request is checked against (parents, the tasks of conflicts). */
+export async function loadState(db, changes, extraTaskIds = []) {
+  const taskIds = new Set(extraTaskIds);
   const parentIds = new Set();
   const conflictIds = new Set();
   for (const c of changes) {
@@ -81,6 +84,7 @@ export async function writeState(db, expectedSeq, result, now) {
     else if (row.kind === 'conflict') lists.conflictsUpd.push(R.conflictToDb(row, seq));
   }
   const conflictsNew = result.conflicts.map((c) => R.conflictToDb(c, seq));
+  const movedOut = (result.movedOut ?? []).map((m) => ({ project_id: m.project, task_id: m.task, seq }));
   const stmts = [
     db.prepare(`INSERT INTO meta (key, value) SELECT 'lock', '1' WHERE (SELECT value FROM meta WHERE key = 'seq') IS NOT ?1`)
       .bind(String(expectedSeq)),
@@ -99,26 +103,43 @@ export async function writeState(db, expectedSeq, result, now) {
   };
   for (const [name, list] of Object.entries(lists)) push(SQL[name], list);
   push(SQL.conflictsNew, conflictsNew);
+  push(SQL.movedOut, movedOut);
   await db.batch(stmts);
   return seq;
 }
 
-export async function loadChangesSince(db, cursor) {
+/**
+ * Every row changed since `cursor`, in pages. scope = { projectId } (a shared list's key): only that project,
+ * its tasks and their conflicts, no settings, and for tasks that moved to another project just { gone: true }.
+ * extra: statements to run in the same batch; their results come back as `extra`.
+ */
+export async function loadChangesSince(db, cursor, { scope = null, extra = [] } = {}) {
   const q = (table) => db.prepare(`SELECT * FROM ${table} WHERE seq > ?1 ORDER BY seq LIMIT ?2`).bind(cursor, PAGE + 1);
-  const [t, p, s, c, meta] = await db.batch([
-    q('tasks'), q('projects'), q('settings'), q('conflicts'),
-    db.prepare(`SELECT key, value FROM meta WHERE key IN ('seq', 'db_id')`),
+  const none = db.prepare('SELECT 1 AS seq WHERE 0');
+  const queries = scope ? [
+    db.prepare('SELECT * FROM tasks WHERE project_id = ?3 AND seq > ?1 ORDER BY seq LIMIT ?2').bind(cursor, PAGE + 1, scope.projectId),
+    db.prepare('SELECT * FROM projects WHERE id = ?3 AND seq > ?1 ORDER BY seq LIMIT ?2').bind(cursor, PAGE + 1, scope.projectId),
+    none,
+    db.prepare(`SELECT c.* FROM conflicts c JOIN tasks t ON t.id = c.task_id WHERE t.project_id = ?3 AND c.seq > ?1
+                 ORDER BY c.seq LIMIT ?2`).bind(cursor, PAGE + 1, scope.projectId),
+    // (a device starting from 0 has nothing to forget)
+    db.prepare(`SELECT m.task_id AS id, m.seq FROM moved_out m WHERE m.project_id = ?3 AND m.seq > ?1 AND ?1 > 0
+                   AND NOT EXISTS (SELECT 1 FROM tasks t WHERE t.id = m.task_id AND t.project_id = ?3)
+                 ORDER BY m.seq LIMIT ?2`).bind(cursor, PAGE + 1, scope.projectId),
+  ] : [q('tasks'), q('projects'), q('settings'), q('conflicts'), none];
+  const [t, p, s, c, g, meta, ...extraResults] = await db.batch([
+    ...queries, db.prepare(`SELECT key, value FROM meta WHERE key IN ('seq', 'db_id')`), ...extra,
   ]);
   const m = metaMap(meta.results);
   let upTo = Number(m.seq ?? 0);
   let more = false;
-  for (const res of [t, p, s, c]) {
+  for (const res of [t, p, s, c, g]) {
     if (res.results.length > PAGE) { more = true; upTo = Math.min(upTo, res.results[PAGE].seq - 1); }
   }
   // keep responses small (CPU and memory on the free plan): stop after ~1.5 MB, at a seq boundary, but
   // always deliver at least the first seq so paging makes progress
   const sizes = new Map();
-  for (const res of [t, p, s, c]) {
+  for (const res of [t, p, s, c, g]) {
     for (const r of res.results) if (r.seq <= upTo) sizes.set(r.seq, (sizes.get(r.seq) ?? 0) + JSON.stringify(r).length);
   }
   let total = 0;
@@ -127,10 +148,13 @@ export async function loadChangesSince(db, cursor) {
     if (total > 1_500_000 && seqNo > Math.min(...sizes.keys())) { upTo = seqNo - 1; more = true; break; }
   }
   const pick = (res, fn) => res.results.filter((r) => r.seq <= upTo).map((r) => R.publicRow(fn(r)));
+  // a shared list's people don't learn which of the owner's devices recorded a conflict
+  const conflict = scope ? (r) => ({ ...R.conflictFromDb(r), device: '' }) : R.conflictFromDb;
   const changes = [
-    ...pick(p, R.projectFromDb), ...pick(s, R.settingFromDb), ...pick(t, R.taskFromDb), ...pick(c, R.conflictFromDb),
+    ...pick(p, R.projectFromDb), ...pick(s, R.settingFromDb), ...pick(t, R.taskFromDb), ...pick(c, conflict),
+    ...g.results.filter((r) => r.seq <= upTo).map((r) => ({ kind: 'task', id: r.id, seq: r.seq, gone: true })),
   ];
-  return { cursor: Math.max(upTo, 0), more, changes, dbId: m.db_id ?? '' };
+  return { cursor: Math.max(upTo, 0), more, changes, dbId: m.db_id ?? '', extra: extraResults };
 }
 
 const isStale = (e) => /UNIQUE constraint failed: meta\.key/i.test(String(e?.message ?? e));
@@ -139,7 +163,83 @@ export class HttpError extends Error {
   constructor(status, message) { super(message); this.status = status; }
 }
 
-export async function handleSync(env, body, { now = Date.now() } = {}) {
+// ---------------------------------------------------------------- shared lists
+// A request made with a shared list's key (src/shares.js) may only change tasks of that one project, and their
+// conflicts: never settings, the project itself (name, order, delete), or a task outside it. Moving a task in
+// or out is refused too: in would hand one of the owner's other tasks to the person, out would take a task
+// from the list into a project they cannot see. A key with view access changes nothing. Checked against the
+// same snapshot the merge uses, so a task the owner moves out meanwhile cannot slip through.
+const READ_ONLY = 'this shared list is view-only';
+const OUTSIDE = 'not in this shared list';
+const OWNER_ONLY = 'only the owner can change the list itself';
+
+/** The tasks a shared list's request must be checked against besides its own: parents, tasks of conflicts. */
+async function scopeExtraIds(db, changes) {
+  const ids = new Set();
+  const conflictIds = [];
+  for (const c of changes) {
+    if (c?.kind === 'task' && typeof c.fields?.place?.v?.parent === 'string') ids.add(c.fields.place.v.parent);
+    if (c?.kind === 'conflict' && typeof c.id === 'string') conflictIds.push(c.id);
+  }
+  if (conflictIds.length) {
+    const { results } = await db.prepare('SELECT task_id FROM conflicts WHERE id IN (SELECT value FROM json_each(?1))').bind(JSON.stringify(conflictIds)).all();
+    for (const r of results) ids.add(r.task_id);
+  }
+  return [...ids];
+}
+
+/**
+ * Splits a shared list's changes into what may be applied and what is refused. Refused rows that belong to the
+ * list go back to the device as they are (its copy reverts); nothing outside the list is ever sent back.
+ */
+export function scopeChanges(state, changes, scope) {
+  const allowed = [];
+  const rejected = [];
+  const canonical = new Map();
+  const inScope = (row) => row?.kind === 'task' && row.fields.place.v?.project === scope.projectId;
+  const project = state.rows.get(`project:${scope.projectId}`);
+  const refuse = (c, reason, field) => {
+    rejected.push({ kind: c?.kind, id: c?.id, ...(field ? { field } : {}), reason });
+    const key = `${c?.kind}:${c?.id}`;
+    const row = state.rows.get(key);
+    if (c?.kind === 'task' && inScope(row)) canonical.set(key, row);
+    if (c?.kind === 'project' && c.id === scope.projectId && project) canonical.set(key, project);
+    if (c?.kind === 'conflict' && row && inScope(state.rows.get(`task:${row.task}`))) canonical.set(key, row);
+  };
+  for (const c of changes) {
+    if (!c || typeof c !== 'object' || typeof c.id !== 'string') { allowed.push(c); continue; }   // normalizeChange says why
+    if (c.kind === 'setting' || c.kind === 'project') { refuse(c, scope.access === 'edit' ? OWNER_ONLY : READ_ONLY); continue; }
+    if (scope.access !== 'edit') { refuse(c, READ_ONLY); continue; }
+    if (!project || project.fields.deleted.v) { refuse(c, 'the owner deleted this list'); continue; }
+    if (c.kind === 'conflict') {
+      const row = state.rows.get(`conflict:${c.id}`);
+      if (row && !inScope(state.rows.get(`task:${row.task}`))) { refuse(c, OUTSIDE); continue; }
+      allowed.push(c);
+      continue;
+    }
+    if (c.kind !== 'task') { allowed.push(c); continue; }
+    const existing = state.rows.get(`task:${c.id}`);
+    if (existing && !inScope(existing)) { refuse(c, OUTSIDE); continue; }
+    const place = c.fields?.place;
+    if (place) {
+      const p = place.v;
+      if (!p || typeof p !== 'object' || p.project !== scope.projectId) { refuse(c, existing ? 'tasks cannot move out of a shared list' : OUTSIDE, 'place'); continue; }
+      const parent = p.parent ?? null;
+      if (parent !== null) {
+        const pr = state.rows.get(`task:${parent}`);
+        if (pr && !inScope(pr)) { refuse(c, OUTSIDE, 'place'); continue; }   // (a parent made in this batch is not loaded: fine)
+      }
+    }
+    allowed.push(c);
+  }
+  return { allowed, rejected, canonical };
+}
+
+/**
+ * scope: { projectId, access } when the request was made with a shared list's key (src/shares.js).
+ * extra: statements read in the same batch as the changes; annotate(results) -> fields to add to the response.
+ */
+export async function handleSync(env, body, { now = Date.now(), scope = null, extra = [], annotate = null } = {}) {
   if (!body || typeof body !== 'object') throw new HttpError(400, 'body must be a JSON object');
   const { deviceId } = body;
   if (typeof deviceId !== 'string' || !/^[A-Za-z0-9_.-]{1,64}$/.test(deviceId)) throw new HttpError(400, 'bad deviceId');
@@ -150,12 +250,23 @@ export async function handleSync(env, body, { now = Date.now() } = {}) {
 
   let rejected = [];
   let seqBefore = null;
+  let canonical = new Map();
   if (changes.length) {
+    const extraIds = scope ? await scopeExtraIds(env.DB, changes) : [];
     for (let attempt = 0; ; attempt++) {
-      const st = await loadState(env.DB, changes);
+      const st = await loadState(env.DB, changes, extraIds);
       seqBefore ??= Number(st.seq);
-      const res = applyChanges(st.state, changes, { now, deviceId });
-      rejected = res.rejected;
+      let todo = changes;
+      let refused = [];
+      if (scope) ({ allowed: todo, rejected: refused, canonical } = scopeChanges(st.state, changes, scope));
+      const res = todo.length ? applyChanges(st.state, todo, { now, deviceId }) : { touched: new Map(), conflicts: [], rejected: [], movedOut: [] };
+      rejected = [...refused, ...res.rejected];
+      if (scope) {
+        // the scope check above makes this impossible; never write outside the list even if it were not
+        for (const [key, row] of res.touched) {
+          if (row.kind !== 'conflict' && !(row.kind === 'task' && row.fields.place.v?.project === scope.projectId)) res.touched.delete(key);
+        }
+      }
       if (!res.touched.size && !res.conflicts.length) break;
       try {
         await writeState(env.DB, st.seq, res, now);
@@ -166,9 +277,12 @@ export async function handleSync(env, body, { now = Date.now() } = {}) {
       }
     }
   }
-  const out = await loadChangesSince(env.DB, cursor);
+  const { extra: extraResults, ...out } = await loadChangesSince(env.DB, cursor, { scope, extra });
+  // refused rows of the list come back as they are, so the device drops what it could not save
+  const sent = new Set(out.changes.map((r) => `${r.kind}:${r.id}`));
+  for (const [key, row] of canonical) if (!sent.has(key)) out.changes.push(row.kind === 'conflict' ? { ...row, device: '' } : R.publicRow(row));
   // a device that has seen more than this database holds: it was restored from a backup (D1 Time Travel).
   // Devices then start over from the server's state instead of skipping what was written since the restore
   const restored = seqBefore !== null ? cursor > seqBefore : out.cursor < cursor;
-  return { ...out, rejected, serverTime: now, ...(restored ? { restored: true } : {}) };
+  return { ...out, rejected, serverTime: now, ...(restored ? { restored: true } : {}), ...(annotate ? annotate(extraResults) : {}) };
 }
