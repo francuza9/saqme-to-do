@@ -300,7 +300,8 @@ function Install-Node {
   if (-not $winget) { Stop-Setup 'Node.js 22 or newer is missing and winget is not available.' "Install the LTS version from https://nodejs.org, then run: $(Get-SetupCommand '-CloudOnly')" }
   Write-Info 'winget installs it for all users, so Windows may ask for administrator approval.'
   if (-not (Confirm-Step 'Install Node.js LTS now with winget?')) { Stop-Setup 'Node.js is needed for the cloud part.' "Install it from https://nodejs.org (LTS), then run: $(Get-SetupCommand '-CloudOnly')" }
-  & $winget.Source install --id OpenJS.NodeJS.LTS -e --accept-source-agreements --accept-package-agreements
+  # | Out-Host: winget's output must not become this function's return value (the path to node)
+  & $winget.Source install --id OpenJS.NodeJS.LTS -e --accept-source-agreements --accept-package-agreements | Out-Host
   $env:Path = [Environment]::GetEnvironmentVariable('Path', 'Machine') + ';' + [Environment]::GetEnvironmentVariable('Path', 'User')
   $node = Find-Node
   if (-not $node) { Stop-Setup 'Node.js was installed but is not visible yet.' "Close this window, open a new one and run: $(Get-SetupCommand '-CloudOnly')" }
