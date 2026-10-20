@@ -1,7 +1,8 @@
 # Sync protocol and conflict rules
 
 Single user, several devices (desktop PCs, phones). The Worker is the meeting point and keeps the
-canonical state; every device works locally first and exchanges changes in the background.
+canonical state; every device works locally first and exchanges changes in the background. A list can also
+be shared with other people, who sync that one list from the owner's Worker ([Shared lists](#shared-lists)).
 
 ## Data model
 
@@ -116,6 +117,8 @@ State in `sync\state.json`:
 - **Planned** — for half an hour after a plan (step 4) rewrote lists: what they held before, per task
   field the plan changed and per task it brought into a list (see "Saves from an older copy").
 - **Missing** — when each list that vanished was first seen missing; **Guard** — the deletes held back.
+- **Notices** — what a shared list's server did not take; **Shared** — which of one's own lists are shared
+  (see [Shared lists](#shared-lists)). A shared list's engine keeps its state in `sync/shares/<id>.json`.
 
 One cycle:
 
@@ -216,6 +219,182 @@ Rows live in memory + IndexedDB. An edit sets the local value immediately and ad
 outbox entry of that row (keeping the first `base` if the field was already pending). After a response:
 fields whose outbox `ts` is unchanged are acknowledged and removed; rows from the server replace local
 ones, except for fields still pending in the outbox, which stay on top until they are sent.
+
+## Shared lists
+
+Everyone runs their own Worker with their own key; there is no central server. A shared list **lives on its
+owner's Worker**. The people it is shared with sync that one list from there, with a key of their own that
+reaches nothing else, next to (or without) their own sync.
+
+### The owner's side
+
+The owner shares a list from its tab (right-click or long-press > **Share…**; on Windows also the share icon
+that shows on the current tab while the mouse is over it). Sharing needs the owner's own sync, since the
+list must be on their Worker; without it the item is there but disabled, and says why.
+
+- **A name for the person** ("Nuca"), only ever shown to the owner, to recognise and revoke them later.
+- **Access:** *Can edit* (add, change, check off and delete tasks in this list) or *Can view* (see the list
+  and its updates, change nothing).
+- An **invite link**, `https://<owner's Worker>/join#code=<code>`: copied, shown, and as a QR code on the
+  desktop. The code is 128 random bits after the `#` (never in a server log), works **once**, for **24 hours**,
+  until claimed or cancelled.
+- The same view lists everyone the list is shared with: name, access (changeable), joined or invited and
+  when. **Revoke** ends a person's key at once; **Cancel invite** voids an unclaimed invite. Shared lists show
+  a small badge on their tab, for the owner and for the people they are shared with.
+
+Owner routes (owner's key): `POST /api/shares/invite { projectId, alias, access }`, `GET /api/shares?project=`,
+`POST /api/shares/update { id, access }`, `POST /api/shares/revoke { id }`. The owner's `/api/sync` responses
+add `shared: [project ids]` (lists with a person or an open invite), for the badge.
+
+### The invite and the key
+
+`POST /api/shares/claim { code }` (no key) answers `{ token, projectId, projectName, access, ownerUrl, kind }`
+once: it is a single `UPDATE … WHERE invite_code_hash = ? AND revoked_at IS NULL AND invite_expires_at > now
+RETURNING …`, so two claims cannot both win, and a wrong code reads one index entry and writes nothing. The D1
+table `shares` keeps SHA-256 digests only: of the invite code until it is claimed, of the person's 256-bit key
+afterwards. Revoking sets `revoked_at`; every request looks the key up, so it gets `401 { error: 'revoked' }`
+from the next request on. `POST /api/shares/leave` (with the person's key) ends their own key, nothing else.
+
+**Moving to another app** ("Move to my Saqme app", for a list used in the browser): `POST /api/shares/transfer`
+with the person's key makes a one-time **move code** for the same share (24 hours, the same link format). Claiming
+it answers `kind: 'move'` with a new key for that share; the old key's digest moves to `old_token_hash` and it gets
+`401 { error: 'transferred' }` from then on, so the browser copy stops syncing and goes. The owner still sees one
+person. Migration `0003_remotes.sql`.
+
+### What a shared list's key can do
+
+A request with a share key is scoped to its project, checked against the same D1 snapshot the merge uses
+(a task the owner moves out meanwhile cannot slip through):
+
+- `/api/sync` returns only that project, its tasks and their conflicts (with the recording device left out):
+  no settings, no other project, no other task. A task the owner moves to another list comes as
+  `{ kind: 'task', id, gone: true }` (table `moved_out`), so it leaves the person's copy without them
+  learning anything about where it went. The response adds `share: { projectId, access }`.
+- With **edit** access, changes to tasks of the list and their conflicts apply as usual. Refused, with the
+  list's own rows sent back as they are (so the device's copy reverts) and nothing outside the list ever sent:
+  a task outside the list (created, edited, deleted, or moved in), a task moved out, a parent outside the list,
+  the list itself (rename, order, delete: "only the owner can change the list itself"), settings, and
+  everything once the owner deleted the list.
+- With **view** access every change is refused ("this shared list is view-only") and nothing is written.
+- Its own **reminders** (for someone using the list in the browser from the owner's address): `GET /api/config`
+  and `POST /api/push/subscribe { subscription, tz, notifyAt } | unsubscribe | test` keep push subscriptions of
+  that share only (table `share_push`, at most 10), never the owner's. And `/api/shares/transfer` (above).
+- Every other route (pairing, sharing, the relay, settings) answers 403; a revoked key gets 401 everywhere.
+
+Covered by `worker/test/workers/shares.test.js`.
+
+### The relay: lists shared with a phone that has its own sync
+
+The phone app may talk to its own origin only (`connect-src 'self'`), so a paired app never calls an owner's
+Worker itself: **its own Worker does, server to server** (`worker/src/remotes.js`, table `remotes`), with the
+person's own key:
+
+- `POST /api/remotes/join { link }` claims the invite at the owner's and keeps the share key in D1; it answers
+  `{ remote: { id, server, projectId, name, access, state }, kind }` (never the key). A second key for a list
+  that is already there is given back (`/api/shares/leave`) and the answer is 409; so is an invite to one of its
+  own lists. A move code lands on the list the phones already have.
+- `POST /api/remotes/<id>/sync` takes a normal sync body and answers with the owner's answer and status;
+  `POST /api/remotes/<id>/leave` ends the key there and here. `POST /api/remotes/adopt { server, token, name }`
+  takes over a key the app had on its own (joined in the browser before it was paired).
+- Every `/api/sync` answer of the person's own Worker lists `remotes`, so their other phones add the list by
+  themselves. Leaving on one phone leaves on all of them (one key per person and list).
+- When it ends: `401 { error: 'revoked' | 'transferred' | 'left', convert }`. After a revoke the first phone to
+  ask gets `convert: true` and keeps the list as one of its own (new ids, as below); the others drop their copy
+  and get that one through their own sync. A list the Worker no longer has (404 "no such shared list": set up
+  again, or paired with another Worker) is kept as an own list too.
+- **Not an open proxy.** Only the person's own key works there (a share key gets 403). It calls three routes,
+  `/api/shares/claim`, `/api/sync` and `/api/shares/leave`, on an https origin checked at join: a host name with
+  a dot, no IP address (v4 in any notation, v6), no `localhost`, `.local`, `.internal` or `.home.arpa`, the
+  default port, no user name or password, nothing after the host. No redirects are followed, it gives up after
+  20 s, reads at most 4 MB, wants a JSON object, and sends nothing but the share key (and `x-saqme-relay: 1`).
+  The owner's status comes back unchanged (a 404 of the owner's comes back as 502, so it never reads as "no such
+  list here").
+
+Desktop apps (Windows, Linux, macOS) are not limited by a browser's policy and talk to owners' Workers directly.
+Someone using a list in the browser **from the owner's address** (no Saqme of their own) is on the owner's
+origin, so that copy talks to it directly too. Covered by `worker/test/node/relay.test.js`.
+
+### Reminders on phones
+
+- **With a Worker of one's own:** its cron (every 5 minutes) first reads the lists in `remotes` from their
+  owners' Workers (the 3 read longest ago, at most 6 requests a run, well within the free plan's 50
+  subrequests and 50 D1 queries per run; table `remote_tasks`: id, text, status, deadline), then computes the
+  reminders of one's own tasks and those together, in one's own time zone and at one's own summary time, with
+  the same dedupe keys. With more than 3 shared lists each is read every few runs, so a deadline set in one
+  minutes before it is due may be missed. A task moved out of the list, a list the owner deleted, or one no
+  longer shared stops reminding.
+- **In the browser from the owner's address** (no Worker): the app subscribes for push with the list's key
+  (`share_push`, with the phone's time zone and summary time, sent again when either changes); the owner's
+  cron sends that list's reminders to those subscriptions only, with dedupe keys of their own (`s:<share>|…`).
+- **Never twice:** once a key is used through the person's own Worker (the relay marks it, `relayed_at`), the
+  owner's Worker stops sending that share's browser reminders (for a week after the last use); a move deletes
+  them outright, and leaving or a revoke ends them. Two separate invites for one person (one in the browser, one
+  in the app) are two shares, and remind twice: use *Move to my Saqme app* instead.
+- Desktop apps remind from the files, as for one's own lists.
+
+Covered by `worker/test/node/shared-reminders.test.js`.
+
+### The person's side
+
+Every client keeps one **session per list**: its own sync (if any) and one per shared list, each with its own
+cursor, `dbId`, clock offset and restore handling. Rows from a shared list's server land only if they belong
+to that list (its project, its tasks, their conflicts); this device's own server can never overwrite them, and
+nothing of a shared list is ever stored in one's own lists (on the phone, its key is kept by one's own Worker's
+relay, in a table of its own, never in the synced rows).
+
+- **Phone app** (`store.js`): `meta.shares` holds the bindings in IndexedDB. Paired: `{ via: 'relay', remote,
+  server, access, projectId, pos, cursor, dbId, … }`, synced through the relay above (no key on the phone).
+  Not paired, used from the owner's address: `{ via: 'direct', token, … }`, synced with that origin directly;
+  when such an app gets paired, the key goes to its own Worker (`/api/remotes/adopt`). Unpairing keeps relayed
+  lists and what was typed into them; they wait (the tab says so) and go on when the app is paired again. A
+  shared tab's place is kept on the device only, and a list whose name another list here has shows whose it is:
+  "Groceries (from nuca)" (`pairing.js serverLabel`: the account part of a workers.dev address, else the host).
+  A view-only list is read-only in the app (and the store refuses changes to it); moving a task between one's
+  own list and a shared one is a copy there with new ids plus a delete here (restorable), since neither server
+  takes a move across.
+- **Windows** (`sync-worker.ps1`) and **Linux/macOS** (`local/shares.mjs`): the shared list is a normal file in
+  `lists/`, so editors and AI assistants keep working on it. `lists/.remotes.json` binds files to their owners'
+  servers ([file-format.md](file-format.md#other-files-in-the-data-folder)); the key is in `sync/remotes.json`.
+  The engine for one's own server leaves bound files out; each bound file has an engine of its own
+  (`Invoke-SyncCycle` / `syncCycle` with a scope: that one file is that project; nothing about the list
+  itself is sent; its file comes back if it is removed by hand; the tab order keeps every other list's
+  place). The owner renaming the list renames the file, and the binding follows in the same step. A name another
+  list has already (at join, or the owner's rename) becomes "Groceries (from nuca)" before it gets a number.
+  Every change to `.remotes.json` happens in the sync loop's thread (Windows) or synchronously between engine
+  steps (Node), so the engine for one's own server never sees a shared file unbound. Turning one's own sync off
+  or on leaves `.remotes.json` and the keys alone: shared lists keep syncing with their owners.
+- **View-only files** edited anyway (by hand, an editor, an AI assistant): nothing is sent. Each changed
+  field, removed or added line becomes a **notice** (shown with the conflicts: "Not saved", the text that
+  was typed, Copy, Dismiss), and the file goes back to the owner's version (lines the owner does not have
+  are removed; headings and prose stay). The same happens to a change the owner's server refuses.
+- **Joining:** setup registers `saqme://` links on Windows (the registry), Linux (an x-scheme-handler desktop
+  entry) and macOS (a small AppleScript applet, `~/Applications/Saqme To Do Invites.app`, that hands the link
+  to `saqme invite`). The owner's `/join` page offers: **use it now in this browser** (the owner's own copy of
+  the phone app, `/#join=<code>`: nothing to install, no account), **Open in Saqme To Do** (`saqme://join?server=
+  …&code=…`, tried by itself in Chromium browsers on computers) and *Copy invite*, and **install Saqme** (the
+  one-line installers and the setup guide). The apps always ask before they use up the code. Pasting the link
+  works everywhere: Settings > Sync > *Join a shared list*, `saqme join LINK` on Linux/macOS. The phone app also
+  offers to join when it finds an invite link on the clipboard (where the browser allows reading it: not on
+  iPhone, which needs the Paste button there).
+- **Move to my Saqme app** (on a list used in the browser): a move code (above) as a link, a QR code on larger
+  screens, *Open in Saqme To Do*. The app that opens it takes the list over with no new invite; the browser
+  copy then stops syncing and goes ("moved to your Saqme app").
+- **Local-only devices** can join: a device without its own sync syncs just its shared lists (the Windows sync
+  loop runs whenever there is a shared list; the Linux/macOS app always runs an engine per shared list; the
+  phone app, in the browser from the owner's address). Sharing one's *own* lists needs one's own sync.
+- **Leave** (instead of Delete, on a shared tab) takes the list off the device: its file goes to
+  `lists/.trash`, the binding, key and engine state go, and the key is ended on the owner's server. Nothing
+  else changes there. On a paired phone it leaves for all of that person's phones (one key, kept by their
+  Worker), not their computers (each has a key of its own).
+- **Revoked** (the key gets 401): the list stays as one of the device's own lists, with **new ids** for every
+  task (so it never gets mixed up with the owner's copy should it be shared again), synced with the device's
+  own server from then on if it has one; the app says so. On Linux/macOS the window's store is told to
+  expect the old ids to go (no "deletions paused"). Phones paired with one Worker keep one copy (above).
+
+Covered by `worker/test/node/pwa-shares.test.js` (phone store against in-process Workers: relay, browser,
+move, own sync on and off, two owners and one's own list shared out at once), `worker/test/node/local-shares.test.js`
+(engine and app, the same combinations) and the shared-list cases in `desktop/tests/sync-core.tests.ps1`. A
+checklist for trying it by hand with a second person: [testing-shared-lists.md](testing-shared-lists.md).
 
 ## Guarantees and limits
 

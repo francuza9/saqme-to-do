@@ -98,6 +98,7 @@ Windows (`%APPDATA%\SaqmeToDo`):
 | File | What |
 |---|---|
 | `lists\.order` | tab order, one project name per line |
+| `lists\.remotes.json` | lists shared with this PC: which file syncs with whose server (`id`, `file`, `server`, `project`, `access`, `name`, `joinedAt`; no keys). Changed only by the app ([shared lists](sync.md#shared-lists)) |
 | `lists\.state` | which tasks are open or closed (per device, not synced) |
 | `lists\.notified` | reminders already shown on this PC (dedupe, last 7 days) |
 | `lists\.trash\` | deleted projects (`Name-YYYYMMDD-HHMMSS.md`), never erased automatically |
@@ -108,9 +109,13 @@ Windows (`%APPDATA%\SaqmeToDo`):
 | `sync\config.json` | server address, access token, this device's id (private) |
 | `sync\state.json` | sync engine state (server rows, last synced base, unsent changes) |
 | `sync\sync.log` | sync log (errors and summaries; rotated at 256 KB) |
+| `sync\remotes.json` | the keys for the lists shared with this PC, and the device id used on their owners' servers (private) |
+| `sync\shares\<id>.json` | each shared list's sync engine state (same format as `state.json`) |
+| `.open-url` | a `saqme://` invite link handed from a second start of the app to the running one (removed at once) |
 | `cloud.json` | what setup generated: token, push keys, database id, URL (private) |
 
-Linux and macOS (the data folder above `lists`): `lists/` with `.order` and `.trash/` as on Windows, plus
+Linux and macOS (the data folder above `lists`): `lists/` with `.order`, `.remotes.json` and `.trash/` as on
+Windows, `sync/remotes.json` and `sync/shares/` as on Windows, plus
 
 | File | What |
 |---|---|
@@ -123,3 +128,16 @@ Linux and macOS (the data folder above `lists`): `lists/` with `.order` and `.tr
 
 Only the daily summary time (`notifyAt`) and the phone's time zone are synced settings; theme, window and
 open/closed state stay per device.
+
+## Shared lists
+
+A list someone shares with you is a list file like any other (`lists/Groceries.md`): edit it in the app, an
+editor or with an AI assistant, and the changes go to its owner's sync service (not yours). If one of your
+lists already has that name, the file says whose it is: `lists/Groceries (from nuca).md` (`nuca` from the
+owner's address, `saqme.nuca.workers.dev`); that is only the file's name, the list keeps its name for its owner.
+It is bound in `lists/.remotes.json`; leave that file to the app. If the list is **view-only** for you, changes to the file
+are not sent: the file goes back to the owner's version and what you typed shows under **Conflicts** as
+*not saved* (copy it from there). Renaming or deleting the file does not rename or delete the list (that is
+its owner's): use **Leave** on its tab. Moving a line between a shared list and one of your own creates it on
+the other server and deletes it on the first (restorable there), since each list syncs with its own server.
+See [sync.md](sync.md#shared-lists).

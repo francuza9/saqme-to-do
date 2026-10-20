@@ -24,6 +24,11 @@
   "fri 14:00" or "+3"), notes with links, drag to reorder, move tasks between projects.
 - **Reminders.** 15 minutes before a timed deadline and at the time, plus one daily summary of what is due:
   on the computer from the start, on phones once sync is set up.
+- **Shared lists.** Share one list with someone (right-click its tab, **Share…**): they get a one-time invite
+  link, can edit or only view, and you can revoke them at any time. The list stays on your sync service. They
+  need no account and not even Saqme: the list works in their browser, and moves into their Saqme app later
+  with one link. On their computer it is a markdown file like any other; on their phones it reminds them of
+  its deadlines. [How it works](docs/sync.md#shared-lists).
 - **Keyboard-first on Windows.** Up/Down move between tasks, Enter adds a task, Shift+Enter a subtask, Tab
   indents while you edit one, Alt+Up/Down moves it.
 - **Accessible.** Everything works from the keyboard; screen readers get names, roles and states for every
@@ -108,7 +113,9 @@ account. Nobody else runs a server for this app, and it has no analytics or trac
 leaves the device. With it, devices prove access with a 256-bit key that travels in the pairing link after
 the `#`, the part of a URL browsers never send to a server (the app removes it from the address bar at once).
 A pairing code is a short stand-in for that link: it works once, for 10 minutes, and only a device that
-already has the key can ask for one. Cloudflare hosts the data (encrypted at rest);
+already has the key can ask for one. A list you share gives the other person a key of their own for that one
+list, which you can revoke; their changes to it are stored on your service, and they see nothing else of yours.
+Cloudflare hosts the data (encrypted at rest);
 the key is stored on your devices (the app's data folder and the phone app's storage), so protect them as
 you would any signed-in device. On macOS and Linux the app window talks to a local program that answers
 only on this computer and only with its own key.
@@ -134,6 +141,10 @@ back.
 `^k3j9x2ab` so sync can follow a task through edits; leave it in place (the app usually re-attaches a lost
 one). See [docs/file-format.md](docs/file-format.md).
 
+**Can I share a list with someone?** Yes. They need the app, not a Cloudflare account; you need sync (the list
+stays on your sync service). Each invite works once, for 24 hours; you pick *can edit* or *can view* and can
+change or revoke it later. What they change goes to your service only. [Steps](docs/setup.md#9-sharing-a-list-with-someone).
+
 **Android?** Yes: the phone app installs from Chrome, push included. It is tuned and tested mostly on iPhone.
 
 **Which Linux and macOS versions?** Linux with glibc 2.28 or newer (Debian 10, Ubuntu 20.04, RHEL 8, Fedora
@@ -151,6 +162,7 @@ notification settings. More in [docs/setup.md](docs/setup.md#windows-notificatio
 - [docs/architecture.md](docs/architecture.md): how the pieces fit together
 - [docs/design.md](docs/design.md): colours, type and layout shared by all the apps
 - [docs/accessibility.md](docs/accessibility.md): keyboard, screen readers, contrast, and how they are checked
+- [docs/testing-shared-lists.md](docs/testing-shared-lists.md): trying shared lists by hand with a second person
 - [CONTRIBUTING.md](CONTRIBUTING.md): running the tests and the apps locally
 
 ## License

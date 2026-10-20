@@ -24,11 +24,13 @@
 | `desktop/qr.ps1` | QR encoder for *Pair phone* (byte-identical to `worker/public/js/qr.js`). |
 | `worker/src/index.js` | Worker entry: routing, bearer auth, cron handler. |
 | `worker/src/pairing.js` | One-time pairing codes for phones (the app on an iPhone's Home Screen). |
+| `worker/src/shares.js` | Shared lists: invites, claims, the people a list is shared with, share keys, move codes, a share's browser reminders ([sync.md](sync.md#shared-lists)). The scope a share key gets is in `sync.js`. |
+| `worker/src/remotes.js` | Lists others share with you, kept by your own Worker for your phone apps: the relay to their owners' Workers and the reading of their deadlines for your reminders ([sync.md](sync.md#the-relay-lists-shared-with-a-phone-that-has-its-own-sync)). |
 | `worker/src/merge.js` | Pure merge rules (per field, conflicts, edit vs delete, cycle checks). |
 | `worker/src/sync.js` | D1 access for `/api/sync`: optimistic batches, paging. |
 | `worker/src/push.js`, `reminders.js` | Web Push (VAPID + RFC 8291 encryption, WebCrypto only) and the reminder rules. |
-| `worker/public/` | The PWA: `index.html`, `js/app.js` (UI), `js/store.js` (data + sync), `js/model.js`, `js/dates.js`, `js/keys.js`, `js/markdown.js` (list format, shared with the Linux/macOS app), `js/zip.js` (export / import), `sw.js`. |
-| `local/` | The Linux/macOS app (Node.js 22.13+, no dependencies): `saqme.mjs` (commands, the app process), `server.mjs` (local server), `d1.mjs` (D1 API on `node:sqlite`), `engine.mjs` (lists folder engine, a port of `sync-core.ps1`), `desktop.mjs` (notifications, app window), `paths.mjs`, `icns.mjs`. |
+| `worker/public/` | The PWA: `index.html`, `js/app.js` (UI), `js/store.js` (data + sync, one session per server), `js/model.js`, `js/dates.js`, `js/keys.js`, `js/markdown.js` (list format, shared with the Linux/macOS app), `js/zip.js` (export / import), `sw.js`; `join.html` + `js/join.js`, the page a shared list's invite link opens. |
+| `local/` | The Linux/macOS app (Node.js 22.13+, no dependencies): `saqme.mjs` (commands, the app process), `server.mjs` (local server), `d1.mjs` (D1 API on `node:sqlite`), `engine.mjs` (lists folder engine, a port of `sync-core.ps1`), `shares.mjs` (lists shared with this computer), `desktop.mjs` (notifications, app window), `paths.mjs`, `icns.mjs`. |
 | `worker/migrations/` | D1 schema. |
 | `scripts/` | `setup.ps1` (Windows), `setup.sh` (Linux, macOS, WSL), `cloud-setup.mjs` (provisioning), dev helpers. |
 | `shared/fixtures/` | Input → expected output for every rule that exists in both languages; see below. |
@@ -42,7 +44,10 @@
 - **Sync loop** (separate runspace, `sync-worker.ps1`): wakes every ~12 s, ~1.6 s after a local edit,
   when the window is shown, or on *Sync now*. It reads the lists, diffs them against the last synced base,
   talks to the Worker and computes a **plan** of file changes for whatever arrived from other devices.
-  It never writes list files itself.
+  It never writes list files itself. It runs one engine for this PC's own Worker (leaving out the lists shared
+  with this PC) and then one per shared list, against that list's owner's Worker
+  ([sync.md](sync.md#shared-lists)); it also makes every change to `lists\.remotes.json` (join, leave, a
+  rename by the owner, a share that ended), so they never cross.
 - **Hand-over:** the loop puts the plan in a shared, synchronized hashtable; the UI's 800 ms timer picks it
   up **only when you are not typing, editing notes, renaming a tab or dragging**, re-checks that every file
   still has exactly the content the plan was computed from, writes them all, reloads the open list and
@@ -80,6 +85,9 @@ device id), `sync\state.json` (sync engine state), `sync\sync.log`, `cloud.json`
 - **The lists folder stays the source of truth on disk.** The `files` engine keeps it in step with the local
   store (ids, line-preserving plans, the mass-delete guard: everything from the Windows engine). With cloud
   sync on, a second engine syncs the same folder with your Worker; see [sync.md](sync.md#linux-and-macos-one-folder-two-engines).
+  Each list shared with this computer has an engine of its own against its owner's Worker, and the cloud
+  engine leaves those files out ([sync.md](sync.md#shared-lists)). The window learns about them (and about its
+  own lists others have) from the local server, which also relays the window's sharing to the cloud Worker.
 - **Settings > Sync > Set up sync** runs `scripts/cloud-setup.mjs` (installed with the app; it fetches the
   Cloudflare tools on first use) from the local server and streams its output to the window; it writes
   `sync/config.json` when it succeeds and the cloud engine starts. On Windows the widget runs
@@ -115,11 +123,22 @@ device id), `sync\state.json` (sync engine state), `sync\sync.log`, `cloud.json`
   `Authorization: Bearer <token>`, compared via SHA-256 digests in constant time. `/api/health` is public,
   and so is `/api/pair/claim`, which answers only for an open pairing code.
 - **D1 tables:** `tasks`, `projects`, `settings`, `conflicts` (all with per-field timestamps and a change
-  `seq`), `push_subscriptions`, `notified` (reminder dedupe), `meta` (`seq`, `db_id`, `lock`, `origin`).
-  Rows are never hard-deleted: deletes are tombstones, so *Recently deleted* can restore them.
-- **Cron** (`*/5 * * * *`): reads open tasks with deadlines up to tomorrow, evaluates the reminder rules
-  in the time zone the phone reported, claims dedupe keys first (`INSERT … ON CONFLICT DO NOTHING RETURNING`)
-  and sends Web Push. Subscriptions the push service reports as gone are removed.
+  `seq`), `push_subscriptions`, `notified` (reminder dedupe), `meta` (`seq`, `db_id`, `lock`, `origin`),
+  `shares` (the people a list is shared with: digests of their invite code and key, access, revoked) and
+  `moved_out` (tasks that left a project, so people it is shared with are told; migration `0002_shares.sql`);
+  `share_push` (a share's own push subscriptions, for someone using the list in the browser), `remotes` and
+  `remote_tasks` (lists others share with you, for your phones: the relay and your reminders; migration
+  `0003_remotes.sql`). Rows are never hard-deleted: deletes are tombstones, so *Recently deleted* can restore
+  them.
+- **Shared lists:** a share key (from an invite) reaches one project: its `/api/sync` is scoped to it, with
+  view access every change is refused; besides that it can leave, make a move code, and keep push
+  subscriptions of its own; every other route answers 403 ([sync.md](sync.md#shared-lists)). Lists others share
+  with you reach your phone through your own Worker (`/api/remotes/…`, server to server).
+- **Cron** (`*/5 * * * *`): first reads the lists your phones joined from their owners' Workers (a few a run),
+  then reads open tasks with deadlines up to tomorrow (yours and theirs), evaluates the reminder rules in the
+  time zone the phone reported, claims dedupe keys first (`INSERT … ON CONFLICT DO NOTHING RETURNING`) and
+  sends Web Push; then the same for each share's browser subscriptions, in their time zone, for that list
+  only. Subscriptions the push service reports as gone are removed.
 
 ## Rules that exist twice
 
@@ -136,6 +155,7 @@ test suites load: `worker/test/node/shared-fixtures.test.js` (Vitest) and
 | The list format: reading, writing, line endings, ids for id-less lines | `sync-core.ps1` `Read-Items`, `ConvertTo-MarkdownText`, `Get-TextEol`, `Set-MissingIds` | `public/js/markdown.js` `parseItems`, `formatItems`, `detectEol`, `setMissingIds` | `markdown.json`, `markdown/*.md` |
 | Fractional order keys | `sync-core.ps1` `Get-KeyBetween`, `Test-OrderKey`, `Get-RekeyMap` | `public/js/keys.js`, `local/engine.mjs` `rekeyMap` | `keys.json` |
 | Value rules: task text, notes, times, dates, project and file names | `sync-core.ps1` `ConvertTo-CleanText`, `ConvertTo-CleanNotes`, `ConvertTo-CleanTime`, `Test-ValidDate`, `ConvertTo-ProjectName`, `ConvertTo-FileName` | `markdown.js` `cleanText`, `cleanNotes`, `cleanTime`, `isValidDate`, `cleanProjectName`, `toFileName` (used by the server, the phone app and the engine) | `text.json` |
+| Links: pairing links, invite links, a sync server's short name ("Groceries (from nuca)") | `sync-core.ps1` `Get-PairingLink`, `Get-InviteLink`, `Get-ServerLabel` | `public/js/pairing.js` `parsePairingLink`, `parseInviteLink`, `serverLabel` | `text.json` |
 | The lists-folder engine: files → changes, server rows → file plans | `sync-core.ps1` `Add-LocalDiff`, `Get-RemotePlan`, `Invoke-PlanOps` | `local/engine.mjs` (a port) | `engine.json`; the end-to-end test also runs both engines against one Worker |
 | QR codes for pairing | `desktop/qr.ps1` | `public/js/qr.js` | `qr.test.js` checks that both build the same matrix (when `powershell.exe` is there) |
 | Colours, type, spacing | `desktop/tokens.ps1` | `public/css/tokens.css` | both generated from `design/tokens.json`; `tokens.test.js` fails if they are stale or a colour is written anywhere else |
@@ -168,7 +188,26 @@ disagree, decide which side is right, fix the other one and keep the case in the
   `frame-ancestors 'none'` and `X-Frame-Options: DENY`); `index.html` repeats it as a meta tag for static
   hosts, there also allowing `connect-src https:` (to reach your Worker from elsewhere). A meta tag cannot
   forbid framing, so the app itself refuses to run inside another site's frame. Where both apply, the
-  stricter one wins (`connect-src 'self'`).
+  stricter one wins (`connect-src 'self'`). So the phone app never talks to someone else's Worker: lists
+  shared with you go through your own Worker's relay (`worker/src/remotes.js`, below), and a list used in
+  the browser from its owner's address (no Saqme of one's own) talks to that same origin.
+- **The relay** (`/api/remotes/…`, your own key only) forwards three routes and nothing else
+  (`/api/shares/claim`, `/api/sync`, `/api/shares/leave`) to an owner's Worker, server to server: https only,
+  a host name with a dot (no IP address, `localhost`, `.local`, `.internal`, `.home.arpa`), the default port,
+  no user name or password, no redirects followed, a 20 s timeout and a 4 MB cap on the answer; the owner's
+  status comes back unchanged (401: revoked, or moved to another of your apps). Share keys it holds stay in
+  D1 (`remotes`) and never go back to an app (`worker/test/node/relay.test.js`).
+- **Shared lists:** an invite code is 128 random bits after the `#` of the invite link, usable once, for 24
+  hours; claiming writes nothing when the code is wrong. A person's key is 256 bits; the Worker stores
+  SHA-256 digests of codes and keys only, looks the key up on every request (revoking takes effect at once),
+  and scopes it to its one list everywhere (`worker/test/workers/shares.test.js`). The owner's alias for a
+  person is never sent to them. On the person's devices a shared list's server can only change that list
+  (rows of other projects, settings, or ids of one's own tasks are dropped). Keys stay where they are used:
+  on computers in `sync/remotes.json` (private, outside the lists folder), for paired phones in their own
+  Worker's `remotes` table (never sent back to an app, never in the synced rows), in the browser from the
+  owner's address in that browser's storage. Joining always asks first (a `saqme://` link from a web page
+  cannot join anything by itself). The owner's Worker sees what the people change in that list, the device
+  ids they sync with, and for browser reminders a push address and time zone; nothing else of theirs.
 - **Pairing codes** (`worker/src/pairing.js`): 8 characters out of 31 (about 40 bits), made only for a caller
   with the token, usable once, for 10 minutes, at most 5 open; 10 wrong guesses drop every open code, so a
   guess has about 10 in 8·10¹¹ chances per code. Stored as SHA-256 digests in D1's `meta` table. With no

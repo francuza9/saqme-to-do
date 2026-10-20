@@ -39,6 +39,8 @@ What is automated and what you do yourself:
 | Connecting the desktop app to sync | yes | — |
 | Phone | — | scan the QR code, add to Home Screen, type the pairing code (iPhone), enable notifications |
 | The phone app without a cloud account | published on GitHub Pages ([section 7](#7-phones-and-browsers-without-a-cloud-account)) | open its address |
+| `saqme://` links (invites to shared lists open the app) | setup registers them on Windows, Linux and macOS (there with a small helper app, `~/Applications/Saqme To Do Invites.app`) | allow the browser to open Saqme To Do the first time |
+| Sharing a list with someone | everything but sending the link | send the invite link yourself; they open it ([section 9](#9-sharing-a-list-with-someone)) |
 
 ## 1. Install on Windows
 
@@ -271,7 +273,8 @@ Without your own Cloudflare Worker, that is a static copy of `worker/public`:
 
 A copy served from elsewhere talks to your Worker across origins once paired; the Worker allows that for
 its API (every call still needs your key), and the app's own security policy only lets it connect to
-`https` addresses.
+`https` addresses. Lists others share with you reach a paired app through your own Worker; an app without sync
+uses them from the invite's own page instead (*Use it in this browser*), at their owner's address.
 
 ## 8. More devices
 
@@ -284,6 +287,55 @@ its API (every call still needs your key), and the app's own security policy onl
 - **Another Linux or macOS computer:** install with `scripts/setup.sh`, then paste the pairing link into the
   window's **Settings > Sync** and click **Connect** (or run `saqme connect '<link>'`). It starts syncing within
   a few seconds; same-name lists are merged.
+
+## 9. Sharing a list with someone
+
+A shared list stays on **your** sync service; the other person syncs that one list from there, with a key of
+their own that reaches nothing else. They need no Cloudflare account, and not even Saqme: the list works in
+their browser too. (After updating an existing install, run setup's cloud part once, `-Cloud` / `--cloud`: it
+adds the database tables for shares and deploys the Worker that handles them. The other person does the same
+if they have sync of their own: their phone reaches your list through their Worker.)
+
+**You (the owner):**
+
+1. Right-click the list's tab (phone: long-press it) and choose **Share…**. On Windows the current tab also
+   shows a share icon while the mouse is over it. Without sync of your own, Share is greyed out: a shared list
+   needs your sync service to live on (Settings > Sync > Set up sync).
+2. Type a **name** for the person (only you see it, to recognise them later) and pick **Can edit** or **Can
+   view**, then **Create invite link**. The link is copied (the desktop also shows it as a QR code).
+3. Send it to them yourself, in a message or an email. It works **once, for 24 hours**: whoever opens it first
+   joins, so send it to that person only. One invite covers all their phones that sync with their own
+   Worker; each of their computers needs an invite of its own.
+4. The same **Share** view lists everyone the list is shared with. Change their access there, **Revoke**
+   them (their key stops working at once; they keep the list as their own unshared copy), or **Cancel** an
+   invite nobody used yet. Shared tabs show a small people badge.
+
+**The other person:**
+
+- **No Saqme (any phone or computer):** tap **Use it in this browser** on the page. The list works right away
+  in the browser, from the owner's address: nothing to install, no account, no sync. To keep it on a phone,
+  add that page to the Home Screen; **Settings > Notifications > Enable** there reminds you of its deadlines
+  (sent by the owner's sync service, at your summary time and in your time zone). The page also has the
+  one-line installers, for later.
+- **Windows, macOS or Linux with Saqme installed:** open the link. The page asks the browser to open Saqme To
+  Do (allow it); the app asks *Join shared list?* and the list appears as a new tab (a list whose name you
+  already have says whose it is: "Groceries (from nuca)"). If nothing opens, copy the link (**Copy invite** on
+  that page) and paste it into **Settings > Sync > Join a shared list** (Linux/macOS: that field in the window,
+  or `saqme join '<link>'`). This works without sync of your own.
+- **The phone app, paired with your own sync:** a link from another site cannot open it. Tap **Copy invite**
+  on the page, open Saqme, then **Settings > Sync > Join a shared list > Paste > Join**. Your sync service
+  keeps the list for all your phones and reminds you of its deadlines like of your own.
+- **Started in the browser, installed Saqme later:** in the browser, the list's menu (long-press its tab) has
+  **Move to my Saqme app**: open the link it shows in your Saqme (or scan its QR code). The list moves over
+  with no new invite, and the browser copy stops.
+- **Leave** a list from its tab's menu (it replaces Delete there): it goes from your device (to `lists/.trash`
+  on a computer; from all your paired phones at once); the owner's list is not touched.
+- A **view-only** list cannot be changed in the apps. Edited in its file anyway (an editor, an AI
+  assistant), it goes back to the owner's version, and what was typed is kept under **Conflicts** as *Not
+  saved*.
+
+Turning your own sync off (Settings > Sync) keeps the lists shared with you on computers; on a phone they wait
+until it is paired again. Something to try with a second person: [testing-shared-lists.md](testing-shared-lists.md).
 
 ## Windows notifications
 
@@ -315,6 +367,13 @@ the next time it is opened with a connection.
 | `npm` fails during setup | Usually network/proxy. Check that `https://registry.npmjs.org` opens in a browser, then re-run. |
 | Setup cannot create the database | The free plan allows 10 D1 databases; delete unused ones in the dashboard (Storage & Databases > D1) or use another Worker name. |
 | Push test says "not subscribed" | Settings > Notifications > Turn off, then Enable again (subscriptions can expire). |
+| Invite: "already used, has expired or was cancelled" | An invite works once, for 24 hours. Ask the owner for a new one (Share > Create invite link). |
+| Share says "this list is not on your sync service yet" | The list was made a moment ago: wait until it synced (the cloud icon), then open Share again. |
+| A shared list's tab vanished | Its owner deleted the list (it comes back if they restore it), or you left it (on a phone: maybe on another of your phones). If its owner stopped sharing it, it stays as your own list and the app says so. In the browser: it was moved to your Saqme app. |
+| Joining says "Open the invite link instead" | This copy of the app has no sync of its own and the list is on another address. Open the invite link itself and choose **Use it in this browser**, or pair the app first. |
+| A shared list says "Not synced while this app is not paired" | The phone was unpaired; its shared lists wait (with your changes) and go on once it is paired with the same sync service again. |
+| A shared list on a phone says the owner's Worker "could not be reached" | Your own sync service talks to theirs for your phone: check that their address still works in a browser. If it says "redirect" or "too much data", it is not a Saqme sync service. |
+| Sync fails right after updating the app | The Worker was updated without its new database table: run setup's cloud part again (`-Cloud` / `--cloud`), which applies it. |
 | Logs | Windows: `%APPDATA%\SaqmeToDo\sync\sync.log`. Linux/macOS: `local/saqme.log` in the data folder. |
 
 Re-running setup is always safe: finished steps are skipped and existing keys, database and lists are reused.
@@ -324,7 +383,8 @@ Re-running setup is always safe: finished steps are skipped and existing keys, d
 - **Windows app:** Windows Settings > Apps > *Saqme To Do* > Uninstall, or `setup.cmd -Uninstall`.
   Your lists stay in `%APPDATA%\SaqmeToDo`; add `-PurgeData` to delete them and the sync keys too.
 - **Linux / macOS app:** `scripts/setup.sh --uninstall` (or the one-line command with `--uninstall` after
-  `bash -s --`). The lists stay; add `--purge-data` to delete them and setup's folder with the sync keys
+  `bash -s --`; on macOS it also removes the `saqme://` helper app). The lists stay; add `--purge-data` to
+  delete them and setup's folder with the sync keys
   (`~/.config/saqme`, on macOS `~/Library/Application Support/Saqme To Do/setup`). It finds a folder chosen
   with `--data` by itself, and deletes only what Saqme created there (`lists/`, `local/`, `sync/`), never
   other files in it and never your home folder.
