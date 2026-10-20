@@ -115,9 +115,12 @@ DATA_DIR="$(absolute "${data:-$DEFAULT_DATA}")"
 DEFAULT_DATA="$(absolute "$DEFAULT_DATA")"
 [ -n "$data" ] && [ "$DATA_DIR" = "$DEFAULT_DATA" ] && data=""
 DESKTOP_FILE="${XDG_DATA_HOME:-$HOME/.local/share}/applications/saqme-todo.desktop"
+INVITE_DESKTOP_FILE="${XDG_DATA_HOME:-$HOME/.local/share}/applications/saqme-todo-invite.desktop"
 AUTOSTART_FILE="${XDG_CONFIG_HOME:-$HOME/.config}/autostart/saqme-todo.desktop"
 UNIT_FILE="${XDG_CONFIG_HOME:-$HOME/.config}/systemd/user/saqme-todo.service"
 MAC_APP="$HOME/Applications/Saqme To Do.app"
+MAC_INVITE_APP="$HOME/Applications/Saqme To Do Invites.app"
+LSREGISTER=/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister
 AGENT_ID="com.saqme.todo"
 AGENT_FILE="$HOME/Library/LaunchAgents/$AGENT_ID.plist"
 
@@ -150,10 +153,11 @@ if [ "$mode" = uninstall ]; then
   step "Removing Saqme To Do"
   stop_app
   if [ "$platform" = mac ]; then
-    rm -f "$AGENT_FILE"; rm -rf "$MAC_APP"
+    [ -d "$MAC_INVITE_APP" ] && [ -x "$LSREGISTER" ] && "$LSREGISTER" -u "$MAC_INVITE_APP" >/dev/null 2>&1 || true
+    rm -f "$AGENT_FILE"; rm -rf "$MAC_APP" "$MAC_INVITE_APP"
   else
     if [ -f "$UNIT_FILE" ] && has systemctl; then systemctl --user disable saqme-todo.service >/dev/null 2>&1 || true; fi
-    rm -f "$UNIT_FILE" "$AUTOSTART_FILE" "$DESKTOP_FILE"
+    rm -f "$UNIT_FILE" "$AUTOSTART_FILE" "$DESKTOP_FILE" "$INVITE_DESKTOP_FILE"
     has systemctl && systemctl --user daemon-reload >/dev/null 2>&1 || true
   fi
   rm -f "$BIN"
@@ -259,6 +263,39 @@ if find_node; then ok "Node.js $("$NODE" -p 'process.versions.node') ($NODE)"; e
 NODE_BIN_DIR="$(dirname "$NODE")"
 
 # ---------------------------------------------------------------- the app
+# saqme://join links (the invite page of a list someone shares) open the app on macOS, which asks before joining.
+# A shell-script app cannot receive a link there (it comes as an Apple event), so a small AppleScript applet takes
+# it and hands it to `saqme invite`. Registered with Launch Services; --uninstall removes it.
+install_mac_invite_handler() {
+  if ! has osacompile || [ ! -x /usr/libexec/PlistBuddy ]; then warn "saqme:// invite links: osacompile is missing, so paste invites instead (Settings > Sync > Join a shared list)"; return; fi
+  local src plist pb bin_as
+  src="$(mktemp -d)/invite.applescript"
+  bin_as="$(printf '%s' "$BIN" | sed 's/\\/\\\\/g; s/"/\\"/g')"
+  cat > "$src" <<EOF
+on open location theURL
+  do shell script quoted form of "$bin_as" & " invite " & quoted form of theURL & " >/dev/null 2>&1 &"
+end open location
+on run
+  do shell script quoted form of "$bin_as" & " open >/dev/null 2>&1 &"
+end run
+EOF
+  rm -rf "$MAC_INVITE_APP"
+  if ! osacompile -o "$MAC_INVITE_APP" "$src" >/dev/null 2>&1; then warn "saqme:// invite links: the handler could not be built; paste invites instead (Settings > Sync > Join a shared list)"; return; fi
+  plist="$MAC_INVITE_APP/Contents/Info.plist"
+  pb=/usr/libexec/PlistBuddy
+  "$pb" -c "Set :CFBundleIdentifier $AGENT_ID.invite" "$plist" >/dev/null 2>&1 || "$pb" -c "Add :CFBundleIdentifier string $AGENT_ID.invite" "$plist" >/dev/null 2>&1 || true
+  "$pb" -c "Delete :LSUIElement" "$plist" >/dev/null 2>&1 || true
+  "$pb" -c "Add :LSUIElement bool true" "$plist" >/dev/null 2>&1 || true
+  "$pb" -c "Delete :CFBundleURLTypes" "$plist" >/dev/null 2>&1 || true
+  "$pb" -c "Add :CFBundleURLTypes array" -c "Add :CFBundleURLTypes:0 dict" -c "Add :CFBundleURLTypes:0:CFBundleURLName string Saqme invite link" \
+    -c "Add :CFBundleURLTypes:0:CFBundleURLSchemes array" -c "Add :CFBundleURLTypes:0:CFBundleURLSchemes:0 string saqme" "$plist" >/dev/null 2>&1 || true
+  cp "$MAC_APP/Contents/Resources/AppIcon.icns" "$MAC_INVITE_APP/Contents/Resources/applet.icns" 2>/dev/null || true
+  # (the plist changed after osacompile signed the applet: sign it again, ad hoc, or macOS may call it damaged)
+  has codesign && codesign --force --sign - "$MAC_INVITE_APP" >/dev/null 2>&1 || true
+  [ -x "$LSREGISTER" ] && "$LSREGISTER" -f "$MAC_INVITE_APP" >/dev/null 2>&1 || true
+  ok "saqme:// invite links open Saqme To Do ($MAC_INVITE_APP)"
+}
+
 install_app() {
   step "Installing the app"
   stop_app
@@ -313,6 +350,7 @@ EOF
     chmod 755 "$MAC_APP/Contents/MacOS/saqme-todo"
     "$NODE" "$APP_DIR/local/icns.mjs" "$APP_DIR/worker/public/icons/icon-512.png" "$MAC_APP/Contents/Resources/AppIcon.icns"
     ok "app: $MAC_APP (Launchpad, Spotlight)"
+    install_mac_invite_handler
   else
     mkdir -p "$(dirname "$DESKTOP_FILE")"
     cat > "$DESKTOP_FILE" <<EOF
@@ -326,8 +364,20 @@ Terminal=false
 Categories=Office;ProjectManagement;
 StartupNotify=false
 EOF
+    # saqme://join links (the invite page of a list someone shares) open the app, which asks before joining
+    cat > "$INVITE_DESKTOP_FILE" <<EOF
+[Desktop Entry]
+Type=Application
+Name=Saqme To Do (invite links)
+Exec="$BIN" invite %u
+Icon=$APP_DIR/worker/public/icons/icon-512.png
+Terminal=false
+NoDisplay=true
+MimeType=x-scheme-handler/saqme;
+EOF
     has update-desktop-database && update-desktop-database "$(dirname "$DESKTOP_FILE")" >/dev/null 2>&1 || true
-    ok "menu entry: Saqme To Do"
+    has xdg-mime && xdg-mime default "$(basename "$INVITE_DESKTOP_FILE")" x-scheme-handler/saqme >/dev/null 2>&1 || true
+    ok "menu entry: Saqme To Do (and saqme:// invite links)"
   fi
 }
 

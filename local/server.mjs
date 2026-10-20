@@ -13,6 +13,16 @@
 //   POST /api/local/disconnect    Settings > Sync > Turn off sync (the lists stay)
 //   POST /api/local/allow-deletes confirm a paused mass delete in the lists folder
 //   POST /api/local/stop          shut down (used by setup when updating)
+// Shared lists (local/shares.mjs, docs/sync.md "Shared lists"):
+//   POST /api/local/join          { link }: join a list from its invite link -> { id, name }
+//   POST /api/local/leave         { id }: leave one (its file goes to lists/.trash)
+//   POST /api/local/notices/dismiss { id }: forget a change a shared list's server did not take
+//   POST /api/local/invite        { link }: an invite handed over by `saqme invite` (a saqme:// link): the window asks
+//   POST /api/local/invite/decline
+//   GET  /api/local/shares?project=<id>, POST /api/local/shares/invite | update | revoke: sharing one of this
+//                                  computer's lists, through its cloud sync (the window's project ids)
+// /api/shares* and /api/remotes* of the Worker code are not served here: lists are shared from one's cloud sync
+// service only, and lists shared with this computer are synced by the app itself.
 // Requests for any other host name are refused (DNS rebinding), and nothing sends CORS headers, so other
 // web sites cannot use this server even though it listens on the same machine.
 import { createServer } from 'node:http';
@@ -130,6 +140,28 @@ export function startServer(opts) {
       case 'POST /api/local/disconnect': opts.disconnect(); return json(res, 200, { ok: true });
       case 'POST /api/local/stop': json(res, 200, { ok: true }); setTimeout(() => opts.onStop?.(), 50); return undefined;
     }
+    if (opts.sharing && (route.startsWith('POST /api/local/') || route === 'GET /api/local/shares')) {
+      let b = {};
+      try { b = body?.length ? JSON.parse(body.toString('utf8')) : {}; } catch { /* bad JSON: empty */ }
+      const s = opts.sharing;
+      const run = {
+        'POST /api/local/join': () => s.join(String(b.link ?? '')),
+        'POST /api/local/leave': () => s.leave(String(b.id ?? '')),
+        'POST /api/local/notices/dismiss': () => s.dismiss(String(b.id ?? '')),
+        'POST /api/local/invite': () => s.offer(String(b.link ?? '')),
+        'POST /api/local/invite/decline': () => s.decline(),
+        'GET /api/local/shares': () => s.list(url.searchParams.get('project') ?? ''),
+        'POST /api/local/shares/invite': () => s.invite({ projectId: String(b.projectId ?? ''), alias: b.alias, access: b.access }),
+        'POST /api/local/shares/update': () => s.update({ id: b.id, access: b.access }),
+        'POST /api/local/shares/revoke': () => s.revoke({ id: b.id }),
+      }[route];
+      if (run) {
+        try { return json(res, 200, await run()); } catch (e) { return json(res, e.status ?? 400, { error: e.message }); }
+      }
+    }
+    if (url.pathname.startsWith('/api/shares')) return json(res, 404, { error: 'lists are shared through your cloud sync (Settings, Sync)' });
+    // (lists others share with this computer are synced by the app itself, local/shares.mjs, not relayed)
+    if (url.pathname.startsWith('/api/remotes')) return json(res, 404, { error: 'shared lists are joined in the window\'s Settings, Sync (or saqme join)' });
     if (url.pathname.startsWith('/api/push/')) return json(res, 404, { error: 'push is not used by the desktop app; reminders show as desktop notifications' });
     if (url.pathname.startsWith('/api/pair/')) return json(res, 404, { error: 'pairing codes come from the cloud sync service (Settings > Sync > Pair phone)' });
     if (req.method === 'OPTIONS') { res.writeHead(405); res.end(); return undefined; }   // no CORS: this server is for its own window only

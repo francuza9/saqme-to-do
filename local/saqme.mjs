@@ -8,6 +8,8 @@
 //   saqme allow-deletes    confirm a paused mass delete in the lists folder
 //   saqme pair-phone       the QR code and link that connect your phone (once cloud sync is set up)
 //   saqme connect LINK     sync with the cloud using a pairing link from a device that already syncs
+//   saqme join LINK        join a list someone shares with you, from their invite link (.../join#code=...)
+//   saqme invite LINK      what saqme:// links run: shows the invite in the window, which asks before joining
 //   options: --data DIR (default: see local/paths.mjs, or $SAQME_DATA)   --port N (default 47613)
 //
 // The app is one process: a local server for the window (the phone app's own files and sync API, on
@@ -25,10 +27,11 @@ import { D1 } from './d1.mjs';
 import { startServer } from './server.mjs';
 import { notify, openWindow } from './desktop.mjs';
 import { APP_DIR, DEFAULT_PORT, appPaths, cloudSetupStatePath, dataPaths, defaultDataDir } from './paths.mjs';
-import { applyPlanToFolder, openConflicts, readState, syncCycle } from './engine.mjs';
+import { applyPlanToFolder, openConflicts, readState, saveState, syncCycle } from './engine.mjs';
+import { Shares } from './shares.mjs';
 import { handleSync, HttpError } from '../worker/src/sync.js';
 import { computeReminders, localClock } from '../worker/src/reminders.js';
-import { parsePairingLink } from '../worker/public/js/pairing.js';
+import { parseInviteLink, parsePairingLink, serverLabel } from '../worker/public/js/pairing.js';
 
 export const VERSION = '1.0.0';
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -68,12 +71,22 @@ async function ping(port) {
 
 // ---------------------------------------------------------------- engine loop (like desktop/sync-worker.ps1)
 export class EngineLoop {
-  /** target() -> { transport, deviceId, label } or null (off); onSetting(value) for a synced notifyAt from the server */
-  constructor({ name, statePath, listsDir, target, notifyAt = () => '', onSetting = () => {}, onApplied = () => {}, interval, log, settleMs = 1500 }) {
-    Object.assign(this, { name, statePath, listsDir, target, notifyAt, onSetting, onApplied, interval, log, settleMs });
+  /**
+   * target() -> { transport, deviceId, label } or null (off); onSetting(value) for a synced notifyAt from the server.
+   * Shared lists (local/shares.mjs): view() -> which lists it syncs (engine.mjs readLocalLists), scope() -> the one
+   * shared list it syncs, afterPlan(plan) right after a plan was applied (before any other engine runs: renames
+   * follow into lists/.remotes.json), onResult(res) after each cycle. expected = { keys, until }: task keys whose
+   * disappearance is not held back as a mass delete, until then. quiet: refusals are expected (notices), not an error.
+   */
+  constructor({
+    name, statePath, listsDir, target, notifyAt = () => '', onSetting = () => {}, onApplied = () => {}, interval, log, settleMs = 1500,
+    view = () => null, scope = () => null, afterPlan = () => {}, onResult = () => {}, quiet = false,
+  }) {
+    Object.assign(this, { name, statePath, listsDir, target, notifyAt, onSetting, onApplied, interval, log, settleMs, view, scope, afterPlan, onResult, quiet });
     this.status = { state: 'off', message: '', lastSync: 0, guarded: 0, conflicts: 0, pending: 0, label: '' };
     this.state = null;
     this.allowMassDelete = false;
+    this.expected = null;
     this.stopped = false;
     this.wakeTimer = null;
   }
@@ -95,11 +108,14 @@ export class EngineLoop {
     this.status.label = tgt.label ?? '';
     this.state ??= readState(this.statePath);
     const allow = this.allowMassDelete;
+    const expected = this.expected && this.expected.until > Date.now() ? this.expected.keys : null;
+    const scope = this.scope();
     const res = await syncCycle({
       state: this.state, statePath: this.statePath, listsDir: this.listsDir, transport: tgt.transport, deviceId: tgt.deviceId,
-      notifyAt: this.notifyAt(), allowMassDelete: allow, settleMs: this.settleMs,
+      notifyAt: scope ? '' : this.notifyAt(), allowMassDelete: allow, settleMs: this.settleMs, view: this.view(), scope, expected,
       applyPlan: (plan) => {
         const ok = applyPlanToFolder(plan, this.listsDir);
+        if (ok) this.afterPlan(plan);
         if (ok && plan.setting != null) this.onSetting(plan.setting);
         if (ok && plan.ops.length) this.onApplied();
         return ok;
@@ -109,6 +125,7 @@ export class EngineLoop {
     this.status.guarded = res.guarded;
     this.status.conflicts = openConflicts(this.state).length;
     this.status.pending = this.state.Outbox.length;
+    this.onResult(res);
     return res;
   }
 
@@ -130,9 +147,11 @@ export class EngineLoop {
             this.status.lastSync = Date.now();
             if (res.refused.length) this.log(`${this.name}: refused by the server: ${res.refused.join('; ')}`);
             if (res.guarded) this.setStatus('error', `${res.guarded} tasks disappeared from the lists folder at once. Deleting them everywhere is paused until you confirm.`);
-            else if (res.refused.length) this.setStatus('error', `The server refused a change (${res.refused[0]}).`);
+            else if (res.refused.length && !this.quiet) this.setStatus('error', `The server refused a change (${res.refused[0]}).`);
             else this.setStatus('synced', '');
-            retryMs = res.retry ? 2500 : 0;
+            // a cycle that asks to run again (first contact, ids written, a list mid-edit) waits for edits to
+            // settle like a wake-up does; without settling (settleMs 0, tests) the next round comes at once
+            retryMs = res.retry ? (this.settleMs ? 2500 : Math.min(this.interval, 150)) : 0;
             if (res.sent || res.received) this.log(`${this.name}: synced, sent ${res.sent}, received ${res.received}`);
             break;
           case 'offline': failures++; this.setStatus('offline', `Offline - changes are kept and sent later (${res.message})`); retryMs = Math.min(60_000, 5000 * failures); break;
@@ -303,12 +322,15 @@ export async function startApp({ dataDir = defaultDataDir(), port, interval = 10
   const env = { DB: d1, AUTH_TOKEN: token };
   const local = localTransport(env);
 
+  const shares = new Shares({ lists: p.lists, sync: p.sync, log });
   const files = new EngineLoop({
     name: 'files', statePath: p.filesState, listsDir: p.lists, interval, log, settleMs,
     target: () => ({ transport: local, deviceId: 'files', label: 'this computer' }),
+    view: () => ({ first: shares.names() }),   // a line copied out of a shared list gets the new id, not the original
   });
   const cloud = new EngineLoop({
     name: 'cloud', statePath: p.cloudState, listsDir: p.lists, interval: cloudInterval, log, settleMs,
+    view: () => ({ exclude: shares.names() }),   // lists shared with this computer live on their owners' servers
     target: () => {
       const c = readCloudConfig(p.cloudConfig);
       return c ? { transport: httpTransport(c.url, c.token), deviceId: c.deviceId, label: new URL(c.url).host } : null;
@@ -320,24 +342,133 @@ export async function startApp({ dataDir = defaultDataDir(), port, interval = 10
     },
   });
   // each engine's writes are the other one's news (the folder watcher catches them too)
-  files.onApplied = () => cloud.wake();
+  files.onApplied = () => { cloud.wake(); for (const s of shareLoops.values()) s.loop.wake(); };
   cloud.onApplied = () => files.wake();
+
+  // ---- lists shared with this computer: one engine each, against its owner's server (local/shares.mjs)
+  const shareLoops = new Map();   // binding id -> { loop, done }
+  function startShare(b) {
+    if (shareLoops.has(b.id)) return;
+    const cur = () => shares.get(b.id);
+    const loop = new EngineLoop({
+      name: `shared ${b.file}`, statePath: shares.statePath(b.id), listsDir: p.lists, interval: cloudInterval, log, settleMs, quiet: true,
+      target: () => {
+        const s = cur();
+        const token = s && !s.left ? shares.token(s.id) : null;
+        return token ? { transport: httpTransport(s.server, token), deviceId: shares.deviceId(), label: new URL(s.server).host } : null;
+      },
+      view: () => ({ only: cur()?.file ?? b.file }),
+      scope: () => { const s = cur() ?? b; return { project: s.project, file: s.file, readOnly: s.access !== 'edit', label: serverLabel(s.server) }; },
+      // the owner renamed the list: the binding follows at once, before another engine could take the file
+      afterPlan: (plan) => { const n = plan.files[b.project]; if (n && n !== cur()?.file) shares.update(b.id, { file: n }); },
+      onApplied: () => files.wake(),
+      onResult: (res) => {
+        if (res.access && res.access !== cur()?.access) { shares.update(b.id, { access: res.access }); log(`shares: ${cur()?.file} is now ${res.access === 'edit' ? 'editable' : 'view-only'}`); }
+        if (res.status !== 'auth' || !cur()) return;
+        // the owner stopped sharing it: it stays as one of this computer's own lists, with new ids; the window's
+        // store sees its old tasks go (expected, so not held back as a mass delete) and the new ones come
+        const old = shares.end(b.id);
+        files.expected = { keys: new Set(old.map((id) => `task:${id}`)), until: Date.now() + 5 * 60_000 };
+        stopShare(b.id);
+        files.wake(); cloud.wake();
+      },
+    });
+    shareLoops.set(b.id, { loop, done: loop.run() });
+  }
+  function stopShare(id) {
+    const s = shareLoops.get(id);
+    if (!s) return;
+    s.loop.stop();
+    shareLoops.delete(id);
+  }
+  for (const b of shares.all()) {
+    if (b.left) shares.forget(b.id);   // left while the app was stopping
+    else startShare(b);
+  }
+  const localIdOf = (file) => (file ? Object.keys(files.state?.Files ?? {}).find((k) => files.state.Files[k] === file) ?? null : null);
+  const cloudIdOf = (localId) => {
+    const file = files.state?.Files?.[localId];
+    return file ? Object.keys(cloud.state?.Files ?? {}).find((k) => cloud.state.Files[k] === file) ?? null : null;
+  };
+  let pendingInvite = null;   // a saqme://join link handed over by `saqme invite` (the window asks first)
+  const shareInfo = () => ({
+    shares: shares.all().filter((b) => !b.left).map((b) => {
+      const l = shareLoops.get(b.id)?.loop;
+      return { id: b.id, projectId: localIdOf(b.file), name: b.name, file: b.file, server: b.server, access: b.access, status: l ? { state: l.status.state, message: l.status.message } : null };
+    }),
+    sharedByMe: (cloud.state?.Shared ?? []).map((pid) => localIdOf(cloud.state.Files?.[pid])).filter(Boolean),
+    notices: [...shareLoops].flatMap(([id, { loop }]) => (loop.state?.Notices ?? []).map((n) => ({
+      ...n, id: `${id}:${n.id}`, local: true, projectId: localIdOf(shares.get(id)?.file), list: n.list,
+    }))),
+    ended: shares.ended,
+    invite: pendingInvite,
+  });
+  /** The owner's side, for the window: the cloud Worker's share routes, with the window's project ids. */
+  async function ownerApi(method, path, body) {
+    const c = readCloudConfig(p.cloudConfig);
+    if (!c) throw Object.assign(new Error('Sharing needs cloud sync (Settings, Sync, Set up sync).'), { status: 409 });
+    let r;
+    try {
+      r = await fetch(`${c.url.replace(/\/+$/, '')}/api/${path}`, {
+        method, headers: { authorization: `Bearer ${c.token}`, 'content-type': 'application/json' }, body: body ? JSON.stringify(body) : undefined, signal: AbortSignal.timeout(15_000),
+      });
+    } catch { throw Object.assign(new Error(`Could not reach ${new URL(c.url).host}. Are you online?`), { status: 503 }); }
+    const data = await r.json().catch(() => ({}));
+    if (!r.ok) throw Object.assign(new Error(data.error || `HTTP ${r.status}`), { status: r.status });
+    return data;
+  }
+  const notSynced = () => Object.assign(new Error('This list is not on your sync service yet. Wait a moment for it to sync, then try again.'), { status: 404 });
+  const sharing = {
+    async list(localId) {
+      const pid = cloudIdOf(localId);
+      if (!pid) throw notSynced();
+      return { shares: (await ownerApi('GET', `shares?project=${pid}`)).shares.map((s) => ({ ...s, projectId: localId })) };
+    },
+    async invite({ projectId, alias, access }) {
+      const pid = cloudIdOf(projectId);
+      if (!pid) throw notSynced();
+      const d = await ownerApi('POST', 'shares/invite', { projectId: pid, alias, access });
+      cloud.wake();
+      return { ...d, share: { ...d.share, projectId } };
+    },
+    update: ({ id, access }) => ownerApi('POST', 'shares/update', { id, access }),
+    async revoke({ id }) { const d = await ownerApi('POST', 'shares/revoke', { id }); cloud.wake(); return d; },
+    async join(link) {
+      const b = await shares.join(link);
+      startShare(b);
+      if (pendingInvite?.link === link) pendingInvite = null;
+      return { id: b.id, name: b.file };
+    },
+    leave(id) { stopShare(id); const b = shares.leave(id); files.wake(); return { ok: true, name: b.file }; },
+    dismiss(id) {
+      const [sid, nid] = String(id).split(/:(.*)/s);
+      const l = shareLoops.get(sid)?.loop;
+      if (l?.state) { l.state.Notices = (l.state.Notices ?? []).filter((n) => n.id !== nid); saveState(l.state, l.statePath); }
+      return { ok: true };
+    },
+    offer(link) { if (!parseInviteLink(link)) throw Object.assign(new Error('not an invite link'), { status: 400 }); pendingInvite = { link, at: Date.now() }; return { ok: true }; },
+    decline() { pendingInvite = null; return { ok: true }; },
+  };
 
   const info = () => ({
     lists: p.lists,
     files: files.status,
     cloud: cloud.status.state === 'off' ? null : cloud.status,
-    guarded: Math.max(files.status.guarded, cloud.status.guarded),
+    guarded: Math.max(files.status.guarded, cloud.status.guarded, ...[...shareLoops.values()].map((s) => s.loop.status.guarded)),
+    ...shareInfo(),
   });
   const srv = await startServer({
     port: port ?? portSetting(p), token, d1, publicDir: appPaths.public, version: VERSION, info,
     onSync: () => files.wake(),
-    onAllowDeletes: () => { files.allowMassDelete = true; cloud.allowMassDelete = true; files.wake(); cloud.wake(); },
+    onAllowDeletes: () => {
+      for (const l of [files, cloud, ...[...shareLoops.values()].map((s) => s.loop)]) { l.allowMassDelete = true; l.wake(); }
+    },
     connect: (link) => { const url = connectCloud(p.cloudConfig, link); cloud.wake(); log(`cloud: connected to ${url}`); return url; },
     cloudSetup: cloudSetupRunner(p, { log, onDone: () => cloud.wake() }),
     disconnect: () => { disconnectCloud(p.cloudConfig); cloud.wake(); log('cloud: turned off in Settings'); },
     pairingLink: () => { const c = readCloudConfig(p.cloudConfig); return c ? `${c.url.replace(/\/+$/, '')}/#pair=${c.token}` : null; },
     pairingCode: () => { const c = readCloudConfig(p.cloudConfig); return c ? cloudPairingCode(c) : null; },
+    sharing,
     onStop: () => app.stop().then(() => process.exit(0)),
   });
   writeFileSync(p.server, JSON.stringify({ port: srv.port, pid: process.pid, version: VERSION }));
@@ -348,6 +479,7 @@ export async function startApp({ dataDir = defaultDataDir(), port, interval = 10
       watcher = watch(p.lists, (ev, name) => {
         if (!name || name.endsWith('.tmp') || name.includes('.renaming')) return;
         files.wake(); cloud.wake();
+        for (const s of shareLoops.values()) s.loop.wake();
       });
     } catch (e) { log(`folder watch unavailable (${e.message}); checking every ${interval / 1000} s`); }
   }
@@ -361,12 +493,14 @@ export async function startApp({ dataDir = defaultDataDir(), port, interval = 10
   log(`started ${VERSION} on ${srv.url}, lists in ${p.lists}`);
 
   const app = {
-    url: srv.url, port: srv.port, token, files, cloud, d1, paths: p,
+    url: srv.url, port: srv.port, token, files, cloud, d1, paths: p, shares, shareLoops, sharing,
     async stop() {
+      const running = [...shareLoops.values()];
       files.stop(); cloud.stop();
+      for (const s of running) s.loop.stop();
       clearInterval(reminderTimer);
       watcher?.close();
-      await Promise.all(loops);
+      await Promise.all([...loops, ...running.map((s) => s.done)]);
       await srv.close();
       d1.close();
       try { if (readJsonFile(p.server)?.pid === process.pid) unlinkSync(p.server); } catch { /* gone */ }
@@ -377,10 +511,12 @@ export async function startApp({ dataDir = defaultDataDir(), port, interval = 10
 }
 
 // ---------------------------------------------------------------- commands
-async function api(p, port, path, method = 'GET') {
+async function api(p, port, path, method = 'GET', body = undefined) {
   const token = readFileSync(p.token, 'utf8').trim();
-  const r = await fetch(`http://127.0.0.1:${port}${path}`, { method, headers: { authorization: `Bearer ${token}` }, signal: AbortSignal.timeout(5000) });
-  if (!r.ok) throw new Error(`${path}: ${r.status}`);
+  const r = await fetch(`http://127.0.0.1:${port}${path}`, {
+    method, headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' }, body: body === undefined ? undefined : JSON.stringify(body), signal: AbortSignal.timeout(20_000),
+  });
+  if (!r.ok) throw new Error((await r.json().catch(() => null))?.error ?? `${path}: ${r.status}`);
   return r.json();
 }
 
@@ -441,6 +577,9 @@ async function cmdStatus(opts) {
   console.log(`Lists folder sync: ${i.files.state}${i.files.message ? ` - ${i.files.message}` : ''}`);
   console.log(i.cloud ? `Cloud sync (${i.cloud.label}): ${i.cloud.state}${i.cloud.message ? ` - ${i.cloud.message}` : ''}${i.cloud.conflicts ? `, ${i.cloud.conflicts} conflicts to look at on your phone` : ''}`
     : 'Cloud sync: off (add it with: setup.sh --cloud)');
+  for (const s of i.shares ?? []) {
+    console.log(`Shared with you: ${s.file} from ${new URL(s.server).host} (${s.access === 'edit' ? 'can edit' : 'view only'}): ${s.status?.state ?? 'starting'}${s.status?.message ? ` - ${s.status.message}` : ''}`);
+  }
   if (i.guarded) console.log(`${i.guarded} tasks vanished from the lists folder at once; deleting them is paused. Confirm with: saqme allow-deletes`);
 }
 
@@ -462,6 +601,32 @@ async function cmdConnect(opts) {
   const p = dataPaths(opts.data);
   const url = connectCloud(p.cloudConfig, opts.args[0] ?? '');
   console.log(`Connected to ${new URL(url).host}. Lists with the same name are merged; syncing starts within a few seconds.`);
+}
+
+/** saqme join LINK: through the running app, or straight into the data folder (the app syncs it when it starts). */
+async function cmdJoin(opts) {
+  const p = dataPaths(opts.data);
+  const link = opts.args[0] ?? '';
+  const inv = parseInviteLink(link);
+  if (!inv) throw new Error('That is not an invite link (it looks like https://saqme.<name>.workers.dev/join#code=...).');
+  const port = runningPort(p, opts.port);
+  let name;
+  if (await ping(port)) name = (await api(p, port, '/api/local/join', 'POST', { link })).name;
+  else {
+    for (const d of [p.lists, p.sync]) mkdirSync(d, { recursive: true });
+    name = (await new Shares({ lists: p.lists, sync: p.sync }).join(link)).file;
+  }
+  console.log(`Joined "${name}", shared from ${new URL(inv.server).host}. It is the list ${name}.md in ${p.lists}; what you change there goes to its owner's server.`);
+}
+
+/** saqme invite LINK (a saqme:// link from a shared list's invite page): the window shows it and asks first. */
+async function cmdInvite(opts) {
+  const p = dataPaths(opts.data);
+  const link = opts.args[0] ?? '';
+  if (!parseInviteLink(link)) throw new Error('That is not an invite link.');
+  await cmdOpen(opts);
+  const port = runningPort(p, opts.port);
+  await api(p, port, '/api/local/invite', 'POST', { link });
 }
 
 async function cmdSimple(opts, path, done) {
@@ -495,11 +660,13 @@ if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
     'allow-deletes': () => cmdSimple(opts, '/api/local/allow-deletes', 'Confirmed: the vanished tasks will be deleted everywhere.'),
     'pair-phone': () => cmdPairPhone(opts),
     connect: () => cmdConnect(opts),
+    join: () => cmdJoin(opts),
+    invite: () => cmdInvite(opts),
     version: () => console.log(VERSION),
   };
   const run = commands[opts.cmd];
   if (!run) {
-    console.log(readFileSync(fileURLToPath(import.meta.url), 'utf8').split('\n').slice(1, 11).map((l) => l.replace(/^\/\/ ?/, '')).join('\n'));
+    console.log(readFileSync(fileURLToPath(import.meta.url), 'utf8').split('\n').slice(1, 13).map((l) => l.replace(/^\/\/ ?/, '')).join('\n'));
     process.exit(opts.cmd === 'help' || opts.cmd === '--help' ? 0 : 2);
   }
   run().catch((e) => { console.error(e?.message ?? e); process.exit(1); });

@@ -104,10 +104,12 @@ export function rekeyMap(keys) {
 }
 
 // ================================================================ sync state
+// Notices: what a shared list's server did not take (view-only list), shown with the conflicts;
+// Shared: ids of the projects one's own server says are shared with others (their tabs get a badge)
 export function newState() {
   return {
     version: 1, cursor: 0, dbId: '', clockOffset: 0, lastTs: 0, R: {}, S: {}, Outbox: [], Files: {}, Stamped: {},
-    Planned: {}, Missing: {}, Guard: null,
+    Planned: {}, Missing: {}, Guard: null, Notices: [], Shared: [],
   };
 }
 export function readState(path) {
@@ -119,6 +121,8 @@ export function readState(path) {
   for (const m of ['R', 'S', 'Files', 'Stamped', 'Planned', 'Missing']) if (o[m]) Object.assign(st[m], o[m]);
   if (Array.isArray(o.Outbox)) st.Outbox.push(...o.Outbox);
   if (o.Guard && Array.isArray(o.Guard.ids)) st.Guard = { ids: o.Guard.ids };
+  if (Array.isArray(o.Notices)) st.Notices.push(...o.Notices);
+  if (Array.isArray(o.Shared)) st.Shared = o.Shared;
   return st;
 }
 export function saveState(st, path) {
@@ -172,14 +176,19 @@ export function projectFileNames(listsDir) {
 /**
  * Reads every list; a list is usable ('ok') only if readable, not written in the last moment, all ids unique,
  * and free of NUL characters (what a power cut can leave in a file that was being written).
+ * view: which lists this engine syncs (shared lists, docs/sync.md): { only: name } (a shared list's engine),
+ * { exclude: Set } (the lists shared with this computer, which an engine for one's own server leaves out), and
+ * { first: Set } (their ids are checked first, so a line copied out of one gets the new id). `all`: every list.
  */
-export function readLocalLists(listsDir, settleMs = 1500) {
-  const res = { ok: true, dir: listsDir, names: [], files: {} };
+export function readLocalLists(listsDir, settleMs = 1500, view = null) {
+  const res = { ok: true, dir: listsDir, names: [], all: [], files: {} };
   if (!existsSync(listsDir)) { res.ok = false; return res; }
-  res.names = projectFileNames(listsDir);
+  res.all = projectFileNames(listsDir);
+  res.names = view?.only != null ? res.all.filter((n) => n === view.only) : view?.exclude ? res.all.filter((n) => !view.exclude.has(n)) : res.all;
   const now = Date.now();
   const allIds = new Set();
-  for (const name of res.names) {
+  const first = view?.first;
+  for (const name of first ? [...res.names.filter((n) => first.has(n)), ...res.names.filter((n) => !first.has(n))] : res.names) {
     const path = join(listsDir, `${name}.md`);
     const f = { name, path, text: null, items: null, status: 'ok', mtime: 0 };
     let lw = now;
@@ -278,8 +287,11 @@ const liveTaskIds = (base, projId) => Object.values(base)
 /**
  * Returns { count, deletes, guarded, skipped, empty, stamp: [ops for lists that need ids] }; mutates st.
  * clock: this computer's time in ms (tests move it on).
+ * opts.scope = { project, file }: the engine of a list shared with this computer, whose one file is that project.
+ * The list itself (its name, order, deletion) is its owner's: nothing about it is sent, only its tasks.
+ * opts.expected: keys of tasks whose disappearance is expected (a share that ended got new ids), never held back.
  */
-export function addLocalDiff(st, local, notifyAt, allowMassDelete = false, clock = Date.now()) {
+export function addLocalDiff(st, local, notifyAt, allowMassDelete = false, clock = Date.now(), { scope = null, expected = null } = {}) {
   const out = { count: 0, deletes: 0, guarded: 0, stamp: [], skipped: false, empty: false };
   if (!local.ok || local.names.length === 0) { out.skipped = true; out.empty = local.ok; return out; }
   const now = syncNow(st);
@@ -329,6 +341,33 @@ export function addLocalDiff(st, local, notifyAt, allowMassDelete = false, clock
 
   // ---- projects: file name -> project id
   const nameToId = {};
+  const projectDeletes = [];
+  if (scope) {
+    for (const name of local.names) { nameToId[name] = scope.project; st.Files[scope.project] = name; }
+  } else mapProjects(st, local, out, now, clock, nameToId, projectDeletes);
+
+  // ---- tasks
+  diffTasks(st, local, out, now, clock, nameToId, projectDeletes, editTs, allowMassDelete, expected);
+  // ---- synced settings
+  if (notifyAt) {
+    let sr = base['setting:notifyAt'];
+    const rr = srv['setting:notifyAt'];
+    if (!sr && rr) {
+      // first contact with a server that already has one: the server's value wins (applied by the next plan)
+      sr = copyRow(rr); sr.fields.value.v = notifyAt; base['setting:notifyAt'] = sr;
+    } else if (!sr) {
+      addLocalChange(st, 'setting', 'notifyAt', { value: notifyAt }, now, true); out.count++;
+    } else if (String(getField(sr, 'value')?.v ?? '') !== notifyAt) {
+      addLocalChange(st, 'setting', 'notifyAt', { value: notifyAt }, now); out.count++;
+    }
+  }
+  return out;
+}
+
+/** File names -> project ids (new lists, renamed ones, adopted ones), names and order; lists that are gone. */
+function mapProjects(st, local, out, now, clock, nameToId, projectDeletes) {
+  const base = st.S;
+  const srv = st.R;
   const mapped = {};
   for (const pid of Object.keys(st.Files)) mapped[st.Files[pid]] = pid;
   const unmatched = [];
@@ -411,7 +450,6 @@ export function addLocalDiff(st, local, notifyAt, allowMassDelete = false, clock
   // projects whose list is gone. Moved to lists/.trash (how the apps delete a list): deleted below. Gone some
   // other way (moved out and back, a sync client re-downloading the folder, git checkout): nothing is decided
   // until it has been gone for two cycles and 10 seconds, and then the delete guard below weighs it like its tasks
-  const projectDeletes = [];
   for (const id of missing) {
     const ids = liveTaskIds(base, id);
     if (st.Files[id] != null && trashedCopy(local.dir, st.Files[id], ids)) { projectDeletes.push({ id, ids, trashed: true }); continue; }
@@ -420,8 +458,11 @@ export function addLocalDiff(st, local, notifyAt, allowMassDelete = false, clock
     projectDeletes.push({ id, ids, trashed: false });
   }
   for (const id of Object.keys(st.Missing)) if (!missing.includes(id)) delete st.Missing[id];
+}
 
-  // ---- tasks
+/** Task changes from the lists, and the deletes (held back when a large share vanishes at once). */
+function diffTasks(st, local, out, now, clock, nameToId, projectDeletes, editTs, allowMassDelete, expected) {
+  const base = st.S;
   const localTasks = new Map();
   const order = [];
   for (const name of local.names) {
@@ -513,7 +554,7 @@ export function addLocalDiff(st, local, notifyAt, allowMassDelete = false, clock
       for (const [list, k] of per) if (k >= 5 && k > sizeOf.get(list) / 2) return true;
       return n >= 25 && n > total / 2;
     };
-    const confirmed = new Set(allowMassDelete ? st.Guard?.ids ?? [] : []);
+    const confirmed = new Set([...(allowMassDelete ? st.Guard?.ids ?? [] : []), ...(expected ?? [])]);
     const fresh = cands.filter((c) => !confirmed.has(c.key));
     let send = cands;
     if (fresh.length && alarming(fresh)) {
@@ -532,20 +573,6 @@ export function addLocalDiff(st, local, notifyAt, allowMassDelete = false, clock
       out.count++;
     }
   }
-  // ---- synced settings
-  if (notifyAt) {
-    let sr = base['setting:notifyAt'];
-    const rr = srv['setting:notifyAt'];
-    if (!sr && rr) {
-      // first contact with a server that already has one: the server's value wins (applied by the next plan)
-      sr = copyRow(rr); sr.fields.value.v = notifyAt; base['setting:notifyAt'] = sr;
-    } else if (!sr) {
-      addLocalChange(st, 'setting', 'notifyAt', { value: notifyAt }, now, true); out.count++;
-    } else if (String(getField(sr, 'value')?.v ?? '') !== notifyAt) {
-      addLocalChange(st, 'setting', 'notifyAt', { value: notifyAt }, now); out.count++;
-    }
-  }
-  return out;
 }
 
 // ================================================================ remote -> files
@@ -705,26 +732,46 @@ function newListFromRows(st, projId, depth) {
   return formatItems(items);
 }
 
-// `self`: the list being renamed, which may hold the name already (a case-only rename on macOS)
-function uniqueFileName(listsDir, name, reserved, self = '') {
-  const base = toFileName(name);
-  let n = base;
+// `self`: the list being renamed, which may hold the name already (a case-only rename on macOS). `from`: for a list
+// shared with this computer, its server's short name (pairing.js serverLabel): a name another list has becomes
+// "Groceries (from nuca)" before it gets a number.
+export function uniqueFileName(listsDir, name, reserved, self = '', from = '') {
   const taken = (x) => reserved.has(x.toLowerCase()) || (x.toLowerCase() !== self.toLowerCase() && existsSync(join(listsDir, `${x}.md`)));
+  let base = toFileName(name);
+  if (from && taken(base)) base = toFileName(`${name} (from ${from})`);
+  let n = base;
   for (let i = 2; taken(n); i++) n = `${base} (${i})`;
   reserved.add(n.toLowerCase());
   return n;
 }
 const stem = (p) => basename(p).replace(/\.md$/, '');
 
-/** The plan that makes the lists match R; null when some list is not usable right now (retry later). */
-export function remotePlan(st, local, listsDir) {
+/** A view-only shared list (strict): task lines that are not live tasks of it on the server go. */
+function dropUnknownTasks(items, srv, projId) {
+  for (const it of [...items]) {
+    if (it.kind !== 'task' || !it.id) continue;
+    const r = srv[`task:${it.id}`];
+    if (r && !getField(r, 'deleted')?.v && placeOf(r)?.project === projId) continue;
+    const i = findItem(items, it.id);
+    if (i >= 0) removeItemKeepChildren(items, i);
+  }
+}
+
+/**
+ * The plan that makes the lists match R; null when some list is not usable right now (retry later).
+ * scope = { project, file, readOnly, label } (a shared list's engine): only that list; its file comes back if it is
+ * gone while the list is shared, and a view-only list's file is made to match the server exactly (task lines).
+ * label: its server's short name, for a rename onto a name another list has.
+ */
+export function remotePlan(st, local, listsDir, scope = null) {
   const plan = { ops: [], files: {}, setting: null };
   if (!local.ok) return null;
   if (local.names.some((n) => local.files[n].status !== 'ok')) return null;
   const srv = st.R;
   const base = st.S;
   const fileOf = { ...st.Files };
-  const reserved = new Set(local.names.map((n) => n.toLowerCase()));
+  // (every list in the folder, also those of other engines: a new or renamed file never takes one of their names)
+  const reserved = new Set((local.all ?? local.names).map((n) => n.toLowerCase()));
   const creates = [];
   const writes = [];
   const after = [];
@@ -734,8 +781,10 @@ export function remotePlan(st, local, listsDir) {
   // ---- projects
   let orderChanged = false;
   for (const [key, r] of Object.entries(srv)) {
-    if (r.kind !== 'project' || !rowPending(st, key)) continue;
-    orderChanged = true;
+    if (r.kind !== 'project' || (scope && r.id !== scope.project)) continue;
+    const recreate = scope && !getField(r, 'deleted')?.v && !Object.hasOwn(local.files, fileOf[r.id] ?? scope.file);
+    if (!rowPending(st, key) && !recreate) continue;
+    if (!scope) orderChanged = true;
     const s = base[key];
     const id = r.id;
     const live = !getField(r, 'deleted')?.v;
@@ -743,9 +792,10 @@ export function remotePlan(st, local, listsDir) {
     const file = fileOf[id];
     const exists = file && Object.hasOwn(local.files, file);
     if (live && !exists) {
-      const n = uniqueFileName(listsDir, String(getField(r, 'name')?.v ?? ''), reserved);
+      const n = scope ? (file ?? scope.file) : uniqueFileName(listsDir, String(getField(r, 'name')?.v ?? ''), reserved);
       creates.push({ type: 'create', path: join(listsDir, `${n}.md`), text: newListFromRows(st, id, depth()) });
       fileOf[id] = n; plan.files[id] = n;
+      if (scope) orderChanged = true;
     } else if (!live && exists && wasLive) {
       // only the list as it is now: anything typed into it meanwhile stops the plan instead of going to .trash
       after.push({ type: 'trash', path: join(listsDir, `${file}.md`), name: file, expected: local.files[file].text });
@@ -754,9 +804,10 @@ export function remotePlan(st, local, listsDir) {
       const target = toFileName(String(getField(r, 'name')?.v ?? ''));
       if (target !== file) {
         reserved.delete(file.toLowerCase());
-        const n = uniqueFileName(listsDir, target, reserved, file);
+        const n = uniqueFileName(listsDir, target, reserved, file, scope?.label ?? '');
         after.push({ type: 'rename', from: join(listsDir, `${file}.md`), to: join(listsDir, `${n}.md`) });
         fileOf[id] = n; plan.files[id] = n;
+        if (scope) orderChanged = true;   // (the tab keeps its place under its new name)
       }
     }
   }
@@ -769,10 +820,13 @@ export function remotePlan(st, local, listsDir) {
   }
   for (const name of local.names) {
     const projId = Object.keys(st.Files).find((k) => st.Files[k] === name);
-    if (!projId || !needs.has(projId)) continue;
+    const strict = !!scope?.readOnly && projId === scope.project;
+    if (!projId || (!needs.has(projId) && !strict)) continue;
     if (Object.hasOwn(plan.files, projId) && plan.files[projId] == null) continue;   // being trashed
     const f = local.files[name];
-    const items = updateListFromRemote(st, parseItems(f.text), projId, depth());
+    const lines = parseItems(f.text);
+    if (strict) dropUnknownTasks(lines, srv, projId);
+    const items = updateListFromRemote(st, lines, projId, depth());
     const text = formatItems(items, 0, detectEol(f.text));
     if (text !== f.text) {
       // lists that gain tasks are written before lists that lose them: an interrupted plan can then
@@ -788,8 +842,9 @@ export function remotePlan(st, local, listsDir) {
     // list names after this plan; the server's order for projects it knows, local-only lists keep their slots
     const gone = new Set(after.filter((o) => o.type === 'trash').map((o) => o.name));
     const renamed = new Map(after.filter((o) => o.type === 'rename').map((o) => [stem(o.from), stem(o.to)]));
-    const names = local.names.filter((n) => !gone.has(n)).map((n) => renamed.get(n) ?? n);
-    for (const o of creates) names.push(stem(o.path));
+    // every list keeps its slot, also those another engine syncs (only this engine's own are put in order)
+    const names = (local.all ?? local.names).filter((n) => !gone.has(n)).map((n) => renamed.get(n) ?? n);
+    for (const o of creates) if (!names.includes(stem(o.path))) names.push(stem(o.path));
     const idOfName = new Map(Object.entries(fileOf).map(([k, v]) => [v, k]));
     const known = [];
     names.forEach((n, i) => {
@@ -800,7 +855,7 @@ export function remotePlan(st, local, listsDir) {
     known.forEach((k, i) => { names[k.slot] = sorted[i].name; });
     plan.ops.push({ type: 'order', path: join(listsDir, '.order'), names });
   }
-  if (rowPending(st, 'setting:notifyAt')) plan.setting = String(getField(srv['setting:notifyAt'], 'value')?.v ?? '');
+  if (rowPending(st, 'setting:notifyAt') && !scope) plan.setting = String(getField(srv['setting:notifyAt'], 'value')?.v ?? '');
   return plan;
 }
 
@@ -855,20 +910,87 @@ function startOver(st) {
   st.R = {}; st.S = {}; st.cursor = 0; st.Outbox.length = 0; st.Planned = {}; st.Missing = {}; st.Guard = null;
 }
 
+// ---------------------------------------------------------------- shared lists: what was not saved
+const NOTICE_FIELDS = ['text', 'status', 'due', 'notes'];
+function shortHash(s) {
+  let h = 2166136261;
+  for (let i = 0; i < s.length; i++) { h ^= s.charCodeAt(i); h = Math.imul(h, 16777619); }
+  return (h >>> 0).toString(36);
+}
+/** Keeps a change the server of a shared list will not take (st.Notices), once per task, field and value. */
+function addNotice(st, file, entry, field, value, reason) {
+  st.Notices ??= [];
+  const text = String(entry.fields.text?.v ?? getField(st.R[`task:${entry.id}`], 'text')?.v ?? getField(st.S[`task:${entry.id}`], 'text')?.v ?? '');
+  const id = `${entry.id}-${field}-${shortHash(JSON.stringify(value ?? null))}`;
+  if (st.Notices.some((n) => n.id === id)) return;
+  st.Notices.push({ id, task: entry.id, list: file, field, value: copyValue(value ?? null), text, reason, at: Date.now() });
+  if (st.Notices.length > 100) st.Notices.splice(0, st.Notices.length - 100);
+}
+/** One outbox entry -> the notices that keep what it would have changed (moves keep nothing worth showing). */
+function noticesFor(st, file, e, reason) {
+  if (e.kind !== 'task') return;
+  const f = e.fields;
+  if (f.place && f.place.base === -1) { addNotice(st, file, e, 'new', f.text?.v ?? '', reason); return; }
+  if (f.deleted?.v === true) { addNotice(st, file, e, 'deleted', true, reason); return; }
+  for (const name of NOTICE_FIELDS) if (f[name]) addNotice(st, file, e, name, f[name].v, reason);
+}
+/**
+ * A view-only shared list: nothing local is sent. What the lists changed becomes notices, the base forgets tasks
+ * the server never had, and the plan that follows puts the file back as the server has it.
+ */
+function holdReadOnly(st, scope) {
+  const reason = 'this shared list is view-only';
+  for (const e of st.Outbox) {
+    if (e.kind !== 'task') continue;
+    // only what differs from the server's copy (after a restart or a restore every line is "new" to the base)
+    const r = st.R[`task:${e.id}`];
+    const live = r && !getField(r, 'deleted')?.v && placeOf(r)?.project === scope.project;
+    if (!live) { if (e.fields.deleted?.v !== true) addNotice(st, scope.file, e, 'new', e.fields.text?.v ?? '', reason); continue; }
+    if (e.fields.deleted?.v === true) { addNotice(st, scope.file, e, 'deleted', true, reason); continue; }
+    for (const name of NOTICE_FIELDS) if (e.fields[name] && !sameValue(name, e.fields[name].v, getField(r, name)?.v)) addNotice(st, scope.file, e, name, e.fields[name].v, reason);
+  }
+  st.Outbox.length = 0;
+  for (const key of Object.keys(st.S)) if (!st.R[key]) delete st.S[key];
+}
+
+/** Whether a row from the server may land in R: a shared list's server can only send rows of that list. */
+function acceptRow(st, row, scope) {
+  if (typeof row.id !== 'string') return false;
+  if (!scope) return !row.gone;
+  if (row.gone) return row.kind === 'task';
+  if (!row.fields || typeof row.fields !== 'object') return false;
+  if (row.kind === 'project') return row.id === scope.project;
+  if (row.kind === 'task') return placeOf(row)?.project === scope.project;
+  if (row.kind === 'conflict') return placeOf(st.R[`task:${row.task}`])?.project === scope.project;
+  return false;
+}
+
+/** A list's text with every task given a new id (a shared list that became one's own: never mixed up with the owner's). */
+export function withNewIds(text) {
+  const items = parseItems(text);
+  for (const it of items) if (it.kind === 'task' && it.id) it.id = newTaskId();
+  return formatItems(items, 0, detectEol(text));
+}
+
 /**
  * ctx = { state, statePath, listsDir, transport(body) -> { status, data }, deviceId, notifyAt, allowMassDelete,
- *         settleMs, applyPlan(plan) -> true when the whole plan was applied, clock() -> ms (tests) }
- * Returns { status: 'synced'|'offline'|'error'|'auth', message, guarded, retry, sent, received, refused }.
+ *         settleMs, applyPlan(plan) -> true when the whole plan was applied, clock() -> ms (tests),
+ *         view (readLocalLists), scope = { project, file, readOnly } (a shared list's engine), expected (Set) }
+ * Returns { status: 'synced'|'offline'|'error'|'auth', message, guarded, retry, sent, received, refused, access }.
  */
 export async function syncCycle(ctx) {
   const st = ctx.state;
   const clock = ctx.clock ?? Date.now;
-  const res = { status: 'synced', message: '', guarded: 0, retry: false, sent: 0, received: 0, refused: [] };
-  const local = readLocalLists(ctx.listsDir, ctx.settleMs ?? 1500);
+  const scope = ctx.scope ?? null;
+  const res = { status: 'synced', message: '', guarded: 0, retry: false, sent: 0, received: 0, refused: [], access: null };
+  const local = readLocalLists(ctx.listsDir, ctx.settleMs ?? 1500, ctx.view ?? null);
+  if (scope) st.Files[scope.project] = scope.file;
   const firstSync = Object.keys(st.S).length === 0;   // nothing reconciled yet: pull everything first
+  const opts = { scope, expected: ctx.expected ?? null };
   let diff = null;
   if (!firstSync) {
-    diff = addLocalDiff(st, local, ctx.notifyAt, ctx.allowMassDelete, clock());
+    diff = addLocalDiff(st, local, ctx.notifyAt, ctx.allowMassDelete, clock(), opts);
+    if (scope?.readOnly) holdReadOnly(st, scope);
     res.guarded = diff.guarded;
     if (diff.stamp.length) { ctx.applyPlan({ ops: diff.stamp, files: {}, setting: null, stamp: true }); res.retry = true; }
     if (diff.skipped) res.retry = true;
@@ -876,7 +998,9 @@ export async function syncCycle(ctx) {
   }
   // send the outbox (in chunks) and pull everything new
   for (let round = 0; round < 40; round++) {
-    const batch = st.Outbox.slice(0, 100);   // server limit per request
+    // (server limit per request; copies: the acknowledgement below edits the outbox entries, not what was sent,
+    // which the answer's refusals are read from: notices, a lost project)
+    const batch = st.Outbox.slice(0, 100).map((e) => structuredClone(e));
     const sentAt = Date.now();
     let r;
     try {
@@ -885,9 +1009,15 @@ export async function syncCycle(ctx) {
       res.status = 'offline'; res.message = String(e?.message ?? e);
       return res;
     }
-    if (r.status === 401) { res.status = 'auth'; res.message = 'The server rejected the sync token. Pair this computer again.'; return res; }
+    if (r.status === 401) {
+      res.status = 'auth';
+      res.message = scope ? 'The owner stopped sharing this list.' : 'The server rejected the sync token. Pair this computer again.';
+      return res;
+    }
     if (r.status !== 200 || !r.data) { res.status = 'error'; res.message = `Server error ${r.status}`; return res; }
     const d = r.data;
+    if (scope && ['edit', 'view'].includes(d.share?.access)) res.access = d.share.access;
+    if (!scope && Array.isArray(d.shared)) st.Shared = d.shared.filter((x) => typeof x === 'string');   // this computer's lists others have
     st.clockOffset = Math.round(Number(d.serverTime) - (sentAt + Date.now()) / 2);
     if (d.restored || Number(d.cursor) < Number(st.cursor)) {
       // the server went back in time (restored from a backup): start over like a first sync. The lists keep
@@ -918,9 +1048,25 @@ export async function syncCycle(ctx) {
       for (const n of Object.keys(sent.fields)) if (cur.fields[n] && Number(cur.fields[n].ts) === Number(sent.fields[n].ts)) delete cur.fields[n];
       if (!Object.keys(cur.fields).length) st.Outbox.splice(st.Outbox.indexOf(cur), 1);
     }
-    for (const row of d.changes ?? []) if (row) { st.R[`${row.kind}:${row.id}`] = row; res.received++; }
+    for (const row of d.changes ?? []) {
+      if (!row || !acceptRow(st, row, scope)) continue;
+      const key = `${row.kind}:${row.id}`;
+      if (row.gone) {
+        // the owner moved it into a list this computer does not share: it leaves this one like a delete
+        const s = st.S[key] ?? st.R[key];
+        if (s) { const g = copyRow(s); g.fields.deleted = { v: true, ts: Number(getField(s, 'deleted')?.ts ?? 0) + 1 }; st.R[key] = g; }
+      } else st.R[key] = row;
+      res.received++;
+    }
     for (const rej of d.rejected ?? []) {
       if (!rej) continue;
+      if (scope && rej.reason !== 'unknown task') {
+        // a shared list's server refused it (view-only by now, or the owner deleted the list): kept as a notice
+        const e = batch.find((b) => b.kind === rej.kind && b.id === rej.id);
+        if (e) noticesFor(st, scope.file, rej.field ? { ...e, fields: { [rej.field]: e.fields[rej.field] } } : e, rej.reason);
+        res.refused.push(`${rej.kind} ${rej.id}: ${rej.reason}`);
+        continue;
+      }
       if (rej.reason === 'unknown task' || rej.reason === 'unknown project') {
         // the server lost it: forget the base so the next diff sends it again as a fresh create (a project
         // keeps its id through the file mapping)
@@ -943,7 +1089,8 @@ export async function syncCycle(ctx) {
   }
   if (firstSync && !(local.ok && local.names.length === 0)) {
     // first contact: pulled the server's lists first, now merge ours in (adopting its projects by name)
-    const d2 = addLocalDiff(st, local, ctx.notifyAt, ctx.allowMassDelete, clock());
+    const d2 = addLocalDiff(st, local, ctx.notifyAt, ctx.allowMassDelete, clock(), opts);
+    if (scope?.readOnly) holdReadOnly(st, scope);
     if (d2.stamp.length) ctx.applyPlan({ ops: d2.stamp, files: {}, setting: null, stamp: true });
     saveState(st, ctx.statePath);
     res.retry = true;
@@ -955,11 +1102,11 @@ export async function syncCycle(ctx) {
   // the plan would treat them as already synced), and only if no list changed since we read them. A folder
   // without lists sends nothing (it may be one that is not there right now), but does receive.
   if (diff?.skipped && !diff.empty) { res.retry = true; return res; }
-  const fresh = readLocalLists(ctx.listsDir, 0);
+  const fresh = readLocalLists(ctx.listsDir, 0, ctx.view ?? null);
   if (fresh.names.length !== local.names.length || fresh.names.some((n) => !local.files[n] || local.files[n].text !== fresh.files[n].text)) {
     res.retry = true; return res;
   }
-  const plan = remotePlan(st, fresh, ctx.listsDir);
+  const plan = remotePlan(st, fresh, ctx.listsDir, scope);
   if (!plan) { res.retry = true; return res; }
   if (plan.ops.length || plan.setting != null) {
     if (!ctx.applyPlan(plan)) { res.retry = true; return res; }
