@@ -675,6 +675,16 @@ function Copy-Value($v) {
   if ($v -is [System.Collections.IDictionary]) { $h = @{}; foreach ($k in @($v.Keys)) { $h[$k] = $v[$k] }; return $h }
   return $v
 }
+# An outbox entry as it is sent: acknowledging the answer removes fields from the outbox entry itself, so what
+# the answer's refusals are read from (notices, a lost project) must be this copy. (engine.mjs syncCycle)
+function Copy-OutboxEntry($e) {
+  $out = @{}
+  foreach ($k in @($e.Keys)) { if ($k -ne 'fields') { $out[$k] = $e[$k] } }
+  $f = @{}
+  foreach ($name in @($e['fields'].Keys)) { $f[$name] = Copy-Value $e['fields'][$name] }
+  $out['fields'] = $f
+  return $out
+}
 function Copy-Row($row) {
   if ($null -eq $row) { return $null }
   $out = @{}
@@ -728,13 +738,62 @@ function Get-PairingLink([string]$text) {
   return @{ Key = $key; Server = $u.GetLeftPart([UriPartial]::Authority) }
 }
 
+# An address that may be a sync server -> its origin, or $null (the same rules as for pairing links)
+function Get-ServerOrigin([string]$s) {
+  if ($s.Contains('@')) { return $null }
+  $u = $null
+  if (-not [Uri]::TryCreate($s, [UriKind]::Absolute, [ref]$u)) { return $null }
+  if ($u.UserInfo) { return $null }
+  if ($u.Scheme -ne 'https' -and -not ($u.Scheme -eq 'http' -and @('localhost', '127.0.0.1', '[::1]') -contains $u.Host)) { return $null }
+  return $u.GetLeftPart([UriPartial]::Authority)
+}
+
+# An invite to a shared list -> @{ Server; Code } or $null: https://<owner's server>/join#code=<code>, that server's
+# app with #join=<code>, or saqme://join?server=<encoded origin>&code=<code> (what the join page hands this app).
+# (worker/public/js/pairing.js parseInviteLink)
+function Get-InviteLink([string]$text) {
+  $v = $text.Trim($script:JsSpace)
+  $server = $null; $code = $null
+  if ($v -cmatch ('^saqme://join/?\?([^#' + $script:JsSpaceClass + ']*)\z')) {
+    $q = @{}
+    foreach ($part in $matches[1].Split('&')) {
+      $i = $part.IndexOf('=')
+      $k = $(if ($i -ge 0) { $part.Substring(0, $i) } else { $part }); $val = $(if ($i -ge 0) { $part.Substring($i + 1) } else { '' })
+      $k = [Uri]::UnescapeDataString($k.Replace('+', ' '))
+      if (-not $q.ContainsKey($k)) { $q[$k] = [Uri]::UnescapeDataString($val.Replace('+', ' ')) }   # the first one counts (URLSearchParams.get)
+    }
+    $s = [string]$q['server']; $code = [string]$q['code']
+    if ($s -cnotmatch ('^https?://[^/#?' + $script:JsSpaceClass + ']+/?\z')) { return $null }
+    $server = Get-ServerOrigin ($s -replace '/\z', '')
+  } elseif ($v -cmatch ('^(https?://[^/#?' + $script:JsSpaceClass + ']+)(?:/join/?(?:\?[^#]*)?#code=|/?(?:\?[^#]*)?#join=)([^&' + $script:JsSpaceClass + ']+)\z')) {
+    $origin = $matches[1]; $code = $matches[2]
+    $server = Get-ServerOrigin $origin
+  } else { return $null }
+  if (-not $server -or $code -cnotmatch '^[A-Za-z0-9_-]{22,64}\z') { return $null }
+  return @{ Server = $server; Code = $code }
+}
+
+# A sync server's short name, for a shared list whose name another list has ("Groceries (from nuca)"): the account
+# part of a workers.dev address, else the host without www. or saqme. (pairing.js serverLabel; shared/fixtures/text.json)
+function Get-ServerLabel([string]$server) {
+  $v = ([string]$server).Trim($script:JsSpace)
+  $u = $null
+  if (-not [Uri]::TryCreate($v, [UriKind]::Absolute, [ref]$u) -or ($u.Scheme -ne 'http' -and $u.Scheme -ne 'https')) { return $v }
+  $h = $u.Host.ToLowerInvariant()
+  if (-not $u.IsDefaultPort) { $h = "${h}:$($u.Port)" }
+  if ($h -cmatch '^(?:[^.]+\.)?([^.]+)\.workers\.dev\z') { return $matches[1] }
+  return ($h -creplace '^(www|saqme)\.', '')
+}
+
 # ================================================================ sync state
 # Planned: "task:<id>" -> what the lists held before the last plans changed that task (Add-PlannedNotes);
 # Missing: project id -> when its list was first seen missing;  Guard: @{ ids } of the deletes held back
+# Notices: what a shared list's server did not take (a view-only list), shown with the conflicts;
+# Shared: ids of the projects one's own server says are shared with others (their tabs get a badge)
 function New-SyncState {
   return @{ version = 1; cursor = 0; dbId = ''; clockOffset = [long]0; lastTs = [long]0
             R = @{}; S = @{}; Outbox = (New-Object System.Collections.ArrayList); Files = @{}; Stamped = @{}
-            Planned = @{}; Missing = @{}; Guard = $null }
+            Planned = @{}; Missing = @{}; Guard = $null; Notices = (New-Object System.Collections.ArrayList); Shared = @() }
 }
 
 function Read-SyncState([string]$path) {
@@ -748,6 +807,8 @@ function Read-SyncState([string]$path) {
   }
   if ($o.ContainsKey('Outbox') -and $o['Outbox']) { foreach ($c in $o['Outbox']) { [void]$st.Outbox.Add($c) } }
   if ($o.ContainsKey('Guard') -and $o['Guard'] -and $o['Guard']['ids']) { $st.Guard = @{ ids = @($o['Guard']['ids']) } }
+  if ($o.ContainsKey('Notices') -and $o['Notices']) { foreach ($n in $o['Notices']) { [void]$st.Notices.Add($n) } }
+  if ($o.ContainsKey('Shared') -and $o['Shared']) { $st.Shared = @($o['Shared'] | ForEach-Object { [string]$_ }) }
   return $st
 }
 
@@ -792,10 +853,22 @@ function Add-LocalChange($st, [string]$kind, [string]$id, $values, [long]$ts, [s
 # Reads every list. A file is usable ('ok') only if it could be read, was not written in the last moment,
 # all its tasks have unique ids and it holds no NUL characters (what a power cut can leave in a file that
 # was being written); otherwise it is left alone this cycle.
-function Read-LocalLists([string]$listsDir, [int]$settleMs = 1500) {
-  $res = @{ Ok = $true; Dir = $listsDir; Names = @(); Files = @{} }
+# $view: which lists this engine syncs (shared lists, docs/sync.md): @{ Only = name } (a shared list's engine),
+# @{ Exclude = @{ name = $true } } (the lists shared with this PC, which the engine for one's own server leaves out).
+# All: every list in the folder. (engine.mjs readLocalLists)
+function Read-LocalLists([string]$listsDir, [int]$settleMs = 1500, $view = $null) {
+  $res = @{ Ok = $true; Dir = $listsDir; Names = @(); All = @(); Files = @{} }
   if (-not (Test-Path -LiteralPath $listsDir)) { $res.Ok = $false; return $res }
-  $res.Names = @(Get-ProjectFileNames $listsDir)
+  $res.All = @(Get-ProjectFileNames $listsDir)
+  if ($view) {
+    # plain loops, not a pipeline: names end up in JSON and as keys (Get-ProjectFileNames)
+    $keep = New-Object 'System.Collections.Generic.List[string]'
+    foreach ($n in $res.All) {
+      if ($null -ne $view.Only) { if ($n -ceq [string]$view.Only) { $keep.Add($n) } }
+      elseif (-not ($view.Exclude -and $view.Exclude.ContainsKey($n))) { $keep.Add($n) }
+    }
+    $res.Names = $keep.ToArray()
+  } else { $res.Names = $res.All }
   $now = [DateTime]::UtcNow
   $allIds = @{}
   foreach ($name in $res.Names) {
@@ -917,54 +990,10 @@ function Test-Alarming($cands, $sizeOf, [int]$total) {
   return ($n -ge 25 -and $n -gt $total / 2)
 }
 
-# Returns @{ Count; Deletes; Guarded; Skipped; Empty; Stamp = @(plans for files that need ids) }; mutates $st.
-# $Clock: this computer's time in ms (tests move it on).
-function Add-LocalDiff($st, $local, [string]$notifyAt, [switch]$AllowMassDelete, [long]$Clock = 0) {
-  $out = @{ Count = 0; Deletes = 0; Guarded = 0; Stamp = (New-Object System.Collections.ArrayList); Skipped = $false; Empty = $false }
-  if (-not $local.Ok -or $local.Names.Count -eq 0) { $out.Skipped = $true; $out.Empty = [bool]$local.Ok; return $out }
-  if (-not $Clock) { $Clock = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds() }
-  $now = Get-SyncNow $st
-  foreach ($k in @($st.Planned.Keys)) { if (-not ($Clock - [long]$st.Planned[$k]['at'] -lt $script:PlannedKeep)) { [void]$st.Planned.Remove($k) } }
-  # an edit counts from when its list was saved, not from when this cycle noticed it ("newest wins" stays
-  # fair); a list we only rewrote to add ids keeps the time of the edit before that
-  $editTs = @{}
-  foreach ($name in $local.Names) {
-    $f = $local.Files[$name]
-    $t = [long]$f.MTime + [long]$st.clockOffset
-    $editTs[$name] = $(if ($t -gt 0 -and $t -lt $now) { $t } else { $now })
-    $mark = $st.Stamped[$f.Path]
-    if ($mark) {
-      if ($f.Text -ceq [string]$mark['text']) { $editTs[$name] = [long]$mark['ts'] }
-      elseif ($f.Status -eq 'ok') { [void]$st.Stamped.Remove($f.Path) }
-    }
-  }
+# File names -> project ids (new lists, renamed ones, adopted ones), names and order; lists that are gone (into
+# $projectDeletes). Part of Add-LocalDiff. (engine.mjs mapProjects)
+function Add-ProjectMapping($st, $local, $out, [long]$now, [long]$Clock, $nameToId, $projectDeletes) {
   $base = $st.S; $srv = $st.R
-
-  # ---- files that need ids first (no changes are sent for them this cycle)
-  $taken = @{}
-  foreach ($name in $local.Names) { $f = $local.Files[$name]; if ($f.Status -eq 'ok') { foreach ($it in $f.Items) { if ($it.Kind -eq 'task' -and $it.Id) { $taken[$it.Id] = $true } } } }
-  foreach ($name in $local.Names) {
-    $f = $local.Files[$name]
-    if ($f.Status -ne 'unstamped') { continue }
-    $items = Read-Items $f.Text
-    $pid0 = $null; foreach ($k in @($st.Files.Keys)) { if ($st.Files[$k] -eq $name) { $pid0 = $k } }
-    $known = New-TextMap
-    foreach ($key in @($base.Keys)) {
-      $r = $base[$key]
-      if ($r['kind'] -ne 'task' -or -not $pid0) { continue }
-      $pl = (Get-Field $r 'place')['v']
-      if ($pl -and $pl['project'] -eq $pid0 -and -not $taken.ContainsKey($r['id'])) { $known[[string](Get-Field $r 'text')['v']] = $r['id'] }
-    }
-    [void](Set-MissingIds $items $known $taken)
-    foreach ($it in $items) { if ($it.Kind -eq 'task' -and $it.Id) { $taken[$it.Id] = $true } }
-    $stampedText = ConvertTo-MarkdownText $items 0 (Get-TextEol $f.Text)
-    [void]$out.Stamp.Add(@{ type = 'write'; path = $f.Path; expected = $f.Text; text = $stampedText })
-    $st.Stamped[$f.Path] = @{ text = $stampedText; ts = $editTs[$name] }
-  }
-  foreach ($name in $local.Names) { if ($local.Files[$name].Status -ne 'ok') { $out.Skipped = $true } }
-
-  # ---- projects: file name -> project id
-  $nameToId = @{}
   $mapped = @{}
   foreach ($pidK in @($st.Files.Keys)) { $mapped[$st.Files[$pidK]] = $pidK }
   $unmatched = New-Object System.Collections.ArrayList
@@ -1048,7 +1077,6 @@ function Add-LocalDiff($st, $local, [string]$notifyAt, [switch]$AllowMassDelete,
   # projects whose list is gone. Moved to lists\.trash (how the apps delete a list): deleted below. Gone some
   # other way (moved out and back, a sync client re-downloading the folder, git checkout): nothing is decided
   # until it has been gone for two cycles and 10 seconds, and then the delete guard below weighs it like its tasks
-  $projectDeletes = New-Object System.Collections.ArrayList
   foreach ($id in $missing) {
     $ids = Get-LiveTaskIds $base $id
     if ($st.Files.ContainsKey($id) -and (Test-TrashedCopy $local.Dir $st.Files[$id] $ids)) { [void]$projectDeletes.Add(@{ id = $id; ids = $ids; trashed = $true }); continue }
@@ -1057,6 +1085,63 @@ function Add-LocalDiff($st, $local, [string]$notifyAt, [switch]$AllowMassDelete,
     [void]$projectDeletes.Add(@{ id = $id; ids = $ids; trashed = $false })
   }
   foreach ($id in @($st.Missing.Keys)) { if (-not $missing.Contains($id)) { [void]$st.Missing.Remove($id) } }
+}
+
+# Returns @{ Count; Deletes; Guarded; Skipped; Empty; Stamp = @(plans for files that need ids) }; mutates $st.
+# $Clock: this computer's time in ms (tests move it on).
+# $Scope = @{ Project; File }: the engine of a list shared with this PC, whose one file is that project. The list
+# itself (its name, order, deletion) is its owner's: nothing about it is sent, only its tasks.
+# $Expected: keys of tasks whose disappearance is expected, never held back. (engine.mjs addLocalDiff)
+function Add-LocalDiff($st, $local, [string]$notifyAt, [switch]$AllowMassDelete, [long]$Clock = 0, $Scope = $null, $Expected = $null) {
+  $out = @{ Count = 0; Deletes = 0; Guarded = 0; Stamp = (New-Object System.Collections.ArrayList); Skipped = $false; Empty = $false }
+  if (-not $local.Ok -or $local.Names.Count -eq 0) { $out.Skipped = $true; $out.Empty = [bool]$local.Ok; return $out }
+  if (-not $Clock) { $Clock = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds() }
+  $now = Get-SyncNow $st
+  foreach ($k in @($st.Planned.Keys)) { if (-not ($Clock - [long]$st.Planned[$k]['at'] -lt $script:PlannedKeep)) { [void]$st.Planned.Remove($k) } }
+  # an edit counts from when its list was saved, not from when this cycle noticed it ("newest wins" stays
+  # fair); a list we only rewrote to add ids keeps the time of the edit before that
+  $editTs = @{}
+  foreach ($name in $local.Names) {
+    $f = $local.Files[$name]
+    $t = [long]$f.MTime + [long]$st.clockOffset
+    $editTs[$name] = $(if ($t -gt 0 -and $t -lt $now) { $t } else { $now })
+    $mark = $st.Stamped[$f.Path]
+    if ($mark) {
+      if ($f.Text -ceq [string]$mark['text']) { $editTs[$name] = [long]$mark['ts'] }
+      elseif ($f.Status -eq 'ok') { [void]$st.Stamped.Remove($f.Path) }
+    }
+  }
+  $base = $st.S; $srv = $st.R
+
+  # ---- files that need ids first (no changes are sent for them this cycle)
+  $taken = @{}
+  foreach ($name in $local.Names) { $f = $local.Files[$name]; if ($f.Status -eq 'ok') { foreach ($it in $f.Items) { if ($it.Kind -eq 'task' -and $it.Id) { $taken[$it.Id] = $true } } } }
+  foreach ($name in $local.Names) {
+    $f = $local.Files[$name]
+    if ($f.Status -ne 'unstamped') { continue }
+    $items = Read-Items $f.Text
+    $pid0 = $null; foreach ($k in @($st.Files.Keys)) { if ($st.Files[$k] -eq $name) { $pid0 = $k } }
+    $known = New-TextMap
+    foreach ($key in @($base.Keys)) {
+      $r = $base[$key]
+      if ($r['kind'] -ne 'task' -or -not $pid0) { continue }
+      $pl = (Get-Field $r 'place')['v']
+      if ($pl -and $pl['project'] -eq $pid0 -and -not $taken.ContainsKey($r['id'])) { $known[[string](Get-Field $r 'text')['v']] = $r['id'] }
+    }
+    [void](Set-MissingIds $items $known $taken)
+    foreach ($it in $items) { if ($it.Kind -eq 'task' -and $it.Id) { $taken[$it.Id] = $true } }
+    $stampedText = ConvertTo-MarkdownText $items 0 (Get-TextEol $f.Text)
+    [void]$out.Stamp.Add(@{ type = 'write'; path = $f.Path; expected = $f.Text; text = $stampedText })
+    $st.Stamped[$f.Path] = @{ text = $stampedText; ts = $editTs[$name] }
+  }
+  foreach ($name in $local.Names) { if ($local.Files[$name].Status -ne 'ok') { $out.Skipped = $true } }
+
+  # ---- projects: file name -> project id
+  $nameToId = @{}
+  $projectDeletes = New-Object System.Collections.ArrayList
+  if ($Scope) {
+    foreach ($name in $local.Names) { $nameToId[$name] = $Scope.Project; $st.Files[$Scope.Project] = $name }
+  } else { Add-ProjectMapping $st $local $out $now $Clock $nameToId $projectDeletes }
 
   # ---- tasks
   $localTasks = @{}
@@ -1147,6 +1232,7 @@ function Add-LocalDiff($st, $local, [string]$notifyAt, [switch]$AllowMassDelete,
     }
     $confirmed = @{}
     if ($AllowMassDelete -and $st.Guard) { foreach ($k in @($st.Guard['ids'])) { $confirmed[$k] = $true } }
+    if ($Expected) { foreach ($k in @($Expected.Keys)) { $confirmed[$k] = $true } }
     $fresh = @($cands | Where-Object { -not $confirmed.ContainsKey($_.key) })
     $send = @($cands)
     if ($fresh.Count -and (Test-Alarming $fresh $sizeOf $total)) {
@@ -1363,23 +1449,42 @@ function New-ListFromRows($st, [string]$projId, $depth) {
 
 # $self: the list being renamed, which may hold the name already (a case-only rename: "work" -> "Work" is
 # the same file on Windows and macOS, and must not become "Work (2)")
-function Get-UniqueFileName([string]$listsDir, [string]$name, $reserved, [string]$self = '') {
+# $from: for a list shared with this PC, its server's short name (Get-ServerLabel): a name another list has becomes
+# "Groceries (from nuca)" before it gets a number. (engine.mjs uniqueFileName)
+function Get-UniqueFileName([string]$listsDir, [string]$name, $reserved, [string]$self = '', [string]$from = '') {
+  $taken = { param($x) ($reserved.ContainsKey($x)) -or ($x -ine $self -and (Test-Path -LiteralPath (Join-Path $listsDir "$x.md"))) }
   $base = ConvertTo-FileName $name
+  if ($from -and (& $taken $base)) { $base = ConvertTo-FileName "$name (from $from)" }
   $n = $base; $i = 2
-  while (($reserved.ContainsKey($n)) -or ($n -ine $self -and (Test-Path -LiteralPath (Join-Path $listsDir "$n.md")))) { $n = "$base ($i)"; $i++ }
+  while (& $taken $n) { $n = "$base ($i)"; $i++ }
   $reserved[$n] = $true
   return $n
 }
 
+# A view-only shared list (strict): task lines that are not live tasks of it on the server go. (engine.mjs dropUnknownTasks)
+function Remove-UnknownTasks($items, $srv, [string]$projId) {
+  foreach ($it in @($items)) {
+    if ($it.Kind -ne 'task' -or -not $it.Id) { continue }
+    $r = $srv["task:$($it.Id)"]
+    if ($r -and -not (Get-Field $r 'deleted')['v'] -and (Get-PlaceOf $r)['project'] -eq $projId) { continue }
+    $i = Find-ItemIndex $items $it.Id
+    if ($i -ge 0) { Remove-ItemKeepChildren $items $i }
+  }
+}
+
 # Builds the plan that makes the lists match R. $local must be a fresh read; returns $null when some list
 # is not usable right now (then nothing is applied and the next cycle tries again).
-function Get-RemotePlan($st, $local, [string]$listsDir) {
+# $Scope = @{ Project; File; ReadOnly; Label } (a shared list's engine): only that list; its file comes back if it is
+# gone while the list is shared, and a view-only list's file is made to match the server exactly (task lines).
+# Label: its server's short name, for a rename onto a name another list has.
+function Get-RemotePlan($st, $local, [string]$listsDir, $Scope = $null) {
   $plan = @{ Ops = (New-Object System.Collections.ArrayList); Files = @{}; Setting = $null }
   if (-not $local.Ok) { return $null }
   foreach ($name in $local.Names) { if ($local.Files[$name].Status -ne 'ok') { return $null } }
   $srv = $st.R; $base = $st.S
   $fileOf = @{}; foreach ($k in @($st.Files.Keys)) { $fileOf[$k] = $st.Files[$k] }
-  $reserved = @{}; foreach ($n in $local.Names) { $reserved[$n] = $true }
+  # (every list in the folder, also those of other engines: a new or renamed file never takes one of their names)
+  $reserved = @{}; foreach ($n in $(if ($local.All) { $local.All } else { $local.Names })) { $reserved[$n] = $true }
   $creates = New-Object System.Collections.ArrayList; $writes = New-Object System.Collections.ArrayList; $after = New-Object System.Collections.ArrayList
   $depthCache = $null
 
@@ -1387,8 +1492,14 @@ function Get-RemotePlan($st, $local, [string]$listsDir) {
   $orderChanged = $false
   foreach ($key in @($srv.Keys)) {
     $r = $srv[$key]
-    if ($r['kind'] -ne 'project' -or -not (Test-RowPending $st $key)) { continue }
-    $orderChanged = $true
+    if ($r['kind'] -ne 'project' -or ($Scope -and $r['id'] -cne $Scope.Project)) { continue }
+    $recreate = $false
+    if ($Scope -and -not (Get-Field $r 'deleted')['v']) {
+      $want = $(if ($fileOf.ContainsKey($r['id'])) { $fileOf[$r['id']] } else { $Scope.File })
+      $recreate = -not $local.Files.ContainsKey($want)
+    }
+    if (-not (Test-RowPending $st $key) -and -not $recreate) { continue }
+    if (-not $Scope) { $orderChanged = $true }
     $s = $base[$key]; $id = $r['id']
     $live = -not (Get-Field $r 'deleted')['v']
     $wasLive = $s -and -not (Get-Field $s 'deleted')['v']
@@ -1396,9 +1507,10 @@ function Get-RemotePlan($st, $local, [string]$listsDir) {
     $exists = $file -and $local.Files.ContainsKey($file)
     if ($live -and -not $exists) {
       if (-not $depthCache) { $depthCache = Get-RowDepthMap $st $id }
-      $n = Get-UniqueFileName $listsDir ([string](Get-Field $r 'name')['v']) $reserved
+      $n = $(if ($Scope) { $(if ($file) { $file } else { $Scope.File }) } else { Get-UniqueFileName $listsDir ([string](Get-Field $r 'name')['v']) $reserved })
       [void]$creates.Add(@{ type = 'create'; path = (Join-Path $listsDir "$n.md"); text = (New-ListFromRows $st $id $depthCache) })
       $fileOf[$id] = $n; $plan.Files[$id] = $n
+      if ($Scope) { $orderChanged = $true }
     } elseif (-not $live -and $exists -and $wasLive) {
       # only the list as it is now: anything typed into it meanwhile stops the plan instead of going to .trash
       [void]$after.Add(@{ type = 'trash'; path = (Join-Path $listsDir "$file.md"); name = $file; expected = $local.Files[$file].Text })
@@ -1407,9 +1519,10 @@ function Get-RemotePlan($st, $local, [string]$listsDir) {
       $target = ConvertTo-FileName ([string](Get-Field $r 'name')['v'])
       if ($target -cne $file) {
         $reserved.Remove($file)
-        $n = Get-UniqueFileName $listsDir $target $reserved $file
+        $n = Get-UniqueFileName $listsDir $target $reserved $file $(if ($Scope -and $Scope.Label) { [string]$Scope.Label } else { '' })
         [void]$after.Add(@{ type = 'rename'; from = (Join-Path $listsDir "$file.md"); to = (Join-Path $listsDir "$n.md") })
         $fileOf[$id] = $n; $plan.Files[$id] = $n
+        if ($Scope) { $orderChanged = $true }   # (the tab keeps its place under its new name)
       }
     }
   }
@@ -1423,11 +1536,13 @@ function Get-RemotePlan($st, $local, [string]$listsDir) {
   }
   foreach ($name in $local.Names) {
     $projId = $null; foreach ($k in @($st.Files.Keys)) { if ($st.Files[$k] -eq $name) { $projId = $k } }
-    if (-not $projId -or -not $needs.ContainsKey($projId)) { continue }
+    $strict = $Scope -and $Scope.ReadOnly -and $projId -ceq $Scope.Project
+    if (-not $projId -or (-not $needs.ContainsKey($projId) -and -not $strict)) { continue }
     if ($plan.Files.ContainsKey($projId) -and $null -eq $plan.Files[$projId]) { continue }   # being trashed
     if (-not $depthCache) { $depthCache = Get-RowDepthMap $st $projId }
     $f = $local.Files[$name]
     $items = Read-Items $f.Text
+    if ($strict) { Remove-UnknownTasks $items $srv $projId }
     $items = Update-ListFromRemote $st $items $projId $depthCache
     $text = ConvertTo-MarkdownText $items 0 (Get-TextEol $f.Text)
     if ($text -cne $f.Text) {
@@ -1450,9 +1565,10 @@ function Get-RemotePlan($st, $local, [string]$listsDir) {
       if ($o.type -eq 'trash') { $gone[$o.name] = $true }
       if ($o.type -eq 'rename') { $renamed[[IO.Path]::GetFileNameWithoutExtension($o.from)] = [IO.Path]::GetFileNameWithoutExtension($o.to) }
     }
+    # every list keeps its slot, also those another engine syncs (only this engine's own are put in order)
     $names = New-Object System.Collections.ArrayList
-    foreach ($n in $local.Names) { if ($gone.ContainsKey($n)) { continue }; [void]$names.Add($(if ($renamed.ContainsKey($n)) { $renamed[$n] } else { $n })) }
-    foreach ($o in $creates) { [void]$names.Add([IO.Path]::GetFileNameWithoutExtension($o.path)) }
+    foreach ($n in $(if ($local.All) { $local.All } else { $local.Names })) { if ($gone.ContainsKey($n)) { continue }; [void]$names.Add($(if ($renamed.ContainsKey($n)) { $renamed[$n] } else { $n })) }
+    foreach ($o in $creates) { $cn = [IO.Path]::GetFileNameWithoutExtension($o.path); if (-not $names.Contains($cn)) { [void]$names.Add($cn) } }
     $idOfName = @{}; foreach ($k in @($fileOf.Keys)) { $idOfName[$fileOf[$k]] = $k }
     $known = New-Object System.Collections.ArrayList
     for ($i = 0; $i -lt $names.Count; $i++) {
@@ -1463,7 +1579,7 @@ function Get-RemotePlan($st, $local, [string]$listsDir) {
     for ($i = 0; $i -lt $known.Count; $i++) { $names[$known[$i].Slot] = $sortedKnown[$i].Name }
     [void]$plan.Ops.Add(@{ type = 'order'; path = (Join-Path $listsDir '.order'); names = @($names) })
   }
-  if (Test-RowPending $st 'setting:notifyAt') { $plan.Setting = [string](Get-Field $srv['setting:notifyAt'] 'value')['v'] }
+  if (-not $Scope -and (Test-RowPending $st 'setting:notifyAt')) { $plan.Setting = [string](Get-Field $srv['setting:notifyAt'] 'value')['v'] }
   return $plan
 }
 
@@ -1550,20 +1666,94 @@ function Reset-SyncState($st) {
   $st.R = @{}; $st.S = @{}; $st.cursor = 0; $st.Outbox.Clear(); $st.Planned = @{}; $st.Missing = @{}; $st.Guard = $null
 }
 
+# ---------------------------------------------------------------- shared lists: what was not saved (engine.mjs)
+function Get-ShortHash([string]$s) {   # FNV-1a, 32 bits (in longs: no overflow, no sign)
+  [long]$h = 2166136261
+  foreach ($ch in $s.ToCharArray()) { $h = $h -bxor [long][int]$ch; $h = ($h * 16777619) % 4294967296 }
+  return ConvertTo-Base36 $h
+}
+function ConvertTo-Base36([long]$n) {
+  $a = '0123456789abcdefghijklmnopqrstuvwxyz'; if ($n -eq 0) { return '0' }
+  $s = ''; while ($n -gt 0) { $s = $a[[int]($n % 36)] + $s; $n = [long][Math]::Floor($n / 36) }
+  return $s
+}
+# Keeps a change the server of a shared list will not take ($st.Notices), once per task, field and value.
+function Add-SyncNotice($st, [string]$file, $entry, [string]$field, $value, [string]$reason) {
+  $id = "$($entry['id'])-$field-$(Get-ShortHash (ConvertTo-JsonText @{ v = $value }))"
+  foreach ($n in $st.Notices) { if ($n['id'] -ceq $id) { return } }
+  $text = $null
+  if ($entry['fields'].ContainsKey('text')) { $text = [string]$entry['fields']['text']['v'] }
+  if ($null -eq $text) { foreach ($src in @($st.R, $st.S)) { $f = Get-Field $src["task:$($entry['id'])"] 'text'; if ($f) { $text = [string]$f['v']; break } } }
+  [void]$st.Notices.Add(@{ id = $id; task = [string]$entry['id']; list = $file; field = $field; value = (Copy-Value $value); text = [string]$text; reason = $reason
+                           at = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds() })
+  while ($st.Notices.Count -gt 100) { $st.Notices.RemoveAt(0) }
+}
+# One refused outbox entry -> notices for what it would have changed (moves keep nothing worth showing).
+function Add-NoticesFor($st, [string]$file, $e, [string]$reason) {
+  if ($e['kind'] -ne 'task') { return }
+  $f = $e['fields']
+  if ($f.ContainsKey('place') -and [long]$f['place']['base'] -eq -1) { Add-SyncNotice $st $file $e 'new' $(if ($f.ContainsKey('text')) { $f['text']['v'] } else { '' }) $reason; return }
+  if ($f.ContainsKey('deleted') -and $f['deleted']['v'] -eq $true) { Add-SyncNotice $st $file $e 'deleted' $true $reason; return }
+  foreach ($name in 'text', 'status', 'due', 'notes') { if ($f.ContainsKey($name)) { Add-SyncNotice $st $file $e $name $f[$name]['v'] $reason } }
+}
+# A view-only shared list: nothing local is sent. What the list's file changed becomes notices (only what differs
+# from the server's copy), the base forgets tasks the server never had, and the plan that follows puts the file
+# back as the server has it. (engine.mjs holdReadOnly)
+function Set-ReadOnlyHold($st, $Scope) {
+  $reason = 'this shared list is view-only'
+  foreach ($e in @($st.Outbox)) {
+    if ($e['kind'] -ne 'task') { continue }
+    $f = $e['fields']
+    $r = $st.R["task:$($e['id'])"]
+    $live = $r -and -not (Get-Field $r 'deleted')['v'] -and (Get-PlaceOf $r)['project'] -eq $Scope.Project
+    $del = $f.ContainsKey('deleted') -and $f['deleted']['v'] -eq $true
+    if (-not $live) { if (-not $del) { Add-SyncNotice $st $Scope.File $e 'new' $(if ($f.ContainsKey('text')) { $f['text']['v'] } else { '' }) $reason }; continue }
+    if ($del) { Add-SyncNotice $st $Scope.File $e 'deleted' $true $reason; continue }
+    foreach ($name in 'text', 'status', 'due', 'notes') {
+      if ($f.ContainsKey($name) -and -not (Test-SameValue $name $f[$name]['v'] (Get-Field $r $name)['v'])) { Add-SyncNotice $st $Scope.File $e $name $f[$name]['v'] $reason }
+    }
+  }
+  $st.Outbox.Clear()
+  foreach ($key in @($st.S.Keys)) { if (-not $st.R.ContainsKey($key)) { [void]$st.S.Remove($key) } }
+}
+# Whether a row from the server may land in R: a shared list's server can only send rows of that list.
+function Test-AcceptRow($st, $row, $Scope) {
+  if (-not ($row['id'] -is [string])) { return $false }
+  if (-not $Scope) { return -not $row['gone'] }
+  if ($row['gone']) { return $row['kind'] -eq 'task' }
+  if (-not ($row['fields'] -is [System.Collections.IDictionary])) { return $false }
+  switch ($row['kind']) {
+    'project' { return $row['id'] -ceq $Scope.Project }
+    'task' { $pl = Get-PlaceOf $row; return [bool]($pl -and $pl['project'] -ceq $Scope.Project) }
+    'conflict' { $t = $st.R["task:$($row['task'])"]; $pl = Get-PlaceOf $t; return [bool]($pl -and $pl['project'] -ceq $Scope.Project) }
+  }
+  return $false
+}
+# A list's text with every task given a new id: a shared list that became one's own (engine.mjs withNewIds).
+function Get-TextWithNewIds([string]$text) {
+  $items = Read-Items $text
+  foreach ($it in $items) { if ($it.Kind -eq 'task' -and $it.Id) { $it.Id = New-SaqmeId } }
+  return (ConvertTo-MarkdownText $items 0 (Get-TextEol $text))
+}
+
 # $ctx = @{ State; StatePath; ListsDir; Url; Token; DeviceId; NotifyAt; AllowMassDelete;
 #           ApplyPlan = { param($plan) -> $true when the whole plan was applied };  Log = { param($msg) }
-#           Clock = { -> ms } (tests) }
-# Returns @{ Status = 'synced'|'offline'|'error'|'auth'; Message; Conflicts; Guarded; Retry }
+#           Clock = { -> ms } (tests); Transport = { param($body) -> @{ Status; Data } } (tests; else HTTP to Url)
+#           View (Read-LocalLists); Scope = @{ Project; File; ReadOnly } (a shared list's engine); Expected }
+# Returns @{ Status = 'synced'|'offline'|'error'|'auth'; Message; Conflicts; Guarded; Retry; Access }
 function Invoke-SyncCycle($ctx) {
   $st = $ctx.State
   $clock = $(if ($ctx.Clock) { [long](& $ctx.Clock) } else { [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds() })
-  $res = @{ Status = 'synced'; Message = ''; Guarded = 0; Retry = $false; Sent = 0; Received = 0; Refused = @() }
+  $res = @{ Status = 'synced'; Message = ''; Guarded = 0; Retry = $false; Sent = 0; Received = 0; Refused = @(); Access = $null }
   $settle = $(if ($null -ne $ctx.SettleMs) { [int]$ctx.SettleMs } else { 1500 })
-  $local = Read-LocalLists $ctx.ListsDir $settle
+  $scope = $ctx.Scope
+  $local = Read-LocalLists $ctx.ListsDir $settle $ctx.View
+  if ($scope) { $st.Files[$scope.Project] = $scope.File }
   $firstSync = ($st.S.Count -eq 0)   # nothing reconciled yet: pull everything first (resumes after interruptions)
   $diff = $null
   if (-not $firstSync) {
-    $diff = Add-LocalDiff $st $local $ctx.NotifyAt -AllowMassDelete:$ctx.AllowMassDelete -Clock $clock
+    $diff = Add-LocalDiff $st $local $ctx.NotifyAt -AllowMassDelete:$ctx.AllowMassDelete -Clock $clock -Scope $scope -Expected $ctx.Expected
+    if ($scope -and $scope.ReadOnly) { Set-ReadOnlyHold $st $scope }
     $res.Guarded = $diff.Guarded
     if ($diff.Stamp.Count) {
       $p = @{ Ops = $diff.Stamp; Files = @{}; Setting = $null; Stamp = $true }
@@ -1576,17 +1766,25 @@ function Invoke-SyncCycle($ctx) {
   # send the outbox (in chunks) and pull everything new
   $endpoint = $ctx.Url.TrimEnd('/') + '/api/sync'
   for ($round = 0; $round -lt 40; $round++) {
-    $batch = @($st.Outbox | Select-Object -First 100)   # server limit per request
+    # (server limit per request; copies: the acknowledgement below edits the outbox entries, not what was sent)
+    $batch = @($st.Outbox | Select-Object -First 100 | ForEach-Object { Copy-OutboxEntry $_ })
     $sentAt = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()
     try {
-      $r = Invoke-SaqmeApi $endpoint $ctx.Token 'POST' @{ deviceId = $ctx.DeviceId; cursor = [long]$st.cursor; changes = $batch }
+      $body = @{ deviceId = $ctx.DeviceId; cursor = [long]$st.cursor; changes = $batch }
+      $r = $(if ($ctx.Transport) { & $ctx.Transport $body } else { Invoke-SaqmeApi $endpoint $ctx.Token 'POST' $body })
     } catch {
       $res.Status = 'offline'; $res.Message = $_.Exception.Message -replace '^offline: ', ''
       return $res
     }
-    if ($r.Status -eq 401) { $res.Status = 'auth'; $res.Message = 'The server rejected the sync token. Pair this PC again.'; return $res }
+    if ($r.Status -eq 401) {
+      $res.Status = 'auth'
+      $res.Message = $(if ($scope) { 'The owner stopped sharing this list.' } else { 'The server rejected the sync token. Pair this PC again.' })
+      return $res
+    }
     if ($r.Status -ne 200 -or -not $r.Data) { $res.Status = 'error'; $res.Message = "Server error $($r.Status)"; return $res }
     $d = $r.Data
+    if ($scope -and $d['share'] -and @('edit', 'view') -contains [string]$d['share']['access']) { $res.Access = [string]$d['share']['access'] }
+    if (-not $scope -and $null -ne $d['shared']) { $st.Shared = @(@($d['shared']) | ForEach-Object { [string]$_ }) }   # this PC's lists others have
     $recvAt = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()
     $st.clockOffset = [long]([long]$d['serverTime'] - ($sentAt + $recvAt) / 2)
     if ($d['restored'] -or [long]$d['cursor'] -lt [long]$st.cursor) {
@@ -1620,9 +1818,29 @@ function Invoke-SyncCycle($ctx) {
       }
       if ($cur['fields'].Count -eq 0) { $st.Outbox.Remove($cur) }
     }
-    foreach ($row in @($d['changes'])) { if ($row) { $st.R["$($row['kind']):$($row['id'])"] = $row; $res.Received++ } }
+    foreach ($row in @($d['changes'])) {
+      if (-not $row -or -not (Test-AcceptRow $st $row $scope)) { continue }
+      $key = "$($row['kind']):$($row['id'])"
+      if ($row['gone']) {
+        # the owner moved it into a list this PC does not share: it leaves this one like a delete
+        $s0 = $(if ($st.S.ContainsKey($key)) { $st.S[$key] } else { $st.R[$key] })
+        if ($s0) { $g = Copy-Row $s0; $g['fields']['deleted'] = @{ v = $true; ts = [long](Get-Field $s0 'deleted')['ts'] + 1 }; $st.R[$key] = $g }
+      } else { $st.R[$key] = $row }
+      $res.Received++
+    }
     foreach ($rej in @($d['rejected'])) {
       if (-not $rej) { continue }
+      if ($scope -and $rej['reason'] -ne 'unknown task') {
+        # a shared list's server refused it (view-only by now, or the owner deleted the list): kept as a notice
+        foreach ($e in @($batch)) {
+          if ($e['kind'] -ne $rej['kind'] -or $e['id'] -cne $rej['id']) { continue }
+          $one = $e
+          if ($rej['field']) { $fs = @{}; if ($e['fields'].ContainsKey($rej['field'])) { $fs[$rej['field']] = $e['fields'][$rej['field']] }; $one = @{ kind = $e['kind']; id = $e['id']; fields = $fs } }
+          Add-NoticesFor $st $scope.File $one ([string]$rej['reason'])
+        }
+        $res.Refused += ("{0} {1}: {2}" -f $rej['kind'], $rej['id'], $rej['reason'])
+        continue
+      }
       if ($rej['reason'] -eq 'unknown task' -or $rej['reason'] -eq 'unknown project') {
         # the server lost it: forget the base so the next diff sends it again as a fresh create (a project
         # keeps its id through the file mapping)
@@ -1647,7 +1865,8 @@ function Invoke-SyncCycle($ctx) {
   }
   if ($firstSync -and -not ($local.Ok -and $local.Names.Count -eq 0)) {
     # first contact: pulled the server's lists first, now merge ours in (adopting its projects by name)
-    $diff = Add-LocalDiff $st $local $ctx.NotifyAt -AllowMassDelete:$ctx.AllowMassDelete -Clock $clock
+    $diff = Add-LocalDiff $st $local $ctx.NotifyAt -AllowMassDelete:$ctx.AllowMassDelete -Clock $clock -Scope $scope -Expected $ctx.Expected
+    if ($scope -and $scope.ReadOnly) { Set-ReadOnlyHold $st $scope }
     if ($diff.Stamp.Count) { [void](& $ctx.ApplyPlan @{ Ops = $diff.Stamp; Files = @{}; Setting = $null; Stamp = $true }) }
     Save-SyncState $st $ctx.StatePath
     $res.Retry = $true
@@ -1659,12 +1878,12 @@ function Invoke-SyncCycle($ctx) {
   # the plan would treat them as already synced), and only if no list changed since we read them. A folder
   # without lists sends nothing (it may be one that is not there right now), but does receive.
   if ($diff -and $diff.Skipped -and -not $diff.Empty) { $res.Retry = $true; return $res }
-  $fresh = Read-LocalLists $ctx.ListsDir 0
+  $fresh = Read-LocalLists $ctx.ListsDir 0 $ctx.View
   foreach ($name in $fresh.Names) {
     if (-not $local.Files.ContainsKey($name) -or $local.Files[$name].Text -cne $fresh.Files[$name].Text) { $res.Retry = $true; return $res }
   }
   if ($fresh.Names.Count -ne $local.Names.Count) { $res.Retry = $true; return $res }
-  $plan = Get-RemotePlan $st $fresh $ctx.ListsDir
+  $plan = Get-RemotePlan $st $fresh $ctx.ListsDir $scope
   if (-not $plan) { $res.Retry = $true; return $res }
   if ($plan.Ops.Count -gt 0 -or $null -ne $plan.Setting) {
     $ok = & $ctx.ApplyPlan $plan
@@ -1695,4 +1914,111 @@ function Get-OpenConflicts($st) {
                       FieldTs = [long](Get-Field $t $c['field'])['ts'] })
   }
   return ,$out
+}
+
+# ================================================================ lists shared with this PC (docs/sync.md)
+# lists\.remotes.json: the bindings, no secrets ({ version: 1, remotes: [{ id, file, server, project, access, name,
+# joinedAt, left? }] }); sync\remotes.json: the keys and this PC's device id for them (private, like
+# sync\config.json); sync\shares\<id>.json: each one's engine state. The same files as local/shares.mjs.
+function Read-ShareBindings([string]$listsDir) {
+  $out = New-Object System.Collections.ArrayList
+  $t = Read-TextFile (Join-Path $listsDir '.remotes.json')
+  if (-not $t) { return ,$out }
+  try { $o = ConvertFrom-JsonText $t } catch { return ,$out }
+  foreach ($r in @($o['remotes'])) { if ($r -and $r['id'] -is [string] -and $r['file'] -is [string]) { [void]$out.Add($r) } }
+  return ,$out
+}
+function Save-ShareBindings([string]$listsDir, $list) {
+  Write-TextFileAtomic (Join-Path $listsDir '.remotes.json') ((ConvertTo-JsonText @{ version = 1; remotes = @($list) }) + "`n")
+}
+# the names of the lists shared with this PC, as a set (what the engine for one's own server leaves out)
+function Get-SharedFileSet([string]$listsDir) {
+  $set = @{}
+  foreach ($b in (Read-ShareBindings $listsDir)) { $set[[string]$b['file']] = $true }
+  return $set
+}
+# One binding changed (values: a hashtable) or removed ($null), written at once.
+function Set-ShareBinding([string]$listsDir, [string]$id, $values) {
+  $list = New-Object System.Collections.ArrayList
+  foreach ($b in (Read-ShareBindings $listsDir)) {
+    if ($b['id'] -cne $id) { [void]$list.Add($b); continue }
+    if ($null -eq $values) { continue }
+    foreach ($k in @($values.Keys)) { $b[$k] = $values[$k] }
+    [void]$list.Add($b)
+  }
+  Save-ShareBindings $listsDir $list
+}
+function Read-ShareKeys([string]$syncDir) {
+  $t = Read-TextFile (Join-Path $syncDir 'remotes.json')
+  $k = $null
+  if ($t) { try { $k = ConvertFrom-JsonText $t } catch {} }
+  if (-not ($k -is [System.Collections.IDictionary])) { $k = @{} }
+  if (-not ($k['tokens'] -is [System.Collections.IDictionary])) { $k['tokens'] = @{} }
+  return $k
+}
+function Save-ShareKeys([string]$syncDir, $keys) {
+  if (-not (Test-Path -LiteralPath $syncDir)) { [void](New-Item -ItemType Directory -Path $syncDir -Force) }
+  Write-TextFileAtomic (Join-Path $syncDir 'remotes.json') (ConvertTo-JsonText $keys)
+}
+# A file name for a list joined now: its name, unique among the lists and the other bindings; one another list
+# has already gets whose it is: "Groceries (from nuca)".
+function Get-FreeShareFileName([string]$listsDir, [string]$name, [string]$server = '') {
+  $reserved = @{}
+  foreach ($b in (Read-ShareBindings $listsDir)) { $reserved[[string]$b['file']] = $true }
+  return (Get-UniqueFileName $listsDir $name $reserved '' $(if ($server) { Get-ServerLabel $server } else { '' }))
+}
+# Claims an invite (Get-InviteLink) at its server: -> @{ Ok; Data; Error }. Never throws.
+function Invoke-ShareClaim($inv) {
+  try {
+    $r = Invoke-SaqmeApi ($inv.Server + '/api/shares/claim') '' 'POST' @{ code = $inv.Code } 15000
+  } catch { return @{ Ok = $false; Error = "Could not reach $(([Uri]$inv.Server).Host). Try again when you are online." } }
+  $d = $r.Data
+  if ($r.Status -ne 200 -or -not $d -or -not ($d['token'] -is [string]) -or [string]$d['projectId'] -cnotmatch '^[0-9a-z]{8,32}\z') {
+    $msg = $(if ($d -and $d['error']) { [string]$d['error'] } else { "The invite did not work ($($r.Status))." })
+    return @{ Ok = $false; Error = $msg }
+  }
+  return @{ Ok = $true; Data = $d }
+}
+# Joins a list from its invite link: a key of this PC's own, then a binding to a new file (the share's engine
+# creates it on its first sync). -> @{ Ok; Binding; Error }
+function Join-SharedList([string]$listsDir, [string]$syncDir, [string]$link) {
+  $inv = Get-InviteLink $link
+  if (-not $inv) { return @{ Ok = $false; Error = 'That is not an invite link (it looks like https://.../join#code=...).' } }
+  $c = Invoke-ShareClaim $inv
+  if (-not $c.Ok) { return $c }
+  $d = $c.Data
+  $access = $(if ($d['access'] -eq 'edit') { 'edit' } else { 'view' })
+  foreach ($b in (Read-ShareBindings $listsDir)) {
+    if ([string]$b['project'] -ceq [string]$d['projectId'] -and [string]$b['server'] -ceq $inv.Server -and -not $b['left']) {
+      if ($d['kind'] -eq 'move') {
+        # moved here (from the browser) onto the list this PC has: one key for it, the new one
+        $keys = Read-ShareKeys $syncDir
+        $old = [string]$keys['tokens'][[string]$b['id']]
+        $keys['tokens'][[string]$b['id']] = [string]$d['token']; Save-ShareKeys $syncDir $keys
+        if ($old -and $old -cne [string]$d['token']) { try { [void](Invoke-SaqmeApi ($inv.Server + '/api/shares/leave') $old 'POST' @{} 8000) } catch {} }
+        Set-ShareBinding $listsDir ([string]$b['id']) @{ access = $access }
+        $b['access'] = $access
+        return @{ Ok = $true; Binding = $b }
+      }
+      try { [void](Invoke-SaqmeApi ($inv.Server + '/api/shares/leave') ([string]$d['token']) 'POST' @{} 8000) } catch {}
+      return @{ Ok = $false; Error = "'$($d['projectName'])' is already here." }
+    }
+  }
+  $id = 's' + (New-SaqmeId 12)
+  $name = $(if ([string]$d['projectName']) { [string]$d['projectName'] } else { 'Shared list' })
+  $binding = @{ id = $id; file = (Get-FreeShareFileName $listsDir $name $inv.Server); server = $inv.Server; project = [string]$d['projectId']
+                access = $access; name = $name; joinedAt = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds() }
+  $keys = Read-ShareKeys $syncDir
+  $keys['tokens'][$id] = [string]$d['token']   # the key first: a binding without one is never synced
+  Save-ShareKeys $syncDir $keys
+  $list = Read-ShareBindings $listsDir; [void]$list.Add($binding); Save-ShareBindings $listsDir $list
+  return @{ Ok = $true; Binding = $binding }
+}
+# Forgets a binding: its key and its engine's state (the file itself is the caller's).
+function Remove-SharedList([string]$listsDir, [string]$syncDir, [string]$id) {
+  Set-ShareBinding $listsDir $id $null
+  $keys = Read-ShareKeys $syncDir
+  if ($keys['tokens'].ContainsKey($id)) { [void]$keys['tokens'].Remove($id); Save-ShareKeys $syncDir $keys }
+  $sp = Join-Path $syncDir "shares\$id.json"
+  if (Test-Path -LiteralPath $sp) { try { Remove-Item -LiteralPath $sp -Force } catch {} }
 }

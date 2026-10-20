@@ -225,15 +225,16 @@ function Register-Windows {
   Set-ItemProperty -Path $n -Name Enabled -Value 1 -Type DWord
   Set-ItemProperty -Path $n -Name ShowInActionCenter -Value 1 -Type DWord
   Write-Ok 'notifications allowed'
-  # saqme:open -> brings the app up (or starts it); clicking a notification uses it
+  # saqme:open -> brings the app up (or starts it); clicking a notification uses it. saqme://join?... (a shared
+  # list's invite page) is handed to the app (start-widget.vbs), which asks before it joins
   $p = "$Reg\Classes\saqme"
   New-Item -Path "$p\shell\open\command" -Force | Out-Null
   New-Item -Path "$p\DefaultIcon" -Force | Out-Null
   Set-ItemProperty -Path $p -Name '(default)' -Value "URL:$AppName"
   Set-ItemProperty -Path $p -Name 'URL Protocol' -Value ''
   Set-ItemProperty -Path "$p\DefaultIcon" -Name '(default)' -Value (Join-Path $AppDir 'assets\saqme.ico')
-  Set-ItemProperty -Path "$p\shell\open\command" -Name '(default)' -Value ('"' + (Join-Path $env:WINDIR 'System32\wscript.exe') + '" "' + (Join-Path $AppDir 'start-widget.vbs') + '"')
-  Write-Ok 'saqme: link registered'
+  Set-ItemProperty -Path "$p\shell\open\command" -Name '(default)' -Value ('"' + (Join-Path $env:WINDIR 'System32\wscript.exe') + '" "' + (Join-Path $AppDir 'start-widget.vbs') + '" "%1"')
+  Write-Ok 'saqme: links registered (notifications, invites to shared lists)'
   New-Shortcut $StartMenuLnk $AppName
   Write-Ok 'Start menu shortcut'
   if ($NoAutostart) { Write-Info 'start with Windows: left as it was (-NoAutostart)' }

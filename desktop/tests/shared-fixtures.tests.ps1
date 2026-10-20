@@ -153,6 +153,8 @@ $rules = [ordered]@{
   cleanText = { param($s) ConvertTo-CleanText $s }; cleanNotes = { param($s) ConvertTo-CleanNotes $s }; cleanTime = { param($s) ConvertTo-CleanTime $s }
   validDate = { param($s) Test-ValidDate $s }; projectName = { param($s) ConvertTo-ProjectName $s }; fileName = { param($s) ConvertTo-FileName $s }
   pairingLink = { param($s) $r = Get-PairingLink $s; if ($r) { @{ key = $r.Key; server = $r.Server } } else { $null } }
+  inviteLink = { param($s) $r = Get-InviteLink $s; if ($r) { @{ server = $r.Server; code = $r.Code } } else { $null } }
+  serverLabel = { param($s) Get-ServerLabel $s }
 }
 foreach ($rule in $rules.Keys) {
   Test-Case $rule {

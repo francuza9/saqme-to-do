@@ -583,6 +583,187 @@ Test-Case 'a list with NUL characters (a write cut short by a power cut) is left
   Assert-Eq (Read-LocalLists $d).Files['Work'].Status 'error'
 }
 
+# ---------------------------------------------------------------- shared lists (docs/sync.md, "Shared lists")
+Write-Host 'shared lists: one engine per server'
+# a server that answers each sync request with what is in .Rows (once), refusing every change with .Refuse;
+# it records what it got. (script variables, not closures: a closure would not see this script's functions)
+function New-FakeServer($rows, [string]$access = 'edit', $refuse = $null) {
+  $script:fakeSrv = @{ Got = (New-Object System.Collections.ArrayList); Rows = $rows; Access = $access; Refuse = $refuse; Status = 200 }
+  return $script:fakeSrv
+}
+$script:fakeTransport = {
+  param($body)
+  $srv = $script:fakeSrv
+  [void]$srv.Got.Add($body)
+  if ($srv.Status -ne 200) { return @{ Status = $srv.Status; Data = @{ error = 'revoked' } } }
+  $rej = @()
+  if ($srv.Refuse) { foreach ($c in @($body.changes)) { $rej += @{ kind = $c['kind']; id = $c['id']; reason = $srv.Refuse } } }
+  $out = @($srv.Rows); $srv.Rows = @()
+  return @{ Status = 200; Data = @{ cursor = 10; more = $false; changes = $out; rejected = $rej; serverTime = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds(); dbId = 'owner01'; share = @{ projectId = 'pshared1'; access = $srv.Access } } }
+}
+function Invoke-TestCycle($st, $d, $srv, $scope, $view) {
+  $script:testDir = $d
+  $ctx = @{ State = $st; StatePath = (Join-Path $d '.state-test.json'); ListsDir = $d; Url = 'https://owner.example'; Token = 't'; DeviceId = 'pc-test'; NotifyAt = ''
+            ApplyPlan = { param($plan) return ((Invoke-PlanOps $plan.Ops $script:testDir) -eq @($plan.Ops).Count) }; Transport = $script:fakeTransport
+            SettleMs = 0; Scope = $scope; View = $view }
+  return Invoke-SyncCycle $ctx
+}
+$sharedRows = { @((New-ProjectRow 'pshared1' 'Groceries'), (New-TaskRow 'milk0001' 'pshared1' $null 'a0' 'milk'), (New-TaskRow 'bread001' 'pshared1' $null 'a1' 'bread')) }
+
+Test-Case 'an engine sees only its lists: one shared file, or everything but the shared ones' {
+  $d = New-TempLists
+  Write-List $d 'Work' "- [ ] A ^aaaaaaaa`n"; Write-List $d 'Groceries' "- [ ] milk ^milk0001`n"
+  $only = Read-LocalLists $d 0 @{ Only = 'Groceries' }
+  Assert-Eq $only.Names 'Groceries'; Assert-Eq $only.All 'Groceries|Work'
+  $mine = Read-LocalLists $d 0 @{ Exclude = @{ Groceries = $true } }
+  Assert-Eq $mine.Names 'Work'
+  Assert-Eq (Get-InviteLink 'saqme://join?server=https%3A%2F%2Fowner.example&code=AAAAAAAAAAAAAAAAAAAAAA').Server 'https://owner.example'
+}
+Test-Case 'joining: the first sync creates the shared file, and the tab order keeps every other list' {
+  $d = New-TempLists
+  Write-List $d 'Work' "- [ ] A ^aaaaaaaa`n"; Write-List $d 'Home' "- [ ] B ^bbbbbbbb`n"
+  [IO.File]::WriteAllText((Join-Path $d '.order'), "Work`nHome`n")
+  $st = New-SyncState
+  $srv = New-FakeServer (& $sharedRows)
+  $scope = @{ Project = 'pshared1'; File = 'Groceries'; ReadOnly = $false }
+  $res = Invoke-TestCycle $st $d $srv $scope @{ Only = 'Groceries' }
+  Assert-Eq $res.Status 'synced'
+  Assert-Eq (Read-List $d 'Groceries') "- [ ] milk ^milk0001`n- [ ] bread ^bread001`n"
+  Assert-Eq ([IO.File]::ReadAllText((Join-Path $d '.order'))) "Work`nHome`nGroceries`n"
+  Assert-Eq $res.Access 'edit'
+}
+Test-Case 'a shared list: its tasks go to its server, never the list itself; its file comes back if it is removed' {
+  $d = New-TempLists
+  $st = New-SyncState
+  $scope = @{ Project = 'pshared1'; File = 'Groceries'; ReadOnly = $false }
+  $srv = New-FakeServer (& $sharedRows)
+  [void](Invoke-TestCycle $st $d $srv $scope @{ Only = 'Groceries' })
+  Write-List $d 'Groceries' "- [x] milk ^milk0001`n- [ ] bread ^bread001`n- [ ] eggs ^eggs0001`n"
+  $res = Invoke-TestCycle $st $d $srv $scope @{ Only = 'Groceries' }
+  $sent = @($srv.Got[$srv.Got.Count - 1].changes)
+  Assert-Eq (@($sent | ForEach-Object { "$($_['kind']):$($_['id'])" }) | Sort-Object) 'task:eggs0001|task:milk0001'
+  Assert-Eq (@($sent | Where-Object { $_['id'] -eq 'eggs0001' })[0]['fields']['place']['v']['project']) 'pshared1'
+  Remove-Item -LiteralPath (Join-Path $d 'Groceries.md')
+  [void](Invoke-TestCycle $st $d $srv $scope @{ Only = 'Groceries' })
+  Assert-True (Test-Path -LiteralPath (Join-Path $d 'Groceries.md')) 'back'
+  foreach ($b in $srv.Got) { foreach ($c in @($b.changes)) { Assert-True ($c['kind'] -eq 'task') "only tasks sent, got $($c['kind'])" } }
+}
+Test-Case 'a view-only list: nothing is sent, the file goes back to the server''s version, what was typed is kept as notices' {
+  $d = New-TempLists
+  $st = New-SyncState
+  $scope = @{ Project = 'pshared1'; File = 'Groceries'; ReadOnly = $true }
+  $srv = New-FakeServer (& $sharedRows) 'view'
+  [void](Invoke-TestCycle $st $d $srv $scope @{ Only = 'Groceries' })
+  # an editor (or an AI assistant) changes the file
+  Write-List $d 'Groceries' "# my heading`n- [x] oat milk ^milk0001`n- [ ] my own idea ^idea0001`n"
+  [void](Invoke-TestCycle $st $d $srv $scope @{ Only = 'Groceries' })
+  foreach ($b in $srv.Got) { Assert-Eq @($b.changes).Count 0 'nothing sent' }
+  Assert-Eq (Read-List $d 'Groceries') "# my heading`n- [ ] milk ^milk0001`n- [ ] bread ^bread001`n"
+  $n = @($st.Notices | ForEach-Object { "$($_['task']) $($_['field']) $($_['value'])" }) | Sort-Object
+  Assert-Eq $n 'bread001 deleted True|idea0001 new my own idea|milk0001 status x|milk0001 text oat milk'
+  # and the next cycles leave it at that (no new notices, nothing sent)
+  [void](Invoke-TestCycle $st $d $srv $scope @{ Only = 'Groceries' })
+  Assert-Eq @($st.Notices).Count 4
+}
+Test-Case 'a shared list''s server can send only rows of that list; a task moved out leaves without a trace' {
+  $d = New-TempLists
+  $st = New-SyncState
+  $scope = @{ Project = 'pshared1'; File = 'Groceries'; ReadOnly = $false }
+  $evil = @((New-ProjectRow 'other001' 'Spam'), (New-TaskRow 'evil0001' 'other001' $null 'a0' 'spam'), @{ kind = 'setting'; id = 'notifyAt'; fields = @{ value = @{ v = '3:00'; ts = 9 } } })
+  $srv = New-FakeServer (@(& $sharedRows) + $evil)
+  [void](Invoke-TestCycle $st $d $srv $scope @{ Only = 'Groceries' })
+  Assert-True (-not $st.R.ContainsKey('project:other001') -and -not $st.R.ContainsKey('task:evil0001') -and -not $st.R.ContainsKey('setting:notifyAt')) 'only its own rows'
+  Assert-True (-not (Test-Path -LiteralPath (Join-Path $d 'Spam.md'))) 'no other list'
+  $srv.Rows = @(@{ kind = 'task'; id = 'bread001'; seq = 11; gone = $true })
+  [void](Invoke-TestCycle $st $d $srv $scope @{ Only = 'Groceries' })
+  Assert-Eq (Read-List $d 'Groceries') "- [ ] milk ^milk0001`n"
+}
+Test-Case 'the engine for this PC''s own server leaves shared files out, and keeps their place in the tab order' {
+  $d = New-TempLists
+  Write-List $d 'Work' "- [ ] A ^aaaaaaaa`n"; Write-List $d 'Groceries' "- [ ] milk ^milk0001`n"
+  [IO.File]::WriteAllText((Join-Path $d '.order'), "Groceries`nWork`n")
+  $st = New-SyncState
+  $srv = New-FakeServer @((New-ProjectRow 'proj0001' 'Work' 'a0'), (New-ProjectRow 'proj0002' 'Later' 'a1'))
+  $view = @{ Exclude = @{ Groceries = $true } }
+  [void](Invoke-TestCycle $st $d $srv $null $view)   # first contact: pull, merge Work in
+  [void](Invoke-TestCycle $st $d $srv $null $view)
+  foreach ($b in $srv.Got) { foreach ($c in @($b.changes)) { Assert-True ($c['id'] -ne 'milk0001') 'the shared task never goes to this PC''s own server' } }
+  Assert-True (Test-Path -LiteralPath (Join-Path $d 'Later.md')) 'own lists still arrive'
+  Assert-Eq ([IO.File]::ReadAllText((Join-Path $d '.order'))) "Groceries`nWork`nLater`n"
+}
+Test-Case 'refused by a shared list''s server: kept as a notice' {
+  $d = New-TempLists
+  $st = New-SyncState
+  $scope = @{ Project = 'pshared1'; File = 'Groceries'; ReadOnly = $false }
+  $srv = New-FakeServer (& $sharedRows)
+  [void](Invoke-TestCycle $st $d $srv $scope @{ Only = 'Groceries' })
+  $srv.Refuse = 'this shared list is view-only'
+  Write-List $d 'Groceries' "- [ ] my milk ^milk0001`n- [ ] bread ^bread001`n"
+  [void](Invoke-TestCycle $st $d $srv $scope @{ Only = 'Groceries' })
+  Assert-Eq (@($st.Notices | ForEach-Object { "$($_['field']) $($_['value'])" }) -join '|') 'text my milk'
+}
+Test-Case 'a share that ended gets new ids; bindings and keys round-trip' {
+  $t = "# x`n- [ ] milk ^milk0001`n  - [ ] oat ^oatoat01`n"
+  $n = Get-TextWithNewIds $t
+  Assert-True ($n -notmatch 'milk0001|oatoat01') 'new ids'
+  Assert-Eq (($n -replace '\^[0-9a-z]+', '^id')) "# x`n- [ ] milk ^id`n  - [ ] oat ^id`n"
+  $d = New-TempLists; $sd = Join-Path $d 'sync'
+  Save-ShareBindings $d @(@{ id = 's1'; file = 'Groceries'; server = 'https://owner.example'; project = 'pshared1'; access = 'view' })
+  Set-ShareBinding $d 's1' @{ access = 'edit'; file = 'Shopping' }
+  $b = (Read-ShareBindings $d)[0]   # (it returns its list whole: @() around it would wrap the list itself)
+  Assert-Eq "$($b['file']) $($b['access'])" 'Shopping edit'
+  Assert-True (Get-SharedFileSet $d).ContainsKey('Shopping') 'excluded'
+  $k = Read-ShareKeys $sd; $k['tokens']['s1'] = 'secret'; Save-ShareKeys $sd $k
+  Assert-Eq (Read-ShareKeys $sd)['tokens']['s1'] 'secret'
+  Assert-True ((Read-TextFile (Join-Path $d '.remotes.json')) -notmatch 'secret') 'no key in the lists folder'
+  Remove-SharedList $d $sd 's1'
+  Assert-Eq (Read-ShareBindings $d).Count 0
+  Assert-True (-not (Read-ShareKeys $sd)['tokens'].ContainsKey('s1')) 'key gone'
+  Assert-Eq (Get-FreeShareFileName $d 'Groceries') 'Groceries'
+}
+Test-Case 'a shared list whose name another list has says whose it is: when joined, and when the owner renames it' {
+  $d = New-TempLists
+  Write-List $d 'Groceries' "- [ ] my bread ^mybread1`n"; Write-List $d 'Shopping' "- [ ] mine ^mine0001`n"
+  $nuca = 'https://saqme.nuca.workers.dev'
+  Assert-Eq (Get-FreeShareFileName $d 'Groceries' $nuca) 'Groceries (from nuca)'
+  Assert-Eq (Get-FreeShareFileName $d 'Groceries') 'Groceries (2)'
+  Assert-Eq (Get-FreeShareFileName $d 'Diary' $nuca) 'Diary'
+  Save-ShareBindings $d @(@{ id = 's1'; file = 'Groceries (from nuca)'; server = $nuca; project = 'pshared1'; access = 'edit' })
+  Assert-Eq (Get-FreeShareFileName $d 'Groceries' $nuca) 'Groceries (from nuca) (2)'
+  Assert-Eq (Get-FreeShareFileName $d 'Groceries' 'https://saqme.lia.workers.dev') 'Groceries (from lia)'
+  # its engine fills that file; the owner then renames the list to the name of one of this PC's own
+  $st = New-SyncState
+  $scope = @{ Project = 'pshared1'; File = 'Groceries (from nuca)'; ReadOnly = $false; Label = (Get-ServerLabel $nuca) }
+  $srv = New-FakeServer (& $sharedRows)
+  [void](Invoke-TestCycle $st $d $srv $scope @{ Only = 'Groceries (from nuca)' })
+  Assert-Eq (Read-List $d 'Groceries (from nuca)') "- [ ] milk ^milk0001`n- [ ] bread ^bread001`n"
+  Assert-Eq (Read-List $d 'Groceries') "- [ ] my bread ^mybread1`n"
+  $srv.Rows = @((New-ProjectRow 'pshared1' 'Shopping'))
+  [void](Invoke-TestCycle $st $d $srv $scope @{ Only = 'Groceries (from nuca)' })
+  Assert-Eq $st.Files['pshared1'] 'Shopping (from nuca)'
+  Assert-Eq (Read-List $d 'Shopping (from nuca)') "- [ ] milk ^milk0001`n- [ ] bread ^bread001`n"
+  Assert-Eq (Read-List $d 'Shopping') "- [ ] mine ^mine0001`n"
+  Assert-True (-not (Test-Path -LiteralPath (Join-Path $d 'Groceries (from nuca).md'))) 'renamed, not copied'
+}
+Test-Case 'lists from two owners next to this PC''s own: each engine sees its file only, own sync none of them' {
+  $d = New-TempLists
+  Write-List $d 'Work' "- [ ] A ^aaaaaaaa`n"
+  Write-List $d 'Groceries (from nuca)' "- [ ] milk ^milk0001`n"; Write-List $d 'Groceries (from lia)' "- [ ] apples ^apples01`n"
+  Save-ShareBindings $d @(@{ id = 's1'; file = 'Groceries (from nuca)'; server = 'https://saqme.nuca.workers.dev'; project = 'pshared1'; access = 'edit' },
+                         @{ id = 's2'; file = 'Groceries (from lia)'; server = 'https://saqme.lia.workers.dev'; project = 'pshared2'; access = 'view' })
+  $exclude = Get-SharedFileSet $d
+  Assert-Eq (@($exclude.Keys) | Sort-Object) 'Groceries (from lia)|Groceries (from nuca)'
+  Assert-Eq (Read-LocalLists $d 0 @{ Exclude = $exclude }).Names 'Work'
+  Assert-Eq (Read-LocalLists $d 0 @{ Only = 'Groceries (from lia)' }).Names 'Groceries (from lia)'
+  # turning this PC's own sync off (sync\config.json goes) leaves the bindings and keys alone
+  $sd = Join-Path $d 'sync'
+  $k = Read-ShareKeys $sd; $k['tokens']['s1'] = 'key1'; $k['tokens']['s2'] = 'key2'; Save-ShareKeys $sd $k
+  [IO.File]::WriteAllText((Join-Path $sd 'config.json'), '{"url":"https://saqme.me.workers.dev","token":"x"}')
+  Remove-Item -LiteralPath (Join-Path $sd 'config.json')
+  Assert-Eq (Read-ShareBindings $d).Count 2
+  Assert-Eq (Read-ShareKeys $sd)['tokens']['s2'] 'key2'
+}
+
 Write-Host ''
 Write-Host ("{0} passed, {1} failed" -f $script:passed, $script:failed)
 if ($script:failed) { exit 1 }

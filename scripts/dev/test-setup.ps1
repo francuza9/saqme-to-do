@@ -58,6 +58,7 @@ try {
   $lnk = (New-Object -ComObject WScript.Shell).CreateShortcut((Join-Path $sb 'StartMenu\Saqme To Do.lnk'))
   Check ($lnk.Arguments -like "*$app\start-widget.vbs*") 'shortcut points at the installed launcher'
   Check ((Get-ItemProperty "$reg\Classes\saqme\shell\open\command").'(default)' -like "*$app\start-widget.vbs*") 'saqme: link registered'
+  Check ((Get-ItemProperty "$reg\Classes\saqme\shell\open\command").'(default)' -like '*" "%1"') 'saqme: links (invites to shared lists) reach the app'
   Check ((Get-ItemProperty "$reg\Classes\AppUserModelId\Saqme.ToDo").DisplayName -eq 'Saqme To Do') 'notification identity'
   Check ((Get-ItemProperty "$reg\Microsoft\Windows\CurrentVersion\Uninstall\SaqmeToDo").UninstallString -like "*$app\setup.ps1*-Uninstall*") 'Settings > Apps entry'
 

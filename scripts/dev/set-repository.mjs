@@ -12,7 +12,7 @@ const root = join(dirname(fileURLToPath(import.meta.url)), '..', '..');
 const pkgPath = join(root, 'worker', 'package.json');
 
 /** The files that name the repository. */
-export const FILES = ['README.md', 'docs/setup.md', 'scripts/setup.ps1', 'scripts/setup.sh', 'CONTRIBUTING.md'];
+export const FILES = ['README.md', 'docs/setup.md', 'scripts/setup.ps1', 'scripts/setup.sh', 'CONTRIBUTING.md', 'worker/public/join.html'];
 
 export function repoOf(pkg) {
   const m = /github\.com\/([^/]+)\/([^/.]+)/.exec(pkg.repository?.url ?? '');

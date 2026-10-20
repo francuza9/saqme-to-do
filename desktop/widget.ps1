@@ -60,8 +60,15 @@ $showEvt = New-Object System.Threading.EventWaitHandle($false, [System.Threading
 $quitEvt = New-Object System.Threading.EventWaitHandle($false, [System.Threading.EventResetMode]::AutoReset, "$instance.Quit")
 $mutex = New-Object System.Threading.Mutex($false, "$instance.Instance")
 try { $got = $mutex.WaitOne(0) } catch [System.Threading.AbandonedMutexException] { $got = $true }
-if (-not $got) { [void]$showEvt.Set(); exit }   # already running: ask that instance to show itself
+if (-not $got) {
+  # already running: ask that instance to show itself, and hand it the saqme:// link this start came with (an
+  # invite to a shared list: start-widget.vbs puts it in SAQME_OPEN_URL; the running app asks before it joins)
+  if ($env:SAQME_OPEN_URL -and -not $SmokeTest) { try { [IO.File]::WriteAllText((Join-Path $DataDir '.open-url'), $env:SAQME_OPEN_URL) } catch {} }
+  [void]$showEvt.Set(); exit
+}
 $script:mutexHeld = $true
+$script:pendingUrl = $env:SAQME_OPEN_URL   # (handled once the window is up)
+Remove-Item Env:\SAQME_OPEN_URL -ErrorAction SilentlyContinue   # not for the programs this app starts
 
 $Utf8NoBom = New-Object System.Text.UTF8Encoding($false)
 function Write-Utf8([string]$path, [string]$text) { [IO.File]::WriteAllText($path, $text, $Utf8NoBom) }
@@ -378,11 +385,40 @@ function New-Separator {
 # ---------------------------------------------------------------- projects
 function Proj-Path([string]$name) { return (Join-Path $listsDir "$name.md") }
 function Get-ProjectNames {
-  $files = @(Get-ChildItem -LiteralPath $listsDir -Filter *.md -File | ForEach-Object { $_.BaseName })
+  $files = @(Get-ChildItem -LiteralPath $listsDir -Filter *.md -File | ForEach-Object { $_.BaseName } | Where-Object { -not $script:leaving.ContainsKey($_) })
   $order = @(Read-Lines $orderFile | Where-Object { $_ -and ($files -contains $_) } | Select-Object -Unique)
   $rest  = @($files | Where-Object { $order -notcontains $_ } | Sort-Object)
   return @($order + $rest)
 }
+
+# ---------------------------------------------------------------- shared lists (docs/sync.md, "Shared lists")
+# A list someone shares with this PC is a file like any other, bound in lists\.remotes.json to its owner's server
+# (sync-core.ps1 Read-ShareBindings; the sync loop keeps it in step, and makes every change to the bindings). With
+# view access it is read-only here. Lists of this PC that others have come from the sync loop (SharedByMe).
+$script:bindings = @(); $script:bindSig = $null; $script:leaving = @{}; $script:readOnly = $false
+function Update-Bindings {
+  $p = Join-Path $listsDir '.remotes.json'
+  $sig = $(try { [string](Get-Item -LiteralPath $p -ErrorAction Stop).LastWriteTimeUtc.Ticks } catch { '' })
+  if ($sig -eq $script:bindSig) { return }
+  $script:bindSig = $sig
+  $script:bindings = @((Read-ShareBindings $listsDir) | Where-Object { -not $_['left'] })
+}
+function Get-ShareOf([string]$name) {
+  foreach ($b in $script:bindings) { if ([string]$b['file'] -eq $name) { return $b } }
+  return $null
+}
+function Test-SharedByMe([string]$name) { return [bool]($script:sync -and $script:sync.SharedByMe -and $script:sync.SharedByMe.ContainsKey($name)) }
+function Update-ReadOnly {
+  Update-Bindings
+  $b = Get-ShareOf $script:proj
+  $script:readOnly = [bool]($b -and [string]$b['access'] -ne 'edit')
+}
+function Get-ShareHost($b) { try { return ([Uri][string]$b['server']).Host } catch { return [string]$b['server'] } }
+$script:AccessText = @{
+  edit = @('Can edit', 'They can add, change, check off and delete tasks in this list.')
+  view = @('Can view', 'They see the list and its updates, but can''t change anything.')
+}
+$script:ShareNeedsSync = 'Sharing needs sync with your own Cloudflare account (Settings > Sync): a shared list lives on your sync service, where the people you share it with sync it from.'
 function Save-Order($names) { try { Write-Utf8 $orderFile ((@($names) -join "`n") + "`n") } catch {} }
 function Open-Count([string]$name) {
   $n = 0
@@ -391,7 +427,8 @@ function Open-Count([string]$name) {
 }
 function Tab-Signature {
   $parts = @(Get-ChildItem -LiteralPath $listsDir -Filter *.md -File | ForEach-Object { "$($_.Name):$($_.LastWriteTimeUtc.Ticks)" })
-  if (Test-Path -LiteralPath $orderFile) { $parts += (Get-Item -LiteralPath $orderFile).LastWriteTimeUtc.Ticks }
+  foreach ($f in @($orderFile, (Join-Path $listsDir '.remotes.json'))) { if (Test-Path -LiteralPath $f) { $parts += (Get-Item -LiteralPath $f).LastWriteTimeUtc.Ticks } }
+  if ($script:sync -and $script:sync.SharedByMe) { $parts += (@($script:sync.SharedByMe.Keys) | Sort-Object) -join ',' }   # badges of lists shared by this PC
   return ($parts -join '|')
 }
 
@@ -478,6 +515,14 @@ function Save-Recovery {
 
 function Save-Items {
   if ($script:listBusy) { return }   # nothing of this list is loaded: never write over it
+  if ($script:readOnly) {
+    # a view-only shared list: nothing is written, the list is shown as it is on disk (the controls that change
+    # things are not there; this catches anything that slips through)
+    $script:allowRemove.Clear(); $script:undoExtra = $null
+    [void](Use-Loaded (Load-Items)); Render
+    Show-Notice "'$($script:proj)' is view-only: only its owner can change it."
+    return
+  }
   $text = ConvertTo-MarkdownText $script:items 0 $(if ($script:eol) { $script:eol } else { "`n" })
   if (-not (Test-Path -LiteralPath $script:todo)) {
     # the open list was renamed outside the app meanwhile: follow it instead of re-creating the old file
@@ -579,6 +624,7 @@ function Add-Task([string]$text) {
 }
 function Add-Subtask($parent) {
   Commit-Edit
+  if ($script:readOnly) { return }
   $i = $script:items.IndexOf($parent); if ($i -lt 0) { return }
   $end = Subtree-End $i
   $new = New-Task ($parent.Level + 1) ' ' ''
@@ -684,6 +730,7 @@ function Row-Summary($node, $st) {
 
 function New-Row($node) {
   $it = $node.Item; $st = St $it.Mark
+  $ro = $script:readOnly   # a view-only shared list: read, never changed (no editing, menus, drag or hover actions)
   $hasKids = $node.Kids.Count -gt 0
   $open = Is-Open $node
   $row = New-Control 'listitem' (Row-Summary $node $st) 'Enter edits, Space marks it done, Ctrl+M for more' { param($s, $e) Set-Sel $s.Tag -Focus }
@@ -724,7 +771,7 @@ function New-Row($node) {
   $chip = New-Control 'button' "Status: $($st.Name)" 'Change the status' { param($s, $e) Show-StatusMenu $s }
   [System.Windows.Input.KeyboardNavigation]::SetIsTabStop($chip, $false)   # Ctrl+M > Change status on the row
   $chip.Child = (New-Chip $st 17); $chip.Background = $Clear
-  $chip.Margin = "0,2,$($Tokens.Row.chipGap),0"; $chip.VerticalAlignment = 'Top'; $chip.Cursor = 'Hand'
+  $chip.Margin = "0,2,$($Tokens.Row.chipGap),0"; $chip.VerticalAlignment = 'Top'; $chip.Cursor = $(if ($ro) { 'Arrow' } else { 'Hand' })
   $chip.Tag = $it; $chip.ToolTip = $st.Name
   $chip.Add_MouseLeftButtonUp({ param($s, $e) $e.Handled = $true; Show-StatusMenu $s })
   [System.Windows.Controls.Grid]::SetColumn($chip, 2); [void]$g.Children.Add($chip)
@@ -733,7 +780,7 @@ function New-Row($node) {
   $tb = New-Object System.Windows.Controls.TextBlock
   $tb.Text = $it.Text; $tb.TextWrapping = 'Wrap'; $tb.FontFamily = $UI; $tb.FontSize = $TypeSize.body
   $tb.LineHeight = $Tokens.Type.body.Line; $tb.LineStackingStrategy = 'BlockLineHeight'
-  $tb.Foreground = Brush $st.Text; $tb.Cursor = 'IBeam'; $tb.Tag = $it; $tb.Background = $Clear
+  $tb.Foreground = Brush $st.Text; $tb.Cursor = $(if ($ro) { 'Arrow' } else { 'IBeam' }); $tb.Tag = $it; $tb.Background = $Clear
   if ($st.Strike) { $tb.TextDecorations = [System.Windows.TextDecorations]::Strikethrough }
   if ($st.Italic) { $tb.FontStyle = 'Italic' }
   $tb.Add_MouseLeftButtonUp({ param($s, $e) $e.Handled = $true; Begin-Edit $s })
@@ -775,14 +822,14 @@ function New-Row($node) {
   $del = New-IconButton 0xE711 'Delete (with subtasks)' { param($s, $e) Delete-Task $s.Tag }; $del.Tag = $it
   $del.Add_MouseLeftButtonUp({ param($s, $e) $e.Handled = $true; Delete-Task $s.Tag })
   foreach ($x in @($cal, $nt, $add, $del)) { [System.Windows.Input.KeyboardNavigation]::SetIsTabStop($x, $false) }
-  foreach ($x in @($cal, $nt, $add, $del)) { [void]$acts.Children.Add($x) }
+  if (-not $ro) { foreach ($x in @($cal, $nt, $add, $del)) { [void]$acts.Children.Add($x) } }
   # floats over the end of the row on hover instead of reserving width
   [System.Windows.Controls.Grid]::SetColumn($acts, 3); [System.Windows.Controls.Grid]::SetColumnSpan($acts, 3); [void]$g.Children.Add($acts)
 
   # six-dot drag handle - only for manually ordered (active) tasks, not auto-sorted ones
   $grip = New-Object System.Windows.Controls.Border
   $grip.Background = $Clear; $grip.VerticalAlignment = 'Top'; $grip.Margin = '0,4,0,0'; $grip.Padding = '3,2,3,2'
-  if ($script:renderSection -eq 'active' -and (Node-Rank $it) -eq 0 -and $it.Text -ne '') {
+  if ($script:renderSection -eq 'active' -and (Node-Rank $it) -eq 0 -and $it.Text -ne '' -and -not $ro) {
     $dots = New-Object System.Windows.Controls.Primitives.UniformGrid
     $dots.Columns = 2; $dots.Rows = 3; $dots.Width = 7; $dots.Height = 11
     for ($k = 0; $k -lt 6; $k++) {
@@ -857,6 +904,7 @@ function End-Drag([bool]$apply) {
 # move a task (with subtasks) to sit just before $target, adopting its level; $atEnd -> after the last task.
 # A drop that cannot be done (sync-core.ps1 Move-ListBlock) changes nothing.
 function Move-Task($it, $target, [bool]$atEnd) {
+  if ($script:readOnly) { return }
   if (-not (Move-ListBlock $script:items $it $target $atEnd)) { return }
   $script:sel = $it
   Save-Items
@@ -864,6 +912,7 @@ function Move-Task($it, $target, [bool]$atEnd) {
 # the delete button and menu: the task and its subtasks, to Recently deleted (Remove-Subtree); Undo is offered
 function Delete-Task($it) {
   Commit-Edit
+  if ($script:readOnly) { return }
   $i = $script:items.IndexOf($it); if ($i -lt 0) { return }
   $n = 0; for ($k = $i; $k -lt (Subtree-End $i); $k++) { if ($script:items[$k].Text) { $n++ } }
   $name = $it.Text
@@ -1049,6 +1098,7 @@ function Render-TrashView {
 
 # Alt+Up / Alt+Down: swap with the previous / next sibling
 function Nudge-Task($it, [int]$dir) {
+  if ($script:readOnly) { return }
   if (-not (Step-ListBlock $script:items $it $dir)) { return }
   $script:sel = $it; Save-Items; Render
 }
@@ -1057,6 +1107,7 @@ function Nudge-Task($it, [int]$dir) {
 function Show-RowMenu($target, $it) {
   Commit-Edit
   $script:sel = $it
+  if ($script:readOnly) { return }   # a view-only shared list: nothing to change
   $m = New-Menu
   $e0 = New-MenuItem 'Change status...'; $e0.Tag = $target
   $e0.Add_Click({ param($s, $e) if (Is-TaskRow $s.Tag) { Show-StatusMenu $s.Tag.Child.Children[1] } })
@@ -1066,7 +1117,9 @@ function Show-RowMenu($target, $it) {
   $e3 = New-MenuItem 'Notes / links'; $e3.Tag = $it; $e3.Add_Click({ param($s, $e) Begin-Notes $s.Tag })
   $e4 = New-MenuItem 'Add subtask'; $e4.Tag = $it; $e4.Add_Click({ param($s, $e) Add-Subtask $s.Tag })
   foreach ($x in @($e1, $e2, $e3, $e4)) { [void]$m.Items.Add($x) }
-  $others = @(Get-ProjectNames | Where-Object { $_ -ne $script:proj })
+  # (not into a view-only shared list; into or out of an editable one it is a copy there and a delete here, which
+  # each list's sync sends to its own server)
+  $others = @(Get-ProjectNames | Where-Object { $_ -ne $script:proj } | Where-Object { $sb = Get-ShareOf $_; -not ($sb -and [string]$sb['access'] -ne 'edit') })
   if ($others.Count) {
     [void]$m.Items.Add((New-Separator))
     foreach ($p in $others) {
@@ -1107,6 +1160,7 @@ function Move-ToProject($it, [string]$proj) {
 
 function Show-StatusMenu($chip) {
   Commit-Edit
+  if ($script:readOnly) { return }
   $it = $chip.Tag
   $m = New-Menu
   foreach ($st in $script:Statuses) {
@@ -1144,6 +1198,7 @@ function New-PopupItem([string]$text, [string]$hint, [scriptblock]$onActivate = 
 
 function Show-DuePopup($it, $target) {
   Commit-Edit
+  if ($script:readOnly) { return }
   $p = New-Object System.Windows.Controls.Primitives.Popup
   $p.AllowsTransparency = $true; $p.StaysOpen = $false; $p.PlacementTarget = $target; $p.Placement = 'Bottom'
   $b = New-Object System.Windows.Controls.Border
@@ -1256,6 +1311,7 @@ function New-Notes($it) {
 
 function Begin-Notes($it) {
   Commit-Edit
+  if ($script:readOnly) { return }
   $script:openState[(Open-Key $it)] = '1'; Save-State
   $script:notesEditing = $it
   Render
@@ -1278,6 +1334,7 @@ $script:sel = $null; $script:visible = New-Object System.Collections.ArrayList
 
 function Begin-Edit($tb) {
   Commit-Edit
+  if ($script:readOnly) { return }
   $it = $tb.Tag; $grid = $tb.Parent
   if (-not $grid) { return }
   $box = New-Object System.Windows.Controls.TextBox
@@ -1381,7 +1438,8 @@ function Switch-Project([string]$name) {
   if ($script:saveFailed) { Save-Recovery }   # leaving a list whose edits still cannot be written
   $script:proj = $name
   $script:todo = Proj-Path $name
-  if (-not (Test-Path -LiteralPath $script:todo)) { Write-Utf8 $script:todo '' }
+  Update-ReadOnly
+  if (-not (Test-Path -LiteralPath $script:todo) -and -not (Get-ShareOf $name)) { Write-Utf8 $script:todo '' }   # (a shared list's file comes from its sync)
   $script:listBusy = $false
   [void](Use-Loaded (Load-Items))
   $script:cfg.active = $name; Save-Settings
@@ -1407,13 +1465,39 @@ function New-Tab([string]$name) {
   $t.Measure((New-Object System.Windows.Size([double]::PositiveInfinity, [double]::PositiveInfinity)))
   if ($t.DesiredSize.Width -gt 150) { $t.MaxWidth = 150; $t.TextTrimming = 'CharacterEllipsis'; $b.ToolTip = $name }
   [void]$sp.Children.Add($t)
+  # shared: a small badge (people; an eye for a list that is view-only here)
+  $share = Get-ShareOf $name
+  $byMe = (-not $share) -and (Test-SharedByMe $name)
+  $label = $name
+  if ($share -or $byMe) {
+    $bd = New-Object System.Windows.Controls.TextBlock
+    $bd.Text = $(if ($share -and [string]$share['access'] -ne 'edit') { G 0xE7B3 } else { G 0xE716 }); $bd.FontFamily = $MDL2; $bd.FontSize = 10.5
+    $bd.Foreground = $(if ($active) { $Accent } else { $Faint }); $bd.Margin = '6,1,0,0'; $bd.VerticalAlignment = 'Center'
+    $what = $(if ($share) { "Shared with you from $(Get-ShareHost $share): $($script:AccessText[[string]$share['access']][0].ToLower())" } else { 'Shared with others' })
+    $bd.ToolTip = $what
+    [void]$sp.Children.Add($bd)
+    $label = "$name, $($what.Split(':')[0].ToLower())"
+  }
   $cnt = Open-Count $name
   if ($cnt -gt 0) {
     $c = New-Object System.Windows.Controls.TextBlock
     $c.Text = "$cnt"; $c.FontFamily = $UI; $c.FontSize = $TypeSize.small; $c.FontWeight = 'Medium'; $c.Foreground = $Faint
     $c.Margin = '6,0,0,0'; $c.VerticalAlignment = 'Center'; Set-Tabular $c
     [void]$sp.Children.Add($c)
-    Set-Name $b "$name, $cnt open"
+    $label += ", $cnt open"
+  }
+  Set-Name $b $label
+  # the current tab of one of this PC's own lists: a share button, shown while the mouse is over the tab
+  if ($active -and -not $share) {
+    $shb = New-Object System.Windows.Controls.Border
+    $shb.Background = $Clear; $shb.Padding = '3,0,0,0'; $shb.Margin = '4,0,-2,0'; $shb.Cursor = 'Hand'; $shb.VerticalAlignment = 'Center'; $shb.Visibility = 'Hidden'
+    $shb.ToolTip = $(if ($script:ownSync) { 'Share...' } else { $script:ShareNeedsSync })
+    $sg = New-Object System.Windows.Controls.TextBlock; $sg.Text = G 0xE72D; $sg.FontFamily = $MDL2; $sg.FontSize = 10.5; $sg.Foreground = $TabInk
+    $shb.Child = $sg; $shb.Tag = $name
+    $shb.Add_MouseLeftButtonDown({ param($s, $e) $e.Handled = $true; Show-Share $s.Tag })
+    [void]$sp.Children.Add($shb)
+    $b.Add_MouseEnter({ param($s, $e) $s.Child.Children[$s.Child.Children.Count - 1].Visibility = 'Visible' })
+    $b.Add_MouseLeave({ param($s, $e) $s.Child.Children[$s.Child.Children.Count - 1].Visibility = 'Hidden' })
   }
   $b.Child = $sp
   if (-not $active) {
@@ -1422,20 +1506,36 @@ function New-Tab([string]$name) {
   }
   $b.Add_MouseLeftButtonDown({ param($s, $e)
     $e.Handled = $true
-    if ($e.ClickCount -ge 2) { Begin-TabEdit $s } elseif ($s.Tag -ne $script:proj) { Switch-Project $s.Tag } })
+    if ($e.ClickCount -ge 2) { if (-not (Get-ShareOf $s.Tag)) { Begin-TabEdit $s } } elseif ($s.Tag -ne $script:proj) { Switch-Project $s.Tag } })
 
   $m = New-Menu
-  $mi1 = New-MenuItem 'Rename'; $mi1.Tag = $b
-  $mi1.Add_Click({ param($s, $e) Begin-TabEdit $s.Tag })
-  $mi2 = New-MenuItem 'Delete project'; $mi2.Tag = $name
-  $mi2.Add_Click({ param($s, $e) Delete-Project $s.Tag })
-  [void]$m.Items.Add($mi1); [void]$m.Items.Add($mi2)
+  if ($share) {
+    # someone else's list: its name and its deletion are theirs; leaving takes it off this PC only
+    $info = New-MenuItem "Shared from $(Get-ShareHost $share) - $($script:AccessText[[string]$share['access']][0].ToLower())"; $info.IsEnabled = $false
+    $mi1 = New-MenuItem 'Rename'; $mi1.IsEnabled = $false; $mi1.ToolTip = 'Only its owner can rename it'
+    [System.Windows.Controls.ToolTipService]::SetShowOnDisabled($mi1, $true)
+    $mi2 = New-MenuItem 'Leave this list'; $mi2.Tag = $name
+    $mi2.Add_Click({ param($s, $e) Leave-SharedList $s.Tag })
+    foreach ($x in @($info, (New-Separator), $mi1, $mi2)) { [void]$m.Items.Add($x) }
+  } else {
+    $mi0 = New-MenuItem 'Share...'; $mi0.Tag = $name
+    $mi0.Add_Click({ param($s, $e) Show-Share $s.Tag })
+    if (-not $script:ownSync) { $mi0.IsEnabled = $false; $mi0.ToolTip = $script:ShareNeedsSync; [System.Windows.Controls.ToolTipService]::SetShowOnDisabled($mi0, $true) }
+    $mi1 = New-MenuItem 'Rename'; $mi1.Tag = $b
+    $mi1.Add_Click({ param($s, $e) Begin-TabEdit $s.Tag })
+    $mi2 = New-MenuItem 'Delete project'; $mi2.Tag = $name
+    $mi2.Add_Click({ param($s, $e) Delete-Project $s.Tag })
+    foreach ($x in @($mi0, $mi1, $mi2)) { [void]$m.Items.Add($x) }
+  }
   $b.ContextMenu = $m
   return $b
 }
 
 function Render-Tabs {
   if ($script:tabEditing) { return }
+  Update-Bindings
+  $script:ownSync = [bool](Read-SyncConfigUi)   # (sharing needs this PC's own sync)
+  foreach ($n in @($script:leaving.Keys)) { if (-not (Test-Path -LiteralPath (Proj-Path $n))) { $script:leaving.Remove($n) } }
   $hadFocus = $tabs.IsKeyboardFocusWithin
   $tabs.Children.Clear()
   foreach ($n in @(Get-ProjectNames)) { [void]$tabs.Children.Add((New-Tab $n)) }
@@ -1456,6 +1556,7 @@ function Cycle-Project([int]$dir) {
 function Begin-TabEdit($tabBorder) {
   Commit-Edit
   if ($script:tabEditing) { return }
+  if ($tabBorder -and (Get-ShareOf ([string]$tabBorder.Tag))) { Show-Notice 'Only its owner can rename a shared list.'; return }
   $script:tabEditing = $true
   $box = New-Object System.Windows.Controls.TextBox
   Set-Name $box 'Project name' 'Enter saves, Esc cancels'
@@ -1506,6 +1607,7 @@ function Finish-TabEdit($box, [bool]$apply) {
 
 function Delete-Project([string]$name) {
   Commit-Edit
+  if (Get-ShareOf $name) { Leave-SharedList $name; return }   # someone else's list: leave it instead
   $names = @(Get-ProjectNames)
   if ($names.Count -le 1) { return }
   $r = [System.Windows.MessageBox]::Show($w, "Delete project '$name'?`nIts list is moved to lists\.trash, not erased.", 'Saqme To Do', 'YesNo', 'Warning')
@@ -1904,12 +2006,26 @@ function New-SectionLabel([string]$text, [double]$indent = 8) {
 function Render {
   if ($script:editItem -or $script:notesBox) { return }
   Render-Tabs
+  Update-ReadOnly
   if ($script:view -ne 'list') { Render-Settings; return }
-  $addBorder.Visibility = 'Visible'
+  $addBorder.Visibility = $(if ($script:readOnly) { 'Collapsed' } else { 'Visible' })
   $hadFocus = $list.IsKeyboardFocusWithin
   $list.Children.Clear()
   if ($script:HasA11y) { $list.Role = 'list' }
   Set-Name $list "$($script:proj) tasks"
+  $share = Get-ShareOf $script:proj
+  if ($share) {
+    # a list someone shares with this PC: where it comes from; for a view-only one also that it can't be changed
+    $sst = $(if ($script:sync -and $script:sync.Shares) { @($script:sync.Shares | Where-Object { $_.Id -eq [string]$share['id'] })[0] } else { $null })
+    $trouble = $(if ($sst -and @('offline', 'error') -contains $sst.State) { " Not synced right now: $($sst.Message)" } else { '' })
+    if ($script:readOnly -or $trouble) {
+      $txt = $(if ($script:readOnly) { "View only. Shared with you from $(Get-ShareHost $share): you see the changes as they are made, but can't change it." } else { "Shared with you from $(Get-ShareHost $share)." }) + $trouble
+      $note = New-Text $txt $TypeSize.meta $NoteInk
+      $box = New-Object System.Windows.Controls.Border; $box.Background = $NoteBg; $box.BorderBrush = $Accent; $box.BorderThickness = '2,0,0,0'
+      $box.Padding = '10,6,10,6'; $box.Margin = "$RowChipX,2,8,8"; $box.CornerRadius = New-Object System.Windows.CornerRadius($Tokens.Radius.control); $box.Child = $note
+      [void]$list.Children.Add($box)
+    }
+  }
   $script:visible = New-Object System.Collections.ArrayList
   $titleTaken = $false; $total = 0; $done = 0
   foreach ($it in $script:items) {
@@ -1975,9 +2091,11 @@ function Render {
   }
 
   if ($script:listBusy) { $addBorder.Visibility = 'Collapsed' }
-  if ($list.Children.Count -eq 0) {
+  if ($list.Children.Count -eq [int][bool]($share -and ($script:readOnly -or $trouble))) {   # (nothing but the shared-list note)
     $e = New-Object System.Windows.Controls.TextBlock
-    $e.Text = $(if ($script:listBusy) { "'$($script:proj)' is busy: another program is writing it. It shows here as soon as it is free." } else { 'No tasks here yet. Add one below.' })
+    $e.Text = $(if ($script:listBusy) { "'$($script:proj)' is busy: another program is writing it. It shows here as soon as it is free." }
+                elseif ($share -and -not (Test-Path -LiteralPath $script:todo)) { 'Getting the list from its owner...' }
+                elseif ($script:readOnly) { 'No tasks here yet.' } else { 'No tasks here yet. Add one below.' })
     $e.FontFamily = $UI; $e.FontSize = $TypeSize.body; $e.Foreground = $Faint
     $e.Margin = "$RowChipX,24,8,8"; $e.TextWrapping = 'Wrap'
     [void]$list.Children.Add($e)
@@ -2106,9 +2224,10 @@ function Render-Settings {
   $addBorder.Visibility = 'Collapsed'
   $list.Children.Clear()
   if ($script:HasA11y) { $list.Role = 'group' }
-  Set-Name $list $(switch ($script:view) { 'pair' { 'Pair phone' } 'conflicts' { 'Conflicts' } 'keys' { 'Keyboard shortcuts' } 'trash' { 'Recently deleted' } default { 'Settings' } })
+  Set-Name $list $(switch ($script:view) { 'pair' { 'Pair phone' } 'conflicts' { 'Conflicts' } 'keys' { 'Keyboard shortcuts' } 'trash' { 'Recently deleted' } 'share' { 'Share' } default { 'Settings' } })
   $script:visible = New-Object System.Collections.ArrayList
   if ($script:view -eq 'pair') { Render-PairView; return }
+  if ($script:view -eq 'share') { if ($script:shareView) { Render-ShareView } else { $script:view = 'list'; Render }; return }
   if ($script:view -eq 'trash') { Render-TrashView; return }
   if ($script:view -eq 'conflicts') { Render-ConflictsView; return }
   if ($script:view -eq 'keys') {
@@ -2163,6 +2282,9 @@ function Render-Settings {
   [void]$list.Children.Add((New-SectionLabel 'Sync'))
   Render-SyncSettings
 
+  [void]$list.Children.Add((New-SectionLabel 'Shared lists'))
+  Render-SharedListSettings
+
   [void]$list.Children.Add((New-SectionLabel 'Startup'))
   $tg = New-Toggle (Test-Path -LiteralPath $startupLnk) {
     param($on)
@@ -2206,6 +2328,10 @@ function Start-SyncLoop {
   $shared.Queue = [System.Collections.Queue]::Synchronized((New-Object System.Collections.Queue))
   $shared.Stop = $false; $shared.Status = 'syncing'; $shared.StatusText = 'Starting...'; $shared.Conflicts = @()
   $shared.Guarded = 0; $shared.AllowMassDelete = $false; $shared.NotifyAt = $script:cfg.notifyAt; $shared.Plan = $null
+  # shared lists (sync-worker.ps1): what it reports, and what it hands back
+  $shared.Shares = @(); $shared.Notices = @(); $shared.SharedByMe = @{}; $shared.ProjectIds = @{}
+  $shared.Ended = [System.Collections.Queue]::Synchronized((New-Object System.Collections.Queue))
+  $shared.JoinResults = [hashtable]::Synchronized(@{})
   $rs = [runspacefactory]::CreateRunspace()
   $rs.ApartmentState = 'MTA'; $rs.ThreadOptions = 'ReuseThread'
   $rs.Open()
@@ -2254,12 +2380,17 @@ function Get-OpenConflictList {
   if (-not $script:sync -or -not $script:sync.Conflicts) { return @() }
   return @($script:sync.Conflicts | Where-Object { -not $script:resolving.ContainsKey($_.Id) })
 }
+# what a shared list's server did not take (the list is view-only here): shown with the conflicts
+function Get-NoticeList {
+  if (-not $script:sync -or -not $script:sync.Notices) { return @() }
+  return @($script:sync.Notices | Where-Object { -not $script:resolving.ContainsKey($_.Id) })
+}
 
 # repaints the strip glyph + badge; returns $true when something changed
 function Update-SyncIndicator([switch]$Force) {
   $s = $script:sync
   $status = $(if ($s) { [string]$s.Status } else { 'off' })
-  $n = @(Get-OpenConflictList).Count
+  $n = @(Get-OpenConflictList).Count + @(Get-NoticeList).Count
   $sig = "$status|$(if ($s) { $s.StatusText })|$n|$(if ($s) { $s.Guarded })|$(if ($s -and $s.LastSync) { (Format-Ago $s.LastSync) })"
   if (-not $Force -and $sig -eq $script:syncShown) { return $false }
   $script:syncShown = $sig
@@ -2405,6 +2536,7 @@ function Watch-SyncSetup {
 function Disable-Sync {
   try { Remove-Item -LiteralPath $syncCfgFile -Force -ErrorAction Stop } catch {}
   Stop-SyncLoop
+  if ((Read-ShareBindings $listsDir).Count) { Start-SyncLoop }   # lists shared with this PC keep syncing with their owners
   [void](Update-SyncIndicator -Force)
 }
 
@@ -2555,6 +2687,266 @@ function Render-PairView {
   [void]$list.Children.Add($warn)
 }
 
+# ---------------------------------------------------------------- sharing a list (the owner's side)
+# A view like Pair phone: invite someone with a one-time link (and its QR code), see who has the list, change
+# their access, revoke them, cancel an invite. The calls to this PC's own sync service run off the UI thread
+# (Start-OwnApi); the timer hands their answers back (Receive-OwnApi). See worker/src/shares.js.
+$script:apiReqs = New-Object System.Collections.ArrayList
+$script:shareView = $null
+function Start-OwnApi([string]$method, [string]$path, $body, [scriptblock]$done) {
+  $cfg = Read-SyncConfigUi
+  if (-not $cfg) { & $done @{ Status = 0; Data = @{ error = $script:ShareNeedsSync } }; return }
+  $ps = [powershell]::Create()
+  [void]$ps.AddScript({
+    param($core, $url, $token, $method, $body)
+    . $core
+    try { return (Invoke-SaqmeApi $url $token $method $body 15000) } catch { return @{ Status = 0; Data = @{ error = ($_.Exception.Message -replace '^offline: ', '') } } }
+  }).AddArgument((Join-Path $dir 'sync-core.ps1')).AddArgument(([string]$cfg['url']).TrimEnd('/') + '/api/' + $path).AddArgument([string]$cfg['token']).AddArgument($method).AddArgument($body)
+  [void]$script:apiReqs.Add(@{ Ps = $ps; Handle = $ps.BeginInvoke(); Done = $done })
+}
+function Receive-OwnApi {
+  foreach ($q in @($script:apiReqs)) {
+    if (-not $q.Handle.IsCompleted) { continue }
+    $r = $null
+    try { $r = @($q.Ps.EndInvoke($q.Handle)) | Select-Object -Last 1 } catch {}
+    try { $q.Ps.Dispose() } catch {}
+    $script:apiReqs.Remove($q)
+    if (-not $r) { $r = @{ Status = 0; Data = @{ error = 'No answer from your sync service.' } } }
+    try { & $q.Done $r } catch {}
+  }
+}
+function Get-ApiError($r) {
+  if ($r.Data -and $r.Data['error']) { return [string]$r.Data['error'] }
+  return "Your sync service answered $($r.Status)."
+}
+function Format-Ms([long]$ms, [string]$fmt) { return [DateTimeOffset]::FromUnixTimeMilliseconds($ms).LocalDateTime.ToString($fmt, $CI) }
+
+function Show-Share([string]$name) {
+  Commit-Edit
+  $pidOf = $(if ($script:sync -and $script:sync.ProjectIds) { $script:sync.ProjectIds[$name] } else { $null })
+  $script:shareView = @{ Name = $name; ProjectId = $pidOf; People = $null; Error = ''; Invite = $null; Access = 'edit'; Alias = ''; Busy = $false }
+  $script:view = 'share'
+  Update-SharePeople
+  Render
+}
+function Update-SharePeople {
+  $sv = $script:shareView
+  if (-not $sv -or -not $sv.ProjectId) { return }
+  Start-OwnApi 'GET' "shares?project=$($sv.ProjectId)" $null {
+    param($r)
+    $sv = $script:shareView; if (-not $sv) { return }
+    if ($r.Status -eq 200 -and $r.Data) { $sv.People = @($r.Data['shares']); $sv.Error = '' }
+    else { if ($null -eq $sv.People) { $sv.People = @() }; $sv.Error = Get-ApiError $r }
+    if ($script:view -eq 'share') { Render }
+  }
+}
+# create an invite: its link is shown (and copied), with a QR code for a phone
+function New-ShareInvite {
+  $sv = $script:shareView
+  $alias = ConvertTo-CleanText ([string]$sv.Alias)
+  if (-not $alias) { $sv.Error = 'Give the person a name, so you can recognise them later (only you see it).'; Render; return }
+  $sv.Busy = $true; $sv.Error = ''; Render
+  Start-OwnApi 'POST' 'shares/invite' @{ projectId = $sv.ProjectId; alias = $alias; access = $sv.Access } {
+    param($r)
+    $sv = $script:shareView; if (-not $sv) { return }
+    $sv.Busy = $false
+    if ($r.Status -eq 200 -and $r.Data -and $r.Data['link']) {
+      $sv.Invite = $r.Data; $sv.Alias = ''; $sv.Error = ''
+      try { [System.Windows.Clipboard]::SetText([string]$r.Data['link']) } catch {}
+      Request-Sync; Update-SharePeople
+      Show-Notice "Invite link for $($r.Data['share']['alias']) copied. Send it to them yourself; it works once."
+    } else { $sv.Error = Get-ApiError $r }
+    if ($script:view -eq 'share') { Render }
+  }
+}
+function Set-ShareAccess($person, [string]$access) {
+  Start-OwnApi 'POST' 'shares/update' @{ id = [string]$person['id']; access = $access } {
+    param($r)
+    if ($r.Status -ne 200) { Show-Notice "Not changed: $(Get-ApiError $r)" }
+    Update-SharePeople
+  }
+}
+function Remove-ShareAccess($person) {
+  $joined = [string]$person['state'] -eq 'joined'
+  if ($joined) {
+    $q = [System.Windows.MessageBox]::Show($w, "Revoke $($person['alias'])'s access?`n`nTheir key stops working now. The list stays on their device as their own copy, unshared.", 'Saqme To Do', 'YesNo', 'Question')
+    if ("$q" -ne 'Yes') { return }
+  }
+  Start-OwnApi 'POST' 'shares/revoke' @{ id = [string]$person['id'] } {
+    param($r)
+    if ($r.Status -ne 200) { Show-Notice "Not done: $(Get-ApiError $r)" } else { Request-Sync }
+    Update-SharePeople
+  }
+}
+
+function Render-ShareView {
+  $sv = $script:shareView
+  [void]$list.Children.Add((New-SettingsHeader "Share '$($sv.Name)'" 'list'))
+  $say = { param([string]$t, $brush) $x = New-Text $t $TypeSize.meta $(if ($brush) { $brush } else { $Faint }); $x.Margin = '8,4,8,6'; [void]$list.Children.Add($x) }
+  if (-not (Read-SyncConfigUi)) { & $say $script:ShareNeedsSync; return }
+  if (-not $sv.ProjectId -and $script:sync -and $script:sync.ProjectIds) { $sv.ProjectId = $script:sync.ProjectIds[$sv.Name]; if ($sv.ProjectId) { Update-SharePeople } }
+  if (-not $sv.ProjectId) { & $say 'This list is not on your sync service yet. It gets there within a few seconds; then open Share again.'; return }
+  & $say 'They get a link that works once, for 24 hours. The list stays on your sync service; they sync it from there with a key that reaches this list only.'
+  # who: a name only you see, to recognise them later
+  $g = New-Object System.Windows.Controls.Grid; $g.Margin = '8,4,6,4'
+  $box = New-Object System.Windows.Controls.TextBox
+  Set-Name $box 'Their name' 'Only you see it: it is how you recognise them in this list later'
+  $box.Text = [string]$sv.Alias; $box.FontFamily = $UI; $box.FontSize = $TypeSize.body; $box.Background = $Hover; $box.Foreground = $Ink; $box.CaretBrush = $Accent
+  $box.BorderThickness = '0,0,0,1.5'; $box.BorderBrush = $Line; $box.Padding = '6,4,6,4'; $box.MaxLength = 60
+  $hint = New-Text 'Their name, e.g. Nuca (only you see it)' $TypeSize.meta $Faint; $hint.IsHitTestVisible = $false; $hint.Margin = '8,5,0,0'
+  $hint.Visibility = $(if ($box.Text) { 'Collapsed' } else { 'Visible' }); $box.Tag = $hint
+  $box.Add_TextChanged({ param($s, $e) $s.Tag.Visibility = $(if ($s.Text) { 'Collapsed' } else { 'Visible' }); $script:shareView.Alias = $s.Text })
+  $box.Add_PreviewKeyDown({ param($s, $e) if ($e.Key -eq 'Return') { $e.Handled = $true; New-ShareInvite } })
+  [void]$g.Children.Add($box); [void]$g.Children.Add((Hide-Decoration $hint))
+  [void]$list.Children.Add($g)
+  # what: can edit / can view, in words
+  $seg = New-Segmented @(@('edit', $script:AccessText.edit[0]), @('view', $script:AccessText.view[0])) $sv.Access { param($v) $script:shareView.Access = $v; Render } 'Access'
+  $seg.Child.Children[0].ToolTip = $script:AccessText.edit[1]; $seg.Child.Children[1].ToolTip = $script:AccessText.view[1]
+  $mk = New-SmallButton $(if ($sv.Busy) { 'Creating...' } else { 'Create invite link' }) { if (-not $script:shareView.Busy) { New-ShareInvite } } $Accent
+  $acc = New-SettingRow 'Access' $script:AccessText[$sv.Access][1] $seg
+  [void]$list.Children.Add($acc)
+  $row = New-Object System.Windows.Controls.StackPanel; $row.Orientation = 'Horizontal'; $row.HorizontalAlignment = 'Right'; $row.Margin = '8,0,6,6'
+  [void]$row.Children.Add($mk); [void]$list.Children.Add($row)
+  if ($sv.Error) { & $say $sv.Error $Red }
+  if ($sv.Invite) {
+    $inv = $sv.Invite; $link = [string]$inv['link']
+    $frame = New-Object System.Windows.Controls.Border
+    $frame.Background = $Paper; $frame.CornerRadius = New-Object System.Windows.CornerRadius($Tokens.Radius.tab); $frame.Padding = '8'; $frame.HorizontalAlignment = 'Center'; $frame.Margin = '0,4,0,6'
+    try { $frame.Child = New-QrImage $link; $frame.Child.Width = 180; $frame.Child.Height = 180 } catch { $frame.Child = New-Text "Could not draw the QR code: $($_.Exception.Message)" $TypeSize.meta $Red }
+    [void]$list.Children.Add($frame)
+    & $say ("Invite for $($inv['share']['alias']), $($script:AccessText[[string]$inv['share']['access']][0].ToLower()). It works once, until $(Format-Ms ([long]$inv['expiresAt']) 'ddd H:mm'). Send it to them yourself (a message, an email): whoever opens it first joins.") $Ink
+    $lg = New-Object System.Windows.Controls.Grid; $lg.Margin = '8,2,6,8'
+    foreach ($wd in @('*', 'Auto')) { $cd = New-Object System.Windows.Controls.ColumnDefinition; $cd.Width = $wd; $lg.ColumnDefinitions.Add($cd) }
+    $lb = New-Object System.Windows.Controls.TextBox
+    Set-Name $lb 'Invite link'
+    $lb.Text = $link; $lb.IsReadOnly = $true; $lb.FontFamily = $UI; $lb.FontSize = $TypeSize.meta; $lb.Background = $Hover; $lb.Foreground = $TabInk
+    $lb.BorderThickness = '0'; $lb.Padding = '6,4,6,4'; $lb.VerticalContentAlignment = 'Center'
+    $lb.Add_GotKeyboardFocus({ param($s, $e) $s.SelectAll() })
+    [void]$lg.Children.Add($lb)
+    $cp = New-SmallButton 'Copy' { param($x) try { [System.Windows.Clipboard]::SetText($x); Show-Notice 'Invite link copied.' } catch {} } $null $link
+    [System.Windows.Controls.Grid]::SetColumn($cp, 1); [void]$lg.Children.Add($cp)
+    [void]$list.Children.Add($lg)
+  }
+  # who has it
+  [void]$list.Children.Add((New-SectionLabel 'Shared with'))
+  if ($null -eq $sv.People) { & $say 'Loading...'; return }
+  if (-not @($sv.People).Count) { & $say 'Nobody yet.'; return }
+  foreach ($p in @($sv.People)) {
+    $state = [string]$p['state']
+    $when = $(switch ($state) {
+      'joined' { "joined $(Format-Ms ([long]$p['joinedAt']) 'd MMM')" }
+      'pending' { "invited $(Format-Ms ([long]$p['createdAt']) 'd MMM'), not joined yet" }
+      default { 'invite expired, never used' } })
+    $ctl = New-Object System.Windows.Controls.StackPanel; $ctl.Orientation = 'Horizontal'
+    if ($state -ne 'expired') {
+      # their access, changeable: the current one is highlighted (each button carries the person, like Revoke)
+      foreach ($v in @('edit', 'view')) {
+        $cur = ([string]$p['access'] -eq $v)
+        $ab = New-SmallButton $(if ($v -eq 'edit') { 'Edit' } else { 'View' }) { param($x) if ($x.V -ne [string]$x.P['access']) { Set-ShareAccess $x.P $x.V } } $(if ($cur) { $OnAccent } else { $null }) @{ P = $p; V = $v }
+        if ($cur) { $ab.Background = $Accent }
+        $ab.ToolTip = $script:AccessText[$v][1]; $ab.Margin = '4,0,0,0'
+        Set-Name $ab ("$($script:AccessText[$v][0]) for $($p['alias'])" + $(if ($cur) { ' (current)' } else { '' })) $script:AccessText[$v][1]
+        [void]$ctl.Children.Add($ab)
+      }
+    }
+    $label = $(switch ($state) { 'joined' { 'Revoke' } 'pending' { 'Cancel invite' } default { 'Remove' } })
+    $end = New-SmallButton $label { param($x) Remove-ShareAccess $x } $(if ($state -eq 'joined') { $Red } else { $null }) $p
+    if ($state -eq 'joined') { $end.ToolTip = 'Their key stops working now; the list stays on their device as their own copy.' }
+    [void]$ctl.Children.Add($end)
+    [void]$list.Children.Add((New-SettingRow ([string]$p['alias']) "$($script:AccessText[[string]$p['access']][0]), $when" $ctl))
+  }
+}
+
+# ---------------------------------------------------------------- joining and leaving (the other side)
+# Join: an invite link pasted in Settings > Sync, or handed over by a saqme://join link (the owner's join page).
+# The app asks before it uses up the one-time code; the sync loop then claims it and binds a new file.
+$script:joining = $null
+function Start-JoinShare([string]$link) {
+  $inv = Get-InviteLink $link
+  if (-not $inv) { return 'bad' }
+  $srvHost = ([Uri]$inv.Server).Host
+  $r = [System.Windows.MessageBox]::Show($w, "Join a list shared from $srvHost?`n`nIt shows up here as a new tab and stays in step with theirs. What you change in it goes to $srvHost, which belongs to the person who shared it.", 'Saqme To Do', 'YesNo', 'Question')
+  if ("$r" -ne 'Yes') { return 'cancel' }
+  if (-not $script:sync) { Start-SyncLoop }
+  $ticket = New-SaqmeId 8
+  $script:joining = @{ Ticket = $ticket; Server = $srvHost; File = $null; Since = (Get-Date) }
+  $script:sync.Queue.Enqueue(@{ kind = 'join'; link = $link.Trim($script:JsSpace); ticket = $ticket })
+  Request-Sync
+  Show-Notice "Joining the list shared from $srvHost..."
+  return 'ok'
+}
+function Receive-JoinResult {
+  $j = $script:joining
+  if (-not $j -or -not $script:sync) { return }
+  if (-not $j.File) {
+    $res = $script:sync.JoinResults[$j.Ticket]
+    if (-not $res) { return }
+    $script:sync.JoinResults.Remove($j.Ticket)
+    if (-not $res.Ok) { $script:joining = $null; Show-Notice "Could not join: $($res.Error)"; return }
+    $j.File = $res.File; $j.Since = Get-Date
+    Show-Notice "Joined '$($res.File)'. Getting it from $($j.Server)..."
+  }
+  if (Test-Path -LiteralPath (Proj-Path $j.File)) {
+    $script:joining = $null; $script:view = 'list'; Switch-Project $j.File
+    Show-Notice "Joined '$($j.File)', shared from $($j.Server)."
+  } elseif (((Get-Date) - $j.Since).TotalSeconds -gt 120) { $script:joining = $null }
+}
+# a saqme:// link this app was started with, or that a second start handed over (.open-url in the data folder)
+$openUrlFile = Join-Path $DataDir '.open-url'
+function Receive-OpenUrl([string]$url = '') {
+  if (-not $url -and (Test-Path -LiteralPath $openUrlFile)) {
+    try { $url = [IO.File]::ReadAllText($openUrlFile).Trim(); Remove-Item -LiteralPath $openUrlFile -Force } catch { return }
+  }
+  if ($url -and (Get-InviteLink $url)) { Show-Main; [void](Start-JoinShare $url) }
+}
+
+# Leave: the file goes to lists\.trash and the list is no longer synced; nothing changes in the owner's list.
+# The sync loop does it (it makes every change to the bindings); the tab goes at once.
+function Leave-SharedList([string]$name) {
+  $b = Get-ShareOf $name
+  if (-not $b) { return }
+  $r = [System.Windows.MessageBox]::Show($w, "Leave '$name'?`n`nIt goes from this PC (to lists\.trash). Nothing changes in the owner's list. To have it here again, you need a new invite.", 'Saqme To Do', 'YesNo', 'Question')
+  if ("$r" -ne 'Yes') { return }
+  Commit-Edit
+  if (-not $script:sync) { Start-SyncLoop }
+  $script:sync.Queue.Enqueue(@{ kind = 'leave'; share = [string]$b['id'] })
+  Request-Sync
+  $script:leaving[$name] = $true
+  if ($script:proj -eq $name) { $n = @(Get-ProjectNames); Switch-Project $(if ($n.Count) { $n[0] } else { 'General' }) } else { Render }
+  Show-Notice "Left '$name'."
+}
+
+# Settings > Sync > Shared lists: join one (paste the invite link), and those this PC has, each with Leave
+function Render-SharedListSettings {
+  [void]$list.Children.Add((New-SettingRow 'Join a shared list' 'Paste the invite link someone sent you (https://.../join#code=...). Works without sync of your own too.' $null))
+  $g = New-Object System.Windows.Controls.Grid; $g.Margin = '8,0,6,8'
+  foreach ($wd in @('*', 'Auto')) { $cd = New-Object System.Windows.Controls.ColumnDefinition; $cd.Width = $wd; $g.ColumnDefinitions.Add($cd) }
+  $box = New-Object System.Windows.Controls.TextBox
+  Set-Name $box 'Invite link' 'From the person who shares the list with you'
+  $box.FontFamily = $UI; $box.FontSize = $TypeSize.meta; $box.Background = $Hover; $box.Foreground = $Ink; $box.CaretBrush = $Accent
+  $box.BorderThickness = '0,0,0,1.5'; $box.BorderBrush = $Line; $box.Padding = '6,4,6,4'; $box.VerticalContentAlignment = 'Center'
+  $hint = New-Text 'https://.../join#code=...' $TypeSize.meta $Faint; $hint.IsHitTestVisible = $false; $hint.Margin = '8,5,0,0'
+  $box.Tag = $hint
+  $box.Add_TextChanged({ param($s, $e) $s.Tag.Visibility = $(if ($s.Text) { 'Collapsed' } else { 'Visible' }); $s.BorderBrush = $Line })
+  $script:joinBox = $box
+  $go = { $r = Start-JoinShare $script:joinBox.Text; if ($r -eq 'ok') { $script:joinBox.Text = '' } elseif ($r -eq 'bad') { $script:joinBox.BorderBrush = $Red; Show-Notice 'That is not an invite link (it looks like https://.../join#code=...).' } }
+  $box.Add_PreviewKeyDown({ param($s, $e) if ($e.Key -eq 'Return') { $e.Handled = $true; $r = Start-JoinShare $s.Text; if ($r -eq 'ok') { $s.Text = '' } elseif ($r -eq 'bad') { $s.BorderBrush = $Red } } })
+  [void]$g.Children.Add($box); [void]$g.Children.Add((Hide-Decoration $hint))
+  $btn = New-SmallButton 'Join' $go; [System.Windows.Controls.Grid]::SetColumn($btn, 1); [void]$g.Children.Add($btn)
+  [void]$list.Children.Add($g)
+  if ($script:sync -and $script:sync.Guarded -and -not (Read-SyncConfigUi)) {
+    # (with sync of its own, the same row is in the Sync section above)
+    $msg = "$($script:sync.Guarded) tasks vanished from a shared list's file at once. Deleting them for its owner is paused in case that was an accident - restore the file, or confirm."
+    [void]$list.Children.Add((New-SettingRow 'Deletions paused' $msg (New-SmallButton 'Delete them' { $script:sync.AllowMassDelete = $true; Request-Sync; Render } $Red)))
+  }
+  foreach ($b in $script:bindings) {
+    $st = $(if ($script:sync -and $script:sync.Shares) { @($script:sync.Shares | Where-Object { $_.Id -eq [string]$b['id'] })[0] } else { $null })
+    $status = $(if ($st -and @('offline', 'error') -contains $st.State) { ", $($st.Message)" } else { '' })
+    $lv = New-SmallButton 'Leave' { param($x) Leave-SharedList $x } $Red ([string]$b['file'])
+    [void]$list.Children.Add((New-SettingRow ([string]$b['file']) "From $(Get-ShareHost $b), $($script:AccessText[[string]$b['access']][0].ToLower())$status" $lv))
+  }
+}
+
 function Format-ConflictValue([string]$field, $v) {
   switch ($field) {
     'status' { return (St ([string]$v)).Name }
@@ -2567,8 +2959,17 @@ function Format-ConflictValue([string]$field, $v) {
 function Resolve-SyncConflict($c, [bool]$useOther) {
   if (-not $script:sync) { return }
   $script:resolving[$c.Id] = $true
-  if ($useOther) { $script:sync.Queue.Enqueue(@{ kind = 'task'; id = $c.Task; field = $c.Field; value = $c.Value }) }
-  $script:sync.Queue.Enqueue(@{ kind = 'conflict'; id = $c.Id; field = 'resolved'; value = $true })
+  # (a shared list's conflict goes to its own engine: Share is its binding's id, '' for this PC's own server)
+  if ($useOther) { $script:sync.Queue.Enqueue(@{ kind = 'task'; id = $c.Task; field = $c.Field; value = $c.Value; share = [string]$c.Share }) }
+  $script:sync.Queue.Enqueue(@{ kind = 'conflict'; id = $c.Id; field = 'resolved'; value = $true; share = [string]$c.Share })
+  Request-Sync
+  [void](Update-SyncIndicator -Force)
+  Render
+}
+function Dismiss-SyncNotice($n) {
+  if (-not $script:sync) { return }
+  $script:resolving[$n.Id] = $true
+  $script:sync.Queue.Enqueue(@{ kind = 'notice'; share = [string]$n.Share; id = [string]$n.NoticeId })
   Request-Sync
   [void](Update-SyncIndicator -Force)
   Render
@@ -2577,9 +2978,33 @@ function Resolve-SyncConflict($c, [bool]$useOther) {
 function Render-ConflictsView {
   [void]$list.Children.Add((New-SettingsHeader 'Conflicts' 'settings'))
   $all = @(Get-OpenConflictList)
-  if (-not $all.Count) {
+  $notices = @(Get-NoticeList)
+  if (-not $all.Count -and -not $notices.Count) {
     $t = New-Text 'No conflicts. When the same thing is changed on two devices before they sync, the newest change wins and the other one is kept here for you to pick.' $TypeSize.body $Faint
     $t.Margin = '8,6,8,6'; [void]$list.Children.Add($t); return
+  }
+  # changes made in a view-only shared list (by hand, an editor, an AI assistant): the owner's version stays, and
+  # what was typed is kept here, not lost
+  $what = @{ text = 'Text'; status = 'Status'; due = 'Deadline'; notes = 'Notes'; deleted = 'Delete'; new = 'New task' }
+  foreach ($n in $notices) {
+    $card = New-Object System.Windows.Controls.Border
+    $card.Background = $NoteBg; $card.CornerRadius = New-Object System.Windows.CornerRadius(7); $card.Padding = '10,8,10,8'; $card.Margin = '6,4,6,6'
+    $sp = New-Object System.Windows.Controls.StackPanel
+    $title = New-Text $(if ($n.Text) { $n.Text } else { '(untitled)' }) $TypeSize.body $Ink; $title.FontWeight = 'SemiBold'
+    [void]$sp.Children.Add($title)
+    $sub = New-Text ("Not saved: " + [string]$what[$n.Field] + " in '$($n.List)'") $TypeSize.meta $Faint; $sub.Margin = '0,2,0,8'
+    [void]$sp.Children.Add($sub)
+    $val = $(if ($n.Field -eq 'deleted') { 'Deleted' } elseif ($n.Field -eq 'new') { [string]$n.Value } else { Format-ConflictValue $n.Field $n.Value })
+    $row = New-Text ('Your version:  ' + $val) $TypeSize.meta $NoteInk; $row.Margin = '0,2,0,2'
+    [void]$sp.Children.Add($row)
+    $why = New-Text $(if ($n.Reason -eq 'this shared list is view-only') { "'$($n.List)' is view-only for you, so the owner's version stays." } else { "The owner's server did not take it: $($n.Reason)." }) $TypeSize.meta $Faint
+    $why.Margin = '0,4,0,0'; [void]$sp.Children.Add($why)
+    $btns = New-Object System.Windows.Controls.StackPanel; $btns.Orientation = 'Horizontal'; $btns.HorizontalAlignment = 'Right'; $btns.Margin = '0,8,0,0'
+    [void]$btns.Children.Add((New-SmallButton 'Copy' { param($x) try { [System.Windows.Clipboard]::SetText($x); Show-Notice 'Copied.' } catch {} } $null $val))
+    [void]$btns.Children.Add((New-SmallButton 'Dismiss' { param($x) Dismiss-SyncNotice $x } $Accent $n))
+    [void]$sp.Children.Add($btns)
+    $card.Child = $sp
+    [void]$list.Children.Add($card)
   }
   $names = @{ text = 'Text'; status = 'Status'; due = 'Deadline'; notes = 'Notes'; deleted = 'Deleted on one device, edited on another' }
   foreach ($c in $all) {
@@ -2663,7 +3088,7 @@ $w.Add_PreviewKeyDown({
 
   if ($ctrl -and $key -eq 'Z') { $e.Handled = $true; Undo-Last; return }   # (text boxes keep their own Ctrl+Z)
   if ($script:view -ne 'list') {
-    if ($key -eq 'Escape') { $e.Handled = $true; $script:view = $(if ($script:view -eq 'settings') { 'list' } else { 'settings' }); Render }
+    if ($key -eq 'Escape') { $e.Handled = $true; $script:view = $(if ($script:view -eq 'settings' -or $script:view -eq 'share') { 'list' } else { 'settings' }); Render }
     return
   }
 
@@ -2679,7 +3104,7 @@ $w.Add_PreviewKeyDown({
   }
   if ($alt -and ($key -eq 'Up' -or $key -eq 'Down')) {
     $e.Handled = $true
-    if ($sel -and (Node-Rank $sel) -eq 0) { Nudge-Task $sel $(if ($key -eq 'Up') { -1 } else { 1 }); Set-Sel $sel }
+    if ($sel -and (Node-Rank $sel) -eq 0 -and -not $script:readOnly) { Nudge-Task $sel $(if ($key -eq 'Up') { -1 } else { 1 }); Set-Sel $sel }
     return
   }
   if ($ctrl) {
@@ -2694,7 +3119,7 @@ $w.Add_PreviewKeyDown({
     'Down'   { $e.Handled = $true; if ($i + 1 -lt $vis.Count) { Set-Sel $vis[$i + 1] } }
     'Up'     { $e.Handled = $true; if ($i -le 0) { Set-Sel $vis[0] } else { Set-Sel $vis[$i - 1] } }
     'Return' { $e.Handled = $true; if ($sel) { Edit-Item $sel } else { Set-Sel $vis[0] } }
-    'Space'  { if ($sel) { $e.Handled = $true; $sel.Mark = $(if ((Rank $sel.Mark) -eq 2) { ' ' } else { 'x' }); Save-Items; Render } }
+    'Space'  { if ($sel -and -not $script:readOnly) { $e.Handled = $true; $sel.Mark = $(if ((Rank $sel.Mark) -eq 2) { ' ' } else { 'x' }); Save-Items; Render } }
     'Right'  { if ($sel -and (Node-HasMore $sel)) { $e.Handled = $true; $script:openState[(Open-Key $sel)] = '1'; Save-State; Render } }
     'Left'   {
       if ($sel) {
@@ -2823,13 +3248,22 @@ $script:tick = 0
 $timer = New-Object System.Windows.Threading.DispatcherTimer
 $timer.Interval = [TimeSpan]::FromMilliseconds(800)
 $timer.Add_Tick({
-  if ($showEvt.WaitOne(0)) { Show-Main }
+  if ($showEvt.WaitOne(0)) { Show-Main; Receive-OpenUrl }
   if ($quitEvt.WaitOne(0)) { Quit-App; return }
+  if ($script:pendingUrl -and $w.IsVisible) { $u = $script:pendingUrl; $script:pendingUrl = $null; Receive-OpenUrl $u }
   if ($script:setupRun) { Watch-SyncSetup }
   if ($script:pairReq) { Receive-PairCode }
   elseif ($script:view -eq 'pair' -and $script:pairCode -and $script:pairCode.Until -lt (Get-Date)) { Render }   # a fresh code
-  if (-not $script:sync -and $script:tick % 10 -eq 5 -and (Test-Path -LiteralPath $syncCfgFile) -and (Read-SyncConfigUi)) {
-    Start-SyncLoop   # setup (-CloudOnly) just connected this PC
+  if ($script:apiReqs.Count) { Receive-OwnApi }
+  if ($script:joining) { Receive-JoinResult }
+  while ($script:sync -and $script:sync.Ended.Count) {
+    # its owner stopped sharing a list with this PC: it stays, as one of this PC's own lists
+    $x = $script:sync.Ended.Dequeue()
+    $msg = $(if ($x.Kept) { "'$($x.Name)' is no longer shared with you: its owner stopped sharing it. It stays here as your own list." } else { "'$($x.Name)' is no longer shared with you: its owner stopped sharing it." })
+    Show-Notice $msg; Show-Toast 'Saqme To Do' $msg $x.Name; Render
+  }
+  if (-not $script:sync -and $script:tick % 10 -eq 5 -and (((Test-Path -LiteralPath $syncCfgFile) -and (Read-SyncConfigUi)) -or (Read-ShareBindings $listsDir).Count)) {
+    Start-SyncLoop   # setup (-CloudOnly) just connected this PC, or a list shared with it is there
   }
   if ($script:sync) {
     if ($script:sync.Plan) { Apply-SyncPlan }
@@ -2871,7 +3305,7 @@ $timer.Add_Tick({
   if ($script:tick % 75 -eq 0) { $d = (Get-Date).Date; if ($d -ne $script:lastDay) { $script:lastDay = $d; Render } }
 })
 $script:lastDay = (Get-Date).Date
-if (Read-SyncConfigUi) { Start-SyncLoop }
+if ((Read-SyncConfigUi) -or (Read-ShareBindings $listsDir).Count) { Start-SyncLoop }   # (lists shared with this PC sync without sync of its own too)
 
 if ($SmokeTest) {
   # headless self-check used by the installer and the tests: builds every view and runs the main editing
@@ -2992,6 +3426,28 @@ if ($SmokeTest) {
     Remove-Item -LiteralPath (Proj-Path 'Drag check') -Force
     Render
     Write-Output 'DRAG OK'
+    # a list shared with this PC (bound in lists\.remotes.json): view-only, it renders read-only and is never written;
+    # its tab offers Leave, not Delete or Rename; an own list's Share view says it needs sync (none here)
+    Write-TextFileAtomic (Proj-Path 'Shared check') "- [ ] owner's task ^shshsh01`n  - [ ] owner's subtask ^shshsh02`n"
+    Save-ShareBindings $listsDir @(@{ id = 'ssmoke000001'; file = 'Shared check'; server = 'https://owner.example'; project = 'pshared01'; access = 'view'; name = 'Shared check'; joinedAt = 1 })
+    $script:bindSig = $null
+    Switch-Project 'Shared check'
+    if (-not $script:readOnly) { throw 'a view-only shared list is not read-only' }
+    $t0 = [IO.File]::ReadAllText($script:todo)
+    $script:items[0].Text = 'changed here'; Save-Items
+    if ([IO.File]::ReadAllText($script:todo) -cne $t0 -or $script:items[0].Text -ne "owner's task") { throw 'a view-only list was written' }
+    Delete-Task $script:items[0]; Begin-Notes $script:items[0]
+    if ([IO.File]::ReadAllText($script:todo) -cne $t0) { throw 'a view-only list was changed' }
+    $tab = @($tabs.Children | Where-Object { $_.Tag -eq 'Shared check' })[0]
+    if (@($tab.ContextMenu.Items | Where-Object { $_.Header -eq 'Leave this list' }).Count -ne 1 -or @($tab.ContextMenu.Items | Where-Object { $_.Header -eq 'Delete project' }).Count) { throw 'shared tab menu' }
+    Show-Share $homeList; Render-Settings
+    foreach ($v in 'settings', 'conflicts', 'list') { $script:view = $v; Render }
+    if (-not (Get-InviteLink 'https://owner.example/join#code=AAAAAAAAAAAAAAAAAAAAAA')) { throw 'invite link' }
+    Save-ShareBindings $listsDir @(); $script:bindSig = $null
+    Switch-Project $homeList
+    Remove-Item -LiteralPath (Proj-Path 'Shared check') -Force
+    Render
+    Write-Output 'SHARED OK'
     $first = @($script:items | Where-Object { $_.Kind -eq 'task' -and $_.Text -eq 'smoke task one' })[0]
     if ($script:sync) {
       # with a sync config in the data dir: the real loop must push our task, and a change made on
