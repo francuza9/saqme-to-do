@@ -1568,7 +1568,25 @@ function New-TitleButton {
   return $b
 }
 
-# a list's own menu: share, rename, delete; for a list shared with you, where it comes from and leaving it
+# a list moved one place up or down (the same order file the old tab drag wrote); the lists menu then opens again
+function Move-List([string]$name, [int]$by) {
+  $names = @(Get-ProjectNames)
+  $i = [array]::IndexOf($names, $name); $j = $i + $by
+  if ($i -lt 0 -or $j -lt 0 -or $j -ge $names.Count) { return }
+  $names[$i], $names[$j] = $names[$j], $names[$i]
+  Save-Order $names
+  Render-Tabs
+  if (-not $SmokeTest) { [void]$w.Dispatcher.BeginInvoke([Action]{ Show-ListsMenu }, [System.Windows.Threading.DispatcherPriority]::Background) }
+}
+function New-MoveItems([string]$name) {
+  $names = @(Get-ProjectNames); $i = [array]::IndexOf($names, $name); $out = @()
+  if ($i -gt 0) { $u = New-MenuItem 'Move up'; $u.Tag = $name; $u.Add_Click({ param($s, $e) Move-List $s.Tag -1 }); $out += $u }
+  if ($i -ge 0 -and $i -lt $names.Count - 1) { $d = New-MenuItem 'Move down'; $d.Tag = $name; $d.Add_Click({ param($s, $e) Move-List $s.Tag 1 }); $out += $d }
+  return $out
+}
+
+# a list's own menu: share, rename, move up / down, delete; for a list shared with you, where it comes from, moving
+# and leaving it
 function New-ListContextMenu([string]$name) {
   $share = Get-ShareOf $name
   $m = New-Menu
@@ -1579,7 +1597,7 @@ function New-ListContextMenu([string]$name) {
     [System.Windows.Controls.ToolTipService]::SetShowOnDisabled($mi1, $true)
     $mi2 = New-MenuItem 'Leave this list'; $mi2.Tag = $name
     $mi2.Add_Click({ param($s, $e) Leave-SharedList $s.Tag })
-    foreach ($x in @($info, (New-Separator), $mi1, $mi2)) { [void]$m.Items.Add($x) }
+    foreach ($x in @($info, (New-Separator), $mi1) + @(New-MoveItems $name) + @($mi2)) { [void]$m.Items.Add($x) }
   } else {
     $mi0 = New-MenuItem 'Share...'; $mi0.Tag = $name
     $mi0.Add_Click({ param($s, $e) Show-Share $s.Tag })
@@ -1588,7 +1606,7 @@ function New-ListContextMenu([string]$name) {
     $mi1.Add_Click({ param($s, $e) Begin-TabEdit $s.Tag })
     $mi2 = New-MenuItem 'Delete list'; $mi2.Tag = $name
     $mi2.Add_Click({ param($s, $e) Delete-Project $s.Tag })
-    foreach ($x in @($mi0, $mi1, $mi2)) { [void]$m.Items.Add($x) }
+    foreach ($x in @($mi0, $mi1) + @(New-MoveItems $name) + @($mi2)) { [void]$m.Items.Add($x) }
   }
   return $m
 }
@@ -3769,6 +3787,8 @@ $w.Add_PreviewKeyDown({
   if ($ctrl -and $key -eq 'N') { $e.Handled = $true; Commit-Edit; if ($script:view -ne 'list') { $script:view = 'list'; Render }; [void]$addBox.Focus(); return }
 
   $f = [System.Windows.Input.Keyboard]::FocusedElement
+  # (Shift+F10 arrives as the System key)
+  if ($f -eq $script:titleBtn -and (($key -eq 'F10' -and $shift) -or $key -eq 'Apps')) { $e.Handled = $true; Show-ListMenu $script:proj $true; return }
   if ($script:HasA11y -and $f -is [Saqme.AccessibleBorder] -and $f.Role -ne 'listitem' -and -not $ctrl -and -not $alt) {
     if ($key -eq 'Return' -or $key -eq 'Space') { return }   # the focused button's own action (its KeyDown)
     if ($f -eq $script:titleBtn -and ($key -eq 'Left' -or $key -eq 'Right')) {
@@ -4307,7 +4327,7 @@ if ($SmokeTest) {
     if ([IO.File]::ReadAllText($script:todo) -cne $t0) { throw 'a view-only list was changed' }
     $lm = New-ListContextMenu 'Shared check'
     if (@($lm.Items | Where-Object { $_.Header -eq 'Leave this list' }).Count -ne 1 -or @($lm.Items | Where-Object { $_.Header -eq 'Delete list' }).Count) { throw 'shared list menu' }
-    if ($script:titleBtn.ContextMenu.Items.Count -ne 4 -or (Get-ListInfo 'Shared check').Open -ne 2) { throw 'the title of a shared list' }
+    if ($script:titleBtn.ContextMenu.Items.Count -ne (4 + @(New-MoveItems 'Shared check').Count) -or (Get-ListInfo 'Shared check').Open -ne 2) { throw 'the title of a shared list' }
     Show-Share $homeList; Render-Settings
     foreach ($v in 'settings', 'sync', 'conflicts', 'list') { $script:view = $v; Render }
     if (-not (Get-InviteLink 'https://owner.example/join#code=AAAAAAAAAAAAAAAAAAAAAA')) { throw 'invite link' }
@@ -4347,6 +4367,17 @@ if ($SmokeTest) {
     if (& $swKey 'A') { throw 'the lists menu took a letter' }
     if (-not (& $swKey 'Escape') -or $script:listsPopup.IsOpen) { throw 'Esc did not close the lists menu' }
     $swSrc.Dispose()
+    # a list's own menu moves it: the first list has no Move up, the last no Move down; a move rewrites lists\.order
+    $mvNames = @(Get-ProjectNames)
+    $mvFirst = (New-ListContextMenu $mvNames[0]); $mvLast = (New-ListContextMenu $mvNames[-1])
+    $hasItem = { param($m, $h) @($m.Items | Where-Object { $_.Header -eq $h }).Count -eq 1 }
+    if ((& $hasItem $mvFirst 'Move up') -or -not (& $hasItem $mvFirst 'Move down') -or -not (& $hasItem $mvLast 'Move up') -or (& $hasItem $mvLast 'Move down')) { throw 'Move up / Move down at the ends of the lists' }
+    Move-List $mvNames[0] 1
+    $mvAfter = @(Get-ProjectNames)
+    if (($mvAfter -join '|') -ne (@($mvNames[1], $mvNames[0]) + @($mvNames | Select-Object -Skip 2) -join '|')) { throw "Move down gave: $($mvAfter -join ', ')" }
+    if (@(Read-Lines $orderFile)[0] -cne $mvNames[1]) { throw 'the move did not reach lists\.order' }
+    Move-List $mvNames[0] -1
+    if ((@(Get-ProjectNames) -join '|') -ne ($mvNames -join '|')) { throw 'Move up did not undo it' }
     Show-ListsMenu
     Close-ListsMenu $true
     if ($script:listsPopup.IsOpen) { throw 'the lists menu did not close' }

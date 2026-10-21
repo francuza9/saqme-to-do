@@ -267,7 +267,7 @@ the same in its own controls, see the end of this section.
     cards inside: a row per list (the check, the name, which wraps, a shared list's badge, the open tasks or "N
     due" in red / amber), then a gap and *New list* in violet in a card of its own. A click outside it or Esc
     closes it. A row is a radio button for UI Automation, the current one selected.
-  - A list's own menu (Share, Rename, Delete; Leave for a list shared with you) is the right-click menu of a row
+  - A list's own menu (Share, Rename, Move up / down, Delete; Leave for a list shared with you) is the right-click menu of a row
     or of the title, and Shift+F10 on the title or on a row in the menu. New list and Rename edit the name in
     place of the title.
   - Keys: Left / Right (and Ctrl+Tab, Ctrl+Shift+Tab, Ctrl+PageUp / PageDown) switch lists, Down opens the menu;

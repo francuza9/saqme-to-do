@@ -11,8 +11,9 @@ macOS apps: its tab strip is gone, and the title at the top is the current list'
 - **Click it for the lists menu**, under the title: every list in its order, a violet check on the current one,
   its open tasks on the right, or "2 due" (red when one is overdue, amber when they are due today), and **New
   list** below them. Choose a list to switch to it; a click outside or Esc closes the menu.
-- **Each list's own menu** (Share, Rename, Delete; Leave for a list shared with you) is the right-click menu of
-  a list in the menu or of the title, and Shift+F10. The share icon that appeared on the current tab is gone;
+- **Each list's own menu** (Share, Rename, Move up / Move down, Delete; Leave for a list shared with you) is the
+  right-click menu of a list in the menu or of the title, and Shift+F10. A move reopens the lists menu in the new
+  order and rewrites `lists\.order`, as dragging a tab did; it is the way to reorder lists, as on the phone. The share icon that appeared on the current tab is gone;
   Share is in that menu.
 - **Keyboard:** Left / Right on the title switch lists and Down opens the menu; in it Up / Down, Home / End,
   Enter, Esc. Ctrl+Tab, Ctrl+Shift+Tab, Ctrl+PageUp and Ctrl+PageDown still switch lists. Settings > General >
@@ -20,7 +21,10 @@ macOS apps: its tab strip is gone, and the title at the top is the current list'
 - The task menu's **Move to list...** (a menu of the other lists, instead of one item per list), and the list
   menus and the delete and new list boxes say "list" instead of "project".
 - Accessibility: the title is a menu button that says whether the menu is open, the menu's rows are radio buttons;
-  `scripts/dev/uia-check.ps1` checks both. `scripts/dev/render-widget.ps1 -Menu` renders the open menu.
+  `scripts/dev/uia-check.ps1` checks both. `scripts/dev/render-widget.ps1 -Menu` renders the open menu. Shift+F10 on the title
+  now opens the list's own menu (it used to open the selected task's).
+- The README images show the new look.
+
 ## 1.1.2
 
 **Phone, Linux and macOS: the list's name instead of tabs.** The phone app (also the window of the Linux/macOS

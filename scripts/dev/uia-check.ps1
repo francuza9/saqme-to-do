@@ -161,6 +161,17 @@ try {
     Check ($ec.Current.ExpandCollapseState -eq 'Expanded') 'the title says it is expanded while the menu is open'
     $ec.Collapse(); Start-Sleep -Milliseconds 600
     Check ($ec.Current.ExpandCollapseState -eq 'Collapsed') 'Collapse closes it, and the title says so'
+    # Shift+F10 on the title opens the list's own menu, which can move the list
+    Add-Type -AssemblyName System.Windows.Forms
+    $title[0].El.SetFocus(); Start-Sleep -Milliseconds 300
+    $ec.Expand(); Start-Sleep -Milliseconds 600
+    [System.Windows.Forms.SendKeys]::SendWait('{ESC}'); Start-Sleep -Milliseconds 500   # Esc gives the focus back to the title
+    $focusedName = $A::FocusedElement.Current.Name
+    [System.Windows.Forms.SendKeys]::SendWait('+{F10}'); Start-Sleep -Milliseconds 900
+    $menuItems = $A::RootElement.FindAll([System.Windows.Automation.TreeScope]::Descendants, (New-Object System.Windows.Automation.AndCondition($ofApp, (New-Object System.Windows.Automation.PropertyCondition($A::ControlTypeProperty, $CT::MenuItem)))))
+    $menuNames = @($menuItems | ForEach-Object { $_.Current.Name })
+    Check (($menuNames -contains 'Move up') -and ($menuNames -contains 'Move down') -and ($menuNames -contains 'Rename')) "Shift+F10 on the title opens the list's own menu with Move up and Move down (focus on '$focusedName'; $($menuNames -join ' | '))"
+    [System.Windows.Forms.SendKeys]::SendWait('{ESC}'); Start-Sleep -Milliseconds 400
   }
   Check (@($acc | Where-Object { $_.Type -eq 'Button' -and $_.Name -like 'Status: *' }).Count -ge 5) 'status chips are buttons named by their status'
   Check (@($acc | Where-Object { $_.Type -eq 'Edit' -and $_.Name -eq 'Add a task' }).Count -eq 1) 'the new-task box is labelled'

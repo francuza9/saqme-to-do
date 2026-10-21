@@ -83,7 +83,7 @@ milliseconds) and falls back to the old elements if that ever fails.
   dot is never colour alone. The lists menu is a popup of radio buttons, one per list, the current one selected,
   named like "Home, 2 due, 1 overdue" or "Home, 3 open", and *New list* a button after them. Up / Down, Home /
   End, Enter, Esc and Tab work in it, and focus goes back to the title; Left / Right on the title switch lists
-  and Down opens the menu. A list's own menu (Share, Rename, Delete, Leave) is the context menu of a row and of
+  and Down opens the menu. A list's own menu (Share, Rename, Move up / down, Delete, Leave) is the context menu of a row and of
   the title (Shift+F10). `scripts/dev/uia-check.ps1` expands and collapses the title through UI Automation and
   reads the rows.
 - **Roles.** Tasks are a list of
