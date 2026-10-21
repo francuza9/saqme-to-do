@@ -96,7 +96,7 @@ version). Esc (or the title) goes back one level.
 | **Notifications** | *Daily summary* time (shared with your phone), *Send a test notification* |
 | **Sync & sharing** | *Set up sync* or how sync stands, *Sync now*, *Pair phone*, conflicts; a pairing link from another device; joining a shared list (paste its invite link) and the lists shared with this PC (*Leave*); *Deletions paused* when that happens; under **Advanced**: *Turn off sync*, the sync log (and how to get a new sync key) |
 | **Your lists** | *Open the lists folder*, *Recently deleted* |
-| **Updates** (under *App*) | the version, *Check now* / *Update now* / *Sign in to Cloudflare*, *Install updates automatically* |
+| **Updates** (under *App*) | the version, *Check now* / *Update now* / *Sign in to Cloudflare*, *Install updates automatically*; with sync, *Your sync service*: its version and [updating itself](#your-sync-service-can-update-itself) |
 | **About** (under *App*) | the version, *Open the data folder*, where the app and your data are |
 
 The line at the bottom of every Settings page says *Saqme To Do* and its version. When an update is available,
@@ -212,7 +212,9 @@ environment variable `CLOUDFLARE_ACCOUNT_ID` set to that account's id.
 
 Setup then creates (or, when run again, reuses) a D1 database called `saqme`, deploys the Worker `saqme`
 (sync service + phone app), generates your access key and push-notification keys, checks that everything
-answers, connects the desktop app on this computer and shows the pairing QR code.
+answers, connects the desktop app on this computer and shows the pairing QR code. In a terminal it also offers to
+let your sync service [update itself](#your-sync-service-can-update-itself) (no is the default; the apps offer it
+later too).
 
 ## 4. The workers.dev subdomain (first time only)
 
@@ -395,6 +397,37 @@ app):
 - **The phone app** loads the new version the next time it is opened (or comes back to the foreground) with a
   connection, and says *Saqme was updated to …*.
 - Linux and macOS: `saqme update` does the same from a terminal.
+- A sync service that already runs the new version (it [updated itself](#your-sync-service-can-update-itself), or
+  another computer updated it) is left as it is. Running an older copy of setup never puts an older version on it.
+
+### Your sync service can update itself
+
+Without this, your Worker (and the phone app it serves) is updated only by the app on a computer: while that
+computer is off or away, your phones stay on the old version. With it, the Worker looks for a new release every 6
+hours and installs it by itself, from this project's GitHub releases with the same checks as the apps.
+
+It needs a **Cloudflare API token** that only you can make, once (about two minutes):
+
+1. **Settings > Updates** (phone: on a paired phone; Windows, Linux, macOS: under *Your sync service*), then
+   *Let it update itself…* / *Open Cloudflare's token page*. Setup offers the same in a terminal.
+2. Cloudflare's *Create API token* page opens, filled in: the permission **Account · Workers Scripts · Edit**, on
+   your account only. Sign in, click **Continue to summary**, then **Create Token**, and copy the token.
+   (If the page shows no permission: *Create Custom Token*; Permissions *Account*, *Workers Scripts*, *Edit*;
+   Account Resources *Include*, your account.)
+3. Paste it into the app and **Save**. Your sync service checks it with Cloudflare and keeps it as one of its own
+   secrets (`UPDATE_TOKEN`); none of your devices keeps it.
+
+Then Settings > Updates shows its version, *Update now*, **Update by itself** (switch it off to update only with
+Update now), how the last update went in plain words, and what it did. *Remove the token* stops it; so does deleting
+the token in the Cloudflare dashboard (My Profile > API Tokens). A sync service set up before 1.2.0 can do this
+after its next update from a computer.
+
+What the token allows: changing the Workers of that Cloudflare account (upload, deploy, roll back, their secrets
+and schedules), nothing else: not your other accounts, not DNS, not the database directly. It installs only
+releases of this repository, checked by SHA-256, never an older one. An update never leaves your sync service half
+updated: the new version takes over in one step, and if it cannot update its database it goes back to the version
+before by itself. To go back by hand: the dashboard's Workers & Pages > saqme > Deployments, or
+`npx wrangler rollback`. Details and the trust model: [sync.md](sync.md#the-sync-service-updates-itself).
 
 Installs from before 1.1.0 have no updater yet: **run setup once more** (the one-liner, `setup.cmd` or
 `scripts/setup.sh`, as when you installed it) to get it; it keeps your lists, settings and sync. Running setup
@@ -425,6 +458,9 @@ run from it) does not update itself: `git pull` and run setup.
 | Settings > Updates: "The update to … is waiting" | The new apps need your Worker updated first, and that did not work (the reason is shown). Nothing changed; **Try again**, or wait: it is tried again later. |
 | Settings > Updates: "did not start, so Saqme went back" | The new version did not come up on this computer; the one before runs again. Please report it with the log (below). |
 | "Your sync service could not update its database" | The Worker's own database update failed; it tries again with the next request. If it keeps saying so, the reason is in the message; please report it. |
+| Settings > Updates: "Cloudflare did not accept the update token" | The token expired, was deleted, or lacks *Workers Scripts: Edit* for the account your sync service is in. Make a new one (Settings > Updates > Remove the token, then *Let it update itself…*). |
+| Settings > Updates: "an update that stopped halfway" | Cloudflare holds a newer version of your sync service that is not deployed. Update it once from the app on your computer (or deploy that version, or another, in the dashboard), then try again. |
+| Settings > Updates: "…went back to … by itself" | The new version could not update its database, so the version before runs again; the reason is shown. It is tried again only with Update now; please report it. |
 | Sharing says the sync service "runs an older version" | Your Worker is not updated yet: Settings > Updates on the computer (it updates the Worker too). |
 | Logs | Windows: `%APPDATA%\SaqmeToDo\sync\sync.log` (Settings > Sync & sharing > Advanced > *Sync log* opens it), updates in `%LOCALAPPDATA%\Programs\SaqmeToDo\update\result.json`. Linux/macOS: `local/saqme.log` in the data folder. |
 

@@ -21,7 +21,10 @@ This is a small open-source project without a bug bounty.
 
 Your own Cloudflare account and the devices you pair are yours to protect: anyone with a pairing link (or
 the token in it) can read and change your lists. `setup -RotateToken` (`--rotate-token`) replaces the key at
-once; [docs/architecture.md](docs/architecture.md#security-notes) describes the design.
+once; [docs/architecture.md](docs/architecture.md#security-notes) describes the design. A sync service you let
+update itself holds a Cloudflare API token that can change the Workers of your account (and nothing else);
+remove it in Settings > Updates or the Cloudflare dashboard, and see
+[docs/sync.md](docs/sync.md#the-sync-service-updates-itself) for what it can do and what it trusts.
 
 ## Supported versions
 
