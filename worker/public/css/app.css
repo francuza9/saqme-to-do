@@ -18,7 +18,6 @@ svg { display: block; }
 [hidden] { display: none !important; }
 .tnum, .count, .meta, .pill, .time-input { font-variant-numeric: tabular-nums; }
 :focus-visible { outline: 2px solid var(--violet); outline-offset: 2px; border-radius: var(--r-control); }
-.tab:focus-visible { outline-offset: -2px; border-radius: var(--r-tab) var(--r-tab) 0 0; }
 .row:focus-visible, .g-row:focus-visible { outline-offset: -2px; border-radius: 0; }
 .group :focus-visible { outline-offset: -2px; }   /* (a card clips what is drawn outside it) */
 /* inside a card, where a task's chip and its text start (edge 2 + grip 14 + chevron 24 + 4, then the chip and 8):
@@ -28,49 +27,41 @@ svg { display: block; }
 /* ------------------------------------------------------------------ frame */
 .card {
   position: fixed; inset: 0; display: flex; flex-direction: column; background: var(--surface);
-  max-width: 760px; margin: 0 auto;
+  max-width: 760px; margin: 0 auto; overflow: hidden;   /* (a list swiped sideways never widens the page) */
 }
 @media (min-width: 800px) {
   .card { inset: 24px auto 24px auto; left: 0; right: 0; border: 1px solid var(--edge); border-radius: var(--r-container);
     overflow: hidden; box-shadow: 0 18px 48px rgba(0, 0, 0, .28); }
 }
 
-/* ------------------------------------------------------------------ tab strip (the one bold place) */
+/* ------------------------------------------------------------------ header: Settings, the list's name, sync */
+/* (above the list, so that the lists menu in it and its scrim cover the list; the header itself stays clear) */
 .strip {
-  display: flex; align-items: flex-end; gap: var(--space-2); flex: none;
-  padding: calc(env(safe-area-inset-top) + var(--space-4)) calc(env(safe-area-inset-right) + var(--space-3)) 0 calc(env(safe-area-inset-left) + var(--space-3));
+  position: relative; z-index: 6; display: flex; align-items: center; gap: var(--space-2); flex: none;
+  padding: calc(env(safe-area-inset-top) + var(--space-3)) calc(env(safe-area-inset-right) + var(--space-3)) var(--space-3) calc(env(safe-area-inset-left) + var(--space-3));
   background: var(--frame);
 }
-.logo { flex: none; width: 40px; height: 44px; display: grid; place-items: center; border-radius: var(--r-control); margin-bottom: var(--space-1); }
+.logo { flex: none; width: 40px; height: 44px; display: grid; place-items: center; border-radius: var(--r-control); }
 .logo img { width: 24px; height: 24px; }
 .logo:active { background: var(--tab-hover); }
-.tabs {
-  flex: 1; display: flex; align-items: flex-end; gap: var(--space-1); overflow-x: auto; overflow-y: hidden; min-width: 0;
-  scrollbar-width: none; -webkit-overflow-scrolling: touch; scroll-snap-type: x proximity;
-  /* more projects than fit: the row scrolls, and its edge fades instead of cutting a tab in half */
-  -webkit-mask-image: linear-gradient(to right, #000 calc(100% - 20px), transparent); mask-image: linear-gradient(to right, #000 calc(100% - 20px), transparent);
+/* The title (the one bold place): the current list's name in display type, a small ⌄ and, when another list has
+   something due, the violet dot; one button that opens the lists menu. A long name ends in "…" (whole in the menu). */
+.switcher {
+  display: flex; align-items: center; gap: 6px; flex: 0 1 auto; min-width: 0; height: 44px; margin-right: auto;
+  padding: 0 var(--space-3) 0 var(--space-2); border-radius: var(--r-control); text-align: left;
+  user-select: none; -webkit-user-select: none; -webkit-touch-callout: none;
 }
-.tabs::-webkit-scrollbar { display: none; }
-.tab {
-  position: relative; flex: none; display: flex; align-items: baseline; gap: var(--space-3);
-  min-height: 44px; padding: 12px 14px; border-radius: var(--r-tab) var(--r-tab) 0 0;
-  color: var(--smoke); font-size: var(--t-label-size); line-height: var(--t-label-line); font-weight: var(--t-label-weight);
-  white-space: nowrap; scroll-snap-align: start; user-select: none; -webkit-user-select: none; -webkit-touch-callout: none;
-  max-width: 220px;
+.switcher-name {
+  min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis;
+  font-size: var(--t-display-size); line-height: var(--t-display-line); font-weight: var(--t-display-weight);
 }
-.tab .name { overflow: hidden; text-overflow: ellipsis; }
-.tab .count { font-size: var(--t-small-size); line-height: var(--t-small-line); font-weight: var(--t-small-weight); color: var(--smoke); }
-.tab.active { background: var(--surface); color: var(--ink); font-weight: 600; }
-.tab.active::before {
-  content: ''; position: absolute; left: 0; right: 0; top: 0; height: 3px; border-radius: 3px 3px 0 0;
-  background: linear-gradient(90deg, var(--grad-a), var(--grad-b));
-}
-.tab:not(.active):active { background: var(--tab-hover); }
-@media (hover: hover) { .tab:not(.active):hover { background: var(--tab-hover); color: var(--ink); } }
-.tab-add { flex: none; display: grid; place-items: center; width: 36px; height: 44px; margin-bottom: var(--space-1); color: var(--smoke); border-radius: var(--r-control); }
-.tab-add:active { background: var(--tab-hover); }
-.tab-add svg { width: 15px; height: 15px; }
-.sync, .conflicts-badge { flex: none; height: 44px; min-width: 40px; display: grid; place-items: center; border-radius: var(--r-control); color: var(--smoke); margin-bottom: var(--space-1); }
+.switcher-chev { display: grid; place-items: center; flex: none; color: var(--smoke); }
+.switcher-chev svg { width: 13px; height: 13px; transition: transform .15s; }
+.switcher[aria-expanded="true"] .switcher-chev svg { transform: rotate(180deg); }
+.switcher .dot { margin: 0 0 0 2px; }
+.switcher:active, .switcher[aria-expanded="true"] { background: var(--tab-hover); }
+@media (hover: hover) { .switcher:hover { background: var(--tab-hover); } }
+.sync, .conflicts-badge { flex: none; height: 44px; min-width: 40px; display: grid; place-items: center; border-radius: var(--r-control); color: var(--smoke); }
 .sync svg { width: 19px; height: 19px; }
 .sync.state-syncing { color: var(--violet); }
 .sync.state-syncing svg { animation: pulse 1.2s ease-in-out infinite; }
@@ -81,11 +72,42 @@ svg { display: block; }
 .conflicts-badge svg { width: 15px; height: 15px; }
 @keyframes pulse { 50% { opacity: .35; } }
 
+/* ------------------------------------------------------------------ the lists menu (the title opens it) */
+/* Under the title, over a scrim on the list and the add line (the header stays clear, so the turned chevron shows): a
+   card of one row per list (the current one checked, its open tasks or "2 due" on the right), then "New list" in a
+   card of its own after a small gap. app.js sizes the scrim to the window and places the menu (--menu-top, left);
+   with many lists their card scrolls and "New list" stays in view. */
+.list-menu-wrap { position: absolute; left: 0; right: 0; top: 100%; height: 100vh; }
+.list-menu-scrim { position: absolute; inset: 0; background: var(--backdrop); animation: fade .16s ease-out; }
+.list-menu {
+  position: absolute; top: var(--menu-top, 64px); display: flex; flex-direction: column; gap: var(--space-3);
+  width: min(320px, calc(100% - 2 * var(--card-inset)));
+  max-height: calc(100% - var(--menu-top, 64px) - env(safe-area-inset-bottom) - var(--card-inset));
+  transform-origin: top left; animation: drop .16s cubic-bezier(.2, .8, .2, 1);
+}
+@keyframes drop { from { opacity: 0; transform: translateY(-6px) scale(.97); } }
+.list-menu .group { flex: none; margin: 0; }
+.list-menu .lm-lists { flex: 0 1 auto; min-height: 0; overflow-y: auto; overscroll-behavior: contain; }
+/* a list's name is your own words: it wraps here instead of ending in "…" (the title cuts it), the check, badge and
+   value on its first line */
+.g-row.lm-item {
+  --line-x: calc(var(--card-padding) + 28px); align-items: flex-start; padding-top: 11px; padding-bottom: 11px;
+  -webkit-touch-callout: none; user-select: none; -webkit-user-select: none;
+}
+.lm-item .check, .lm-item .shared-badge { height: var(--t-body-line); }
+.lm-item .g-label { flex: 0 1 auto; white-space: normal; overflow-wrap: anywhere; }   /* (a shared list's badge right after its name) */
+.lm-item .g-value { margin-left: auto; white-space: nowrap; }
+.lm-item .g-value.lm-over { color: var(--alert); }
+.lm-item .g-value.lm-soon { color: var(--amber); }
+
 /* ------------------------------------------------------------------ the list: lines in grouped cards */
 .list {
   flex: 1; overflow-y: auto; overflow-x: hidden; -webkit-overflow-scrolling: touch; outline: none; overscroll-behavior: contain;
   padding: var(--space-3) calc(env(safe-area-inset-right) + var(--card-inset)) var(--space-7) calc(env(safe-area-inset-left) + var(--card-inset));
 }
+/* with more than one list a sideways swipe on it goes to the next or previous list (app.js); up and down stay the
+   browser's scroll, and pinch zoom stays on */
+.list.swipeable { touch-action: pan-y pinch-zoom; }
 /* no add line under it (Settings, a view-only list): the list runs to the bottom edge, over the home indicator */
 .card.no-add .list { padding-bottom: calc(env(safe-area-inset-bottom) + var(--space-7)); }
 .list::-webkit-scrollbar { width: 6px; }
@@ -408,10 +430,11 @@ button.version-line { margin-left: calc(var(--card-padding) - 6px); padding: 3px
 .sheet .steps li { margin: var(--space-2) 0; }
 .sheet img.qr { display: block; width: min(260px, 70vw); height: auto; margin: var(--space-2) auto var(--space-4); border-radius: var(--r-control); image-rendering: pixelated; }
 
-/* shared lists: the badge on a tab, the Share sheet (invite, people), the menu item that explains why not */
-.tab .shared-badge { display: inline-grid; align-self: center; color: var(--smoke); }
-.tab .shared-badge svg { width: 13px; height: 13px; }
-.tab.active .shared-badge { color: var(--violet); }
+/* shared lists: the badge after a list's name (the title, the lists menu), the Share sheet (invite, people), the menu
+   item that explains why not */
+.shared-badge { display: grid; place-items: center; flex: none; color: var(--smoke); }
+.shared-badge svg { width: 13px; height: 13px; }
+.switcher .shared-badge svg { width: 16px; height: 16px; }
 .menu-item:disabled { opacity: .55; }
 .sheet p.sheet-note { margin: var(--space-1) var(--space-4) var(--space-3); font-size: var(--t-meta-size); line-height: var(--t-meta-line); }
 /* the Share sheet: grouped like Settings (cards on the sheet's frame colour; its sections are h3 under the sheet's title) */

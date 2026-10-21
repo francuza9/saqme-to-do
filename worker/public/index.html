@@ -30,10 +30,14 @@
   <div id="app" class="card">
     <header class="strip" id="strip">
       <button class="logo" id="logo" aria-label="Settings" data-fk="logo"><img src="icons/glyph.png" alt="" width="22" height="22"></button>
-      <nav class="tabs" id="tabs" aria-label="Projects"></nav>
-      <button class="tab-add" id="tabAdd" aria-label="New project" title="New project"></button>
+      <button class="switcher" id="switcher" aria-haspopup="menu" aria-expanded="false" aria-controls="listMenu" data-fk="switcher"></button>
       <button class="conflicts-badge" id="conflictsBadge" hidden aria-label="Conflicts"></button>
       <button class="sync" id="syncBtn" aria-label="Sync status"></button>
+      <!-- the lists menu that the title opens: under the header, over a scrim on the list and the add line -->
+      <div class="list-menu-wrap" id="listMenuWrap" hidden>
+        <div class="list-menu-scrim" id="listMenuScrim"></div>
+        <div class="list-menu" id="listMenu" role="menu" aria-label="Lists"></div>
+      </div>
     </header>
     <main class="list" id="list" tabindex="-1"></main>
     <footer class="add" id="addBar">

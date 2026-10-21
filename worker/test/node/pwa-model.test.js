@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { parseDue, parseDueDate, dueLabel, dueTone, fmtDate, quickDates } from '../../public/js/dates.js';
-import { buildTree, sections, kidsInDisplayOrder, positionAt, linkify, cleanProjectName, openCount, newId, rank } from '../../public/js/model.js';
+import { buildTree, sections, kidsInDisplayOrder, positionAt, linkify, cleanProjectName, openCount, listCounts, newId, rank } from '../../public/js/model.js';
 
 // Wednesday 2026-10-21 15:30 local
 const NOW = new Date(2026, 9, 21, 15, 30);
@@ -66,6 +66,21 @@ describe('task tree', () => {
     expect(kidsInDisplayOrder(tree.byId.get('a')).map((n) => n.id)).toEqual(['a3', 'a1', 'a2']);
     expect(tree.byId.get('a3').depth).toBe(1);
     expect(openCount(tasks, 'p1')).toBe(3);
+  });
+
+  it('counts each list\'s open, due (today or earlier) and overdue tasks for the lists menu', () => {
+    const due = (t, date, time = '') => { t.fields.due.v = { date, time }; return t; };
+    const tasks = [
+      T('a'), due(T('b'), '2026-10-21'), due(T('c'), '2026-10-21', '15:00'), due(T('d'), '2026-10-19'), due(T('e'), '2026-10-22'),
+      due(T('f', { status: 'x' }), '2026-10-01'), due(T('g', { status: '>' }), '2026-10-01'), due(T('h', { deleted: true }), '2026-10-01'),
+      due(T('i', { text: '' }), '2026-10-01'), due(T('j', { project: 'p2', status: '!' }), '2026-10-21', '18:00'), T('k', { project: 'p3', status: 'x' }),
+    ];
+    const c = listCounts(tasks, NOW);
+    // b due today; c today 15:00, passed at 15:30; d two days ago; e tomorrow is not due yet; closed, postponed, deleted, empty: not counted
+    expect(c.get('p1')).toEqual({ open: 5, due: 3, over: 2 });
+    expect(c.get('p2')).toEqual({ open: 1, due: 1, over: 0 });
+    expect(c.get('p1').open).toBe(openCount(tasks, 'p1'));
+    expect(c.has('p3')).toBe(false);
   });
 
   it('re-homes orphans under the nearest live ancestor', () => {

@@ -31,7 +31,8 @@ describe('design tokens', () => {
       for (const k of ['ink', 'smoke', 'violet', 'amber', 'alert', 'closed', 'noteInk']) {
         expect(contrast(p[k], p.card), `${k} on a card`).toBeGreaterThanOrEqual(4.5);
       }
-      for (const k of ['smoke', 'violet', 'alert']) {
+      // (amber and alert: "2 due" on a row of the lists menu)
+      for (const k of ['smoke', 'violet', 'amber', 'alert']) {
         expect(contrast(p[k], p.cardHover), `${k} on a hovered row`).toBeGreaterThanOrEqual(4.5);
         expect(contrast(p[k], p.cardPressed), `${k} on a pressed row`).toBeGreaterThanOrEqual(4.5);
       }

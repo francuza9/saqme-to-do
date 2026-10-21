@@ -5,6 +5,7 @@ const S = (body, vb = '0 0 16 16') =>
 
 const ICONS = {
   chevron: S('<path d="M6 3.5 10.5 8 6 12.5"/>'),
+  chevronDown: S('<path d="M3.5 6 8 10.5 12.5 6"/>'),
   back: S('<path d="M10 3.5 5.5 8l4.5 4.5"/>'),
   plus: S('<path d="M8 2.5v11M2.5 8h11"/>'),
   check: S('<path d="m3.2 8.4 3 3 6.6-7"/>', '0 0 16 16').replace('stroke-width="1.6"', 'stroke-width="2.4"'),

@@ -57,6 +57,9 @@ for (const scheme of ['dark', 'light']) {
   const ctx = await phone(scheme);
   const page = await open(ctx, projects.Work);
   await axe(page, `${scheme} list`);
+  await page.click('#switcher'); await page.waitForTimeout(200); await axe(page, `${scheme} lists menu`);
+  await page.dispatchEvent('#listMenu [role="menuitemradio"] >> nth=0', 'contextmenu'); await page.waitForTimeout(200); await axe(page, `${scheme} a list's own menu`);
+  await page.keyboard.press('Escape');
   await page.click('.completed-toggle'); await page.waitForTimeout(200); await axe(page, `${scheme} list with completed`);
   await page.click('.row .more >> nth=0'); await page.waitForTimeout(200); await axe(page, `${scheme} task menu`);
   await page.keyboard.press('Escape');
@@ -73,7 +76,7 @@ for (const scheme of ['dark', 'light']) {
     await page.click('.view-header .back');
   }
   await page.click('#logo'); await page.waitForSelector('.row');
-  await page.dispatchEvent('.tab.active', 'contextmenu');
+  await page.dispatchEvent('#switcher', 'contextmenu');
   await page.click('#sheet .menu-item:has-text("Share")');
   await page.waitForSelector('#sheet:has-text("Shared with")'); await page.waitForTimeout(300);
   await axe(page, `${scheme} share sheet`);
@@ -191,6 +194,50 @@ console.log('2. keyboard, focus and announcements');
   await page.waitForTimeout(200);
   const said = await page.textContent('#announce');
   check(/Deleted.*Undo is available/i.test(said), `deleting is announced ("${said}")`);
+
+  // the list switcher: the title is a menu button, its menu a real menu (arrows, Home / End, a letter, Enter, Esc, Tab)
+  const title = await page.evaluate(() => { const b = document.getElementById('switcher'); return { name: b.textContent, popup: b.getAttribute('aria-haspopup'), expanded: b.getAttribute('aria-expanded') }; });
+  check(title.name.startsWith('Work') && title.popup === 'menu' && title.expanded === 'false', `the title is a menu button named by its list (${JSON.stringify(title)})`);
+  const inMenu = () => page.evaluate(() => { const a = document.activeElement; return { role: a?.getAttribute('role') ?? '', checked: a?.getAttribute('aria-checked') ?? '', name: a?.querySelector('.g-label')?.textContent ?? '' }; });
+  const selBefore = await page.evaluate(() => document.querySelector('.row.sel')?.dataset.id ?? '');
+  await page.focus('#switcher');
+  await page.keyboard.press('ArrowDown');
+  await page.waitForTimeout(150);
+  let m = await inMenu();
+  const selAfter = await page.evaluate(() => document.querySelector('.row.sel')?.dataset.id ?? '');
+  check(m.role === 'menuitemradio' && m.checked === 'true' && m.name === 'Work' && (await page.getAttribute('#switcher', 'aria-expanded')) === 'true' && selAfter === selBefore,
+    `Down on the title opens the lists menu on the current list, and moves no task selection (${JSON.stringify(m)})`);
+  await page.keyboard.press('End'); const end = (await inMenu()).name;
+  await page.keyboard.press('Home'); const first = (await inMenu()).name;
+  await page.keyboard.press('ArrowUp'); m = await inMenu();
+  check(end === 'New list' && first === 'General' && m.name === 'New list', `End, Home, and Up from the first goes round to the last (${end}, ${first}, ${m.name})`);
+  await page.keyboard.press('h'); m = await inMenu();
+  check(m.name === 'Home', `a typed letter goes to the list that starts with it (${m.name})`);
+  await page.keyboard.press('Enter');
+  await page.waitForTimeout(200);
+  check((await focused()).fk === 'switcher' && await page.isHidden('#listMenuWrap') && (await page.textContent('#switcher .switcher-name')) === 'Home', 'Enter switches to it and closes the menu, focus back on the title');
+  await page.keyboard.press('ArrowLeft');
+  await page.waitForTimeout(200);
+  check((await page.textContent('#switcher .switcher-name')) === 'Work' && /Work/.test(await page.textContent('#announce')), 'Left / Right on the title go to the previous / next list, and say which');
+  await page.keyboard.press('Enter');
+  await page.waitForTimeout(150);
+  await page.keyboard.press('Escape');
+  await page.waitForTimeout(150);
+  check((await focused()).fk === 'switcher' && await page.isHidden('#listMenuWrap') && await page.isVisible('.row'), 'Esc closes the menu (only the menu), focus on the title');
+  await page.keyboard.press('Enter');
+  await page.waitForTimeout(150);
+  await page.keyboard.press('Control+m');
+  await page.waitForTimeout(200);
+  check((await focused()).inSheet && await page.isVisible('#sheet .menu-item:has-text("Rename")') && await page.isVisible('#sheet .menu-item:has-text("Move up")'), 'Ctrl+M on a list in the menu opens its own menu (rename, move, delete)');
+  await page.keyboard.press('Escape');
+  await page.waitForTimeout(200);
+  check((await focused()).fk === 'switcher', `closing that returns focus to the title (${(await focused()).fk})`);
+  await page.keyboard.press('Enter');
+  await page.waitForTimeout(150);
+  await page.keyboard.press('Tab');
+  await page.waitForTimeout(150);
+  const next = await page.evaluate(() => document.activeElement?.id ?? '');
+  check(await page.isHidden('#listMenuWrap') && ['conflictsBadge', 'syncBtn'].includes(next), `Tab closes the menu and goes on from the title (${next})`);
   await ctx.close();
 }
 
@@ -199,8 +246,22 @@ console.log('3. reduced motion and zoom');
 {
   const ctx = await phone('dark', { reducedMotion: 'reduce' });
   const page = await open(ctx, projects.Work);
-  const t = await page.evaluate(() => getComputedStyle(document.querySelector('.chev svg')).transitionDuration);
-  check(/^0s/.test(t), `no transitions with prefers-reduced-motion (${t})`);
+  const t = await page.evaluate(() => [getComputedStyle(document.querySelector('.chev svg')).transitionDuration, getComputedStyle(document.querySelector('.switcher-chev svg')).transitionDuration]);
+  check(t.every((d) => /^0s/.test(d)), `no transitions with prefers-reduced-motion (${t})`);
+  // a swipe still goes to the next list, but the list does not follow the finger or slide
+  const cdp = await ctx.newCDPSession(page);
+  const lb = await (await page.$('#list')).boundingBox();
+  const y = lb.y + lb.height / 2;
+  await cdp.send('Input.dispatchTouchEvent', { type: 'touchStart', touchPoints: [{ x: lb.x + lb.width - 40, y }] });
+  let followed = false;
+  for (let i = 1; i <= 10; i++) {
+    await cdp.send('Input.dispatchTouchEvent', { type: 'touchMove', touchPoints: [{ x: lb.x + lb.width - 40 - i * 25, y }] });
+    if (await page.evaluate(() => document.getElementById('list').style.transform || document.getElementById('list').getAnimations().length)) followed = true;
+  }
+  await cdp.send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] });
+  await page.waitForTimeout(300);
+  const moved = await page.evaluate(() => document.getElementById('list').getAnimations().length);
+  check(!followed && !moved && (await page.textContent('#switcher .switcher-name')) === 'Home', 'with reduce motion a swipe switches lists without the list moving');
   await ctx.close();
 }
 for (const [w, label] of [[195, '200% zoom on a 390 px phone'], [320, '320 px wide']]) {
@@ -213,6 +274,10 @@ for (const [w, label] of [[195, '200% zoom on a 390 px phone'], [320, '320 px wi
   }));
   check(over.page <= 0 && over.list <= 0 && over.clipped === 0, `${label}: no sideways scrolling or cut text (${JSON.stringify(over)})`);
   await page.screenshot({ path: join(process.env.SAQME_SHOTS || '/tmp', `a11y-reflow-${w}.png`) });
+  await page.click('#switcher');
+  const menu = await page.evaluate(() => { const r = document.getElementById('listMenu').getBoundingClientRect(); return { left: r.left, right: r.right, page: document.documentElement.scrollWidth - innerWidth }; });
+  check(menu.left >= 0 && menu.right <= w && menu.page <= 0, `${label}: the lists menu fits (${JSON.stringify(menu)})`);
+  await page.keyboard.press('Escape');
   await page.click('#logo');
   const fits = () => page.evaluate(() => Math.max(document.documentElement.scrollWidth - window.innerWidth, document.getElementById('list').scrollWidth - document.getElementById('list').clientWidth));
   const overSettings = await fits();

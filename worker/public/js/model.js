@@ -2,6 +2,7 @@
 // A task row: { id, fields: { place: { v: { project, parent, pos } }, text, status, due, notes, deleted } }.
 
 import { cmpPos, keyBetween, rekey } from './keys.js';
+import { dueTone, fmtDate } from './dates.js';
 
 export const STATUSES = [
   { mark: ' ', name: 'To do', key: 'todo' },
@@ -148,6 +149,25 @@ export function openCount(tasks, projectId) {
   let n = 0;
   for (const t of tasks) if (live(t) && place(t).project === projectId && t.fields.text.v && isOpenStatus(t.fields.status.v)) n++;
   return n;
+}
+
+/**
+ * Every project's open tasks (counted as openCount does), how many of them are due (a deadline today or earlier,
+ * what the daily summary lists) and how many of those are overdue: projectId -> { open, due, over }, for the lists
+ * menu and the dot on the title.
+ */
+export function listCounts(tasks, now = new Date()) {
+  const out = new Map();
+  const todayStr = fmtDate(now);
+  for (const t of tasks) {
+    if (!live(t) || !t.fields.text.v || !isOpenStatus(t.fields.status.v)) continue;
+    const c = out.get(place(t).project) ?? { open: 0, due: 0, over: 0 };
+    c.open++;
+    const due = t.fields.due.v;
+    if (due && dueTone(due, false, now) === 'over') { c.due++; c.over++; } else if (due && due.date <= todayStr) c.due++;
+    out.set(place(t).project, c);
+  }
+  return out;
 }
 
 const LINK_RE = /(https?:\/\/[^\s<>"]+|www\.[^\s<>"]+)/g;

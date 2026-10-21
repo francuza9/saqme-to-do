@@ -1,9 +1,9 @@
-// Saqme To Do — iPhone PWA. Mirrors the desktop widget: project tabs, status chips, collapsible tasks,
-// deadlines, notes with links, Postponed section, folded Completed, drag to reorder, move to project.
+// Saqme To Do — iPhone PWA. Mirrors the desktop widget: lists (the title switches them), status chips, collapsible
+// tasks, deadlines, notes with links, Postponed section, folded Completed, drag to reorder, move to project.
 
 import { Store, SHARING_API, OLDER_SERVER } from './store.js';
 import {
-  STATUSES, statusOf, rank, sections, kidsInDisplayOrder, progress, linkify, openCount, subtreeIds, isAncestor,
+  STATUSES, statusOf, rank, sections, kidsInDisplayOrder, progress, linkify, listCounts, subtreeIds, isAncestor,
   cleanText, cleanNotes,   // same cleanup as the server (worker/src/merge.js): saving never changes text by itself
 } from './model.js';
 import { parseDue, dueLabel, dueLong, dueTone, quickDates } from './dates.js';
@@ -22,7 +22,8 @@ if (window.top !== window.self) {
 const store = new Store();
 const $ = (id) => document.getElementById(id);
 const els = {
-  tabs: $('tabs'), tabAdd: $('tabAdd'), list: $('list'), logo: $('logo'), sync: $('syncBtn'), conflicts: $('conflictsBadge'),
+  strip: $('strip'), switcher: $('switcher'), menuWrap: $('listMenuWrap'), menu: $('listMenu'), scrim: $('listMenuScrim'),
+  list: $('list'), logo: $('logo'), sync: $('syncBtn'), conflicts: $('conflictsBadge'),
   addBar: $('addBar'), add: $('addInput'), sheetWrap: $('sheetWrap'), sheet: $('sheet'), backdrop: $('sheetBackdrop'),
   toast: $('toast'), announce: $('announce'), app: $('app'),
 };
@@ -123,9 +124,11 @@ function render() {
   // the DOM is rebuilt on every change: keep keyboard focus on the same control (by its data-fk key)
   const fk = document.activeElement?.dataset?.fk;
   // before the user starts (welcome screen) the header is just the logo, which opens Settings
-  els.tabAdd.hidden = els.sync.hidden = showWelcome();
-  renderTabs();
+  els.switcher.hidden = els.sync.hidden = showWelcome();
+  if (els.switcher.hidden) closeListMenu({ focus: false });
+  renderSwitcher();
   renderStatus();
+  els.list.classList.toggle('swipeable', ui.view === 'list' && !showWelcome() && store.projects().length > 1);
   if (!(ui.editing || ui.notesEditing || ui.drag)) renderMain();   // never pull the rug while typing / dragging
   if (ui.focusKey) {
     // a view just opened: focus on what go() asked for, else on its Back button (keyboard and screen readers land there)
@@ -180,49 +183,260 @@ const shareApi = {
   revoke: (id) => api(ui.local ? 'local/shares/revoke' : 'shares/revoke', { id }),
 };
 
-// ---------------------------------------------------------------- tabs
-function renderTabs() {
-  const cur = currentProject();
-  const tasks = store.tasks();
-  const tabs = store.projects().map((p) => {
-    const n = openCount(tasks, p.id);
-    const isCur = cur && p.id === cur.id;
-    const sh = sharing(p.id);
-    const shTitle = sh?.withMe ? `Shared with you · ${ACCESS[sh.withMe.access]?.name ?? ''}` : sh ? 'Shared' : '';
-    const t = h('button', { class: `tab${isCur ? ' active' : ''}`, dataset: { id: p.id, fk: `tab:${p.id}` }, 'aria-current': isCur ? 'page' : null, title: shTitle || null },
-      h('span', { class: 'name' }, listName(p)),
-      sh ? h('span', { class: 'shared-badge', 'aria-hidden': 'true' }, icon(sh.withMe?.access === 'view' ? 'eye' : 'people')) : null,
-      sh ? h('span', { class: 'sr-only' }, `, ${shTitle.toLowerCase()}`) : null,
-      n ? h('span', { class: 'count' }, n, h('span', { class: 'sr-only' }, ' open')) : null);
-    t.addEventListener('click', () => {
-      if (ui.view === 'list' && ui.project === p.id) return;
-      ui.view = 'list';
-      commitAll();
-      ui.project = p.id; ls.set('project', p.id); ui.sel = null;
-      render();
-      els.list.scrollTop = 0;
-    });
-    t.addEventListener('dblclick', () => tabMenu(p.id));
-    t.addEventListener('contextmenu', (e) => { e.preventDefault(); commitAll(); tabMenu(p.id); });
-    onLongPress(t, () => tabMenu(p.id));
-    return t;
-  });
-  els.tabs.replaceChildren(...tabs);
-  const active = els.tabs.querySelector('.tab.active');
-  if (active && ui.lastActiveTab !== ui.project) {
-    ui.lastActiveTab = ui.project;
-    active.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+// ---------------------------------------------------------------- the list switcher: the title and the lists menu
+// The header's title is the current list's name: one button that opens the lists menu under it (docs/design.md,
+// "The list switcher"). A list's own menu (share, rename, move, delete; leave for one shared with you) opens with a
+// long press or a right-click on its row there, or on the title for the current list. A sideways swipe on the list
+// goes to the next or previous list, and so do Left / Right on the title.
+
+/** A list shared with this device or by it: what to say about it, and its badge. */
+function sharedMark(projectId) {
+  const sh = sharing(projectId);
+  if (!sh) return null;
+  return { about: sh.withMe ? `Shared with you · ${ACCESS[sh.withMe.access]?.name ?? ''}` : 'Shared', icon: sh.withMe?.access === 'view' ? 'eye' : 'people' };
+}
+const sharedBadge = (m) => (m ? [h('span', { class: 'shared-badge', 'aria-hidden': 'true' }, icon(m.icon)), h('span', { class: 'sr-only' }, `, ${m.about.toLowerCase()}`)] : null);
+
+/** A list's row value in the menu: "2 due" (alert when one is overdue, amber when all are due today), else its open count. */
+function listValue(c) {
+  if (c?.due) {
+    const about = c.over === c.due ? `${c.due} overdue` : c.over ? `${c.due} due, ${c.over} overdue` : `${c.due} due today`;
+    return { text: `${c.due} due`, tone: c.over ? 'over' : 'soon', about };
   }
+  return c?.open ? { text: String(c.open), tone: '', about: `${c.open} open` } : null;
 }
 
-function tabMenu(id) {
+/** The title: the list's name, its shared badge, ⌄, and a violet dot when another list has something due. */
+function renderSwitcher() {
+  const cur = currentProject();
+  const counts = listCounts(store.tasks());
+  const due = store.projects().filter((p) => p.id !== cur?.id && counts.get(p.id)?.due);
+  const mark = cur ? sharedMark(cur.id) : null;
+  const name = cur ? listName(cur) : 'Lists';
+  // (the dot has its words in the tooltip and for screen readers; the menu says which list and how many)
+  const dueWords = due.length ? `Due in ${due.map(listName).join(', ')}` : '';
+  els.switcher.replaceChildren(...[
+    h('span', { class: 'switcher-name' }, name),
+    sharedBadge(mark),
+    h('span', { class: 'switcher-chev', 'aria-hidden': 'true' }, icon('chevronDown')),
+    due.length ? h('span', { class: 'dot', 'aria-hidden': 'true' }) : null].flat().filter(Boolean));
+  els.switcher.title = [name, mark?.about, dueWords].filter(Boolean).join(' · ');
+  els.switcher.setAttribute('aria-description', ['Your lists', dueWords].filter(Boolean).join('. '));
+  if (menuOpen()) renderListMenu(counts);
+}
+
+const menuOpen = () => !els.menuWrap.hidden;
+const menuItems = () => [...els.menu.querySelectorAll('[role^="menuitem"]')];
+
+/** The lists menu: one row per list in their order (the current one checked), then "New list" in a card of its own. */
+function renderListMenu(counts = listCounts(store.tasks())) {
+  const cur = currentProject();
+  const rows = store.projects().map((p) => {
+    const isCur = p.id === cur?.id;
+    const v = listValue(counts.get(p.id));
+    const mark = sharedMark(p.id);
+    const row = h('button', {
+      class: 'g-row lm-item', role: 'menuitemradio', 'aria-checked': String(isCur), tabindex: '-1',
+      title: [listName(p), mark?.about, v?.about].filter(Boolean).join(' · '), dataset: { fk: `list:${p.id}`, id: p.id },
+      onclick: () => { if (!els.sheetWrap.hidden) return; closeListMenu(); switchList(p.id); },   // (not the release of a long press)
+    },
+    h('span', { class: 'check', 'aria-hidden': 'true' }, isCur ? icon('check') : null),
+    h('span', { class: 'g-label' }, listName(p)),
+    sharedBadge(mark),
+    v ? h('span', { class: `g-value${v.tone ? ` lm-${v.tone}` : ''}` }, h('span', { class: 'sr-only' }, ', '), v.text, v.tone ? null : h('span', { class: 'sr-only' }, ' open')) : null);
+    row.addEventListener('contextmenu', (e) => { e.preventDefault(); listOptions(p.id, { fromMenu: true }); });
+    onLongPress(row, () => listOptions(p.id, { fromMenu: true }));
+    return row;
+  });
+  const add = h('button', {
+    class: 'g-row action lm-item lm-new', role: 'menuitem', tabindex: '-1', dataset: { fk: 'list-new' },
+    onclick: () => { closeListMenu(); projectNameSheet(null); },
+  }, h('span', { class: 'check', 'aria-hidden': 'true' }, icon('plus')), h('span', { class: 'g-label' }, 'New list'));
+  els.menu.replaceChildren(...[rows.length ? h('div', { class: 'group lm-lists', role: 'group', 'aria-label': 'Your lists' }, rows) : null, h('div', { class: 'group', role: 'group' }, add)].filter(Boolean));
+}
+
+/** Opens the lists menu with focus on the current list (focus: 'last' for "New list", or a list:<id> key). */
+function openListMenu({ focus = '' } = {}) {
+  if (menuOpen() || els.switcher.hidden) return;
+  const editing = ui.editing || ui.notesEditing;
+  commitAll();
+  if (editing) render();   // (the editor goes, also when nothing in it changed)
+  renderListMenu();
+  els.menuWrap.hidden = false;
+  els.switcher.setAttribute('aria-expanded', 'true');
+  els.list.inert = els.addBar.inert = true;   // (under the scrim: no tapping or tabbing into it)
+  placeListMenu();
+  const items = menuItems();
+  const to = focus === 'last' ? items[items.length - 1]
+    : (focus && els.menu.querySelector(`[data-fk="${CSS.escape(focus)}"]`)) || els.menu.querySelector('[aria-checked="true"]') || items[0];
+  to?.focus({ preventScroll: true });
+  to?.scrollIntoView({ block: 'nearest' });
+}
+/** Closes it; focus goes back to the title (not when a tap elsewhere took it). */
+function closeListMenu({ focus = true } = {}) {
+  if (!menuOpen()) return;
+  els.menuWrap.hidden = true;
+  els.switcher.setAttribute('aria-expanded', 'false');
+  els.list.inert = els.addBar.inert = false;
+  if (focus) els.switcher.focus({ preventScroll: true });
+}
+/** Its scrim from the header down to the window's bottom; the menu under the title, its left edge on the title's, inside the window (an iPhone's safe areas included). */
+function placeListMenu() {
+  const app = els.app.getBoundingClientRect();
+  const strip = els.strip.getBoundingClientRect();
+  const title = els.switcher.getBoundingClientRect();
+  const right = parseFloat(getComputedStyle(els.strip).paddingRight) || 12;
+  els.menuWrap.style.height = `${app.bottom - strip.bottom}px`;
+  els.menu.style.setProperty('--menu-top', `${title.bottom - strip.bottom + 6}px`);
+  els.menu.style.left = `${Math.max(0, Math.min(title.left - strip.left, strip.width - els.menu.offsetWidth - right))}px`;
+}
+
+/** Shows a list (from Settings too); its tasks from the top. */
+function switchList(id) {
+  if (ui.view === 'list' && ui.project === id) return;
+  commitAll();
+  ui.view = 'list';
+  ui.project = id; ls.set('project', id); ui.sel = null;
+  render();
+  els.list.scrollTop = 0;
+}
+/** The next (1) or previous (-1) list in their order; null past either end (it does not wrap round). */
+function neighbourList(dir) {
+  const list = store.projects();
+  const i = list.findIndex((p) => p.id === currentProject()?.id);
+  return i < 0 ? null : list[i + dir] ?? null;
+}
+const reducedMotion = () => matchMedia('(prefers-reduced-motion: reduce)').matches;
+/** Goes one list on (swipe, Left / Right on the title): the new list slides in from that side, and is announced. */
+function stepList(dir) {
+  const p = neighbourList(dir);
+  if (!p) return false;
+  switchList(p.id);
+  if (!reducedMotion()) els.list.animate?.([{ transform: `translateX(${dir * 40}px)`, opacity: 0 }, { transform: 'none', opacity: 1 }], { duration: 200, easing: 'cubic-bezier(.2, .8, .2, 1)' });
+  announce(listName(p));
+  return true;
+}
+
+els.switcher.addEventListener('click', () => {
+  if (!els.sheetWrap.hidden) return;   // (the release of a long press that opened the list's own menu)
+  if (menuOpen()) closeListMenu(); else openListMenu();
+});
+els.switcher.addEventListener('keydown', (e) => {
+  if (e.altKey || e.ctrlKey || e.metaKey || e.shiftKey) return;
+  // Down / Up open the menu (on the current list / on "New list"); Left / Right go to the previous / next list, as
+  // on the Windows app's tabs. (Not the list's keys: those would move the task selection.)
+  if (e.key === 'ArrowDown' || e.key === 'ArrowUp') openListMenu({ focus: e.key === 'ArrowUp' ? 'last' : '' });
+  else if (e.key === 'ArrowLeft' || e.key === 'ArrowRight') stepList(e.key === 'ArrowRight' ? 1 : -1);
+  else return;
+  e.preventDefault();
+  e.stopPropagation();
+});
+// the current list's own menu: a right-click or a long press on the title, as on its tab before
+els.switcher.addEventListener('contextmenu', (e) => { e.preventDefault(); if (currentProject()) listOptions(currentProject().id); });
+onLongPress(els.switcher, () => { if (currentProject()) listOptions(currentProject().id); });
+
+const typed = { text: '', at: 0 };
+els.menu.addEventListener('keydown', (e) => {
+  const items = menuItems();
+  const i = items.indexOf(document.activeElement);
+  const to = (j) => items[(j + items.length) % items.length]?.focus();
+  const mod = e.ctrlKey || e.metaKey;
+  if (mod && e.key.toLowerCase() === 'm') {
+    // a list's own menu, like Ctrl+M on a task (also Shift+F10, the menu key and a right-click: contextmenu)
+    if (document.activeElement?.dataset.id) listOptions(document.activeElement.dataset.id, { fromMenu: true });
+  } else if (mod || e.altKey) return;
+  else if (e.key === 'ArrowDown') to(i + 1);
+  else if (e.key === 'ArrowUp') to(i < 0 ? -1 : i - 1);
+  else if (e.key === 'Home' || e.key === 'PageUp') to(0);
+  else if (e.key === 'End' || e.key === 'PageDown') to(-1);
+  else if (e.key === 'Escape') closeListMenu();
+  else if (e.key === 'Tab') { closeListMenu(); return; }   // focus is on the title now: Tab goes on from there
+  else if (e.key === 'ArrowLeft' || e.key === 'ArrowRight') { /* nothing sideways in this menu */ }
+  else if (e.key.length === 1 && e.key !== ' ') {
+    // type the start of a list's name to get to it (one letter again: the next list with it)
+    typed.text = e.timeStamp - typed.at < 700 ? typed.text + e.key.toLowerCase() : e.key.toLowerCase();
+    typed.at = e.timeStamp;
+    const from = typed.text.length > 1 ? Math.max(i, 0) : i + 1;
+    for (let k = 0; k < items.length; k++) {
+      const el = items[(from + k) % items.length];
+      if (el.querySelector('.g-label')?.textContent.toLowerCase().startsWith(typed.text)) { el.focus(); break; }
+    }
+  } else return;
+  e.preventDefault();
+  e.stopPropagation();
+});
+els.scrim.addEventListener('click', () => closeListMenu());
+// a tap anywhere else (the header's other buttons, outside the window) closes it too, and does what it does
+document.addEventListener('pointerdown', (e) => {
+  if (menuOpen() && !els.menuWrap.contains(e.target) && !els.switcher.contains(e.target)) closeListMenu({ focus: false });
+}, true);
+window.addEventListener('resize', () => { if (menuOpen()) placeListMenu(); });
+
+// ---------------------------------------------------------------- swipe between lists
+// A sideways swipe on the list goes to the next (to the left) or previous (to the right) list. Only a clearly
+// sideways move counts: an up-and-down one is the list's scroll (the browser keeps that: touch-action: pan-y), a
+// drag on a task's handle stays a drag, a long press its menu; nothing starts in a text box, while editing, or at
+// the screen's edges (the system's own back gesture). With reduce motion the list does not follow the finger.
+const SWIPE_SLOP = 10;   // px before a move has a direction
+const SWIPE_MIN = 64;    // px that switch the list on release (or a quick flick past 24 px)
+let swipe = null;
+els.list.addEventListener('pointerdown', (e) => {
+  swipe = null;
+  if (e.pointerType === 'mouse' || !e.isPrimary || !els.list.classList.contains('swipeable')) return;
+  if (ui.editing || ui.notesEditing || ui.drag || !els.sheetWrap.hidden || menuOpen()) return;
+  if (e.target.closest('.grip, input, textarea, select') || e.clientX < 16 || e.clientX > innerWidth - 16) return;
+  swipe = { id: e.pointerId, x: e.clientX, y: e.clientY, t: e.timeStamp, dx: 0, on: false };
+});
+els.list.addEventListener('pointermove', (e) => {
+  const s = swipe;
+  if (!s || e.pointerId !== s.id) return;
+  const dx = e.clientX - s.x;
+  const dy = e.clientY - s.y;
+  if (!s.on) {
+    if (Math.abs(dy) > SWIPE_SLOP && Math.abs(dy) >= Math.abs(dx)) { swipe = null; return; }   // a scroll
+    if (Math.abs(dx) < SWIPE_SLOP || Math.abs(dx) < 1.5 * Math.abs(dy)) return;
+    if (ui.drag || ui.editing || !els.sheetWrap.hidden) { swipe = null; return; }   // (a drag or a long press came first)
+    s.on = true;
+    try { els.list.setPointerCapture(e.pointerId); } catch { /* the pointer is gone */ }
+  }
+  s.dx = dx;
+  if (reducedMotion()) return;
+  // the list follows the finger; past the first or the last list it gives only a little
+  const shown = neighbourList(dx < 0 ? 1 : -1) ? dx : dx / 4;
+  els.list.style.transform = `translateX(${shown}px)`;
+  els.list.style.opacity = String(1 - Math.min(Math.abs(shown) / els.list.clientWidth, 1) * 0.6);
+});
+function endSwipe(e) {
+  const s = swipe;
+  if (!s || e.pointerId !== s.id) return;
+  swipe = null;
+  if (!s.on) return;
+  ui.swipedAt = Date.now();   // (the release is not a tap on what is under the finger)
+  const from = { transform: els.list.style.transform || 'none', opacity: els.list.style.opacity || '1' };
+  els.list.style.transform = els.list.style.opacity = '';
+  const flick = Math.abs(s.dx) > 24 && Math.abs(s.dx) / Math.max(1, e.timeStamp - s.t) > 0.5;
+  if (e.type === 'pointerup' && (Math.abs(s.dx) >= SWIPE_MIN || flick) && stepList(s.dx < 0 ? 1 : -1)) return;
+  if (!reducedMotion()) els.list.animate?.([from, { transform: 'none', opacity: 1 }], { duration: 160, easing: 'ease-out' });
+}
+els.list.addEventListener('pointerup', endSwipe);
+els.list.addEventListener('pointercancel', endSwipe);
+els.list.addEventListener('click', (e) => { if (Date.now() - (ui.swipedAt ?? 0) < 400) { e.preventDefault(); e.stopPropagation(); } }, true);
+
+/**
+ * A list's own menu: Share, Rename, Move up / down, Delete; for a list shared with you, where it comes from, Move up /
+ * down and Leave (its name and its deletion are its owner's). fromMenu: opened from the lists menu, which opens again
+ * after a move so the new order shows.
+ */
+function listOptions(id, { fromMenu = false } = {}) {
   const p = store.get('project', id);
   if (!p) return;
+  commitAll();
   const list = store.projects();
   const i = list.findIndex((x) => x.id === id);
+  const move = (dir) => () => { store.moveProject(id, dir); if (fromMenu) openListMenu({ focus: `list:${id}` }); };
   const moves = [
-    i > 0 && menuItem('back', 'Move left', () => store.moveProject(id, -1)),
-    i < list.length - 1 && menuItem('chevron', 'Move right', () => store.moveProject(id, 1)),
+    i > 0 && menuItem('up', 'Move up', move(-1)),
+    i < list.length - 1 && menuItem('down', 'Move down', move(1)),
   ];
   const sh = sharing(id)?.withMe;
   if (sh) {
@@ -242,7 +456,7 @@ function tabMenu(id) {
     menuItem('edit', 'Rename', () => projectNameSheet(id)),
     ...moves,
     h('div', { class: 'menu-sep' }),
-    menuItem('trash', 'Delete project', () => confirmDeleteProject(id), { danger: true }),
+    menuItem('trash', 'Delete list', () => confirmDeleteProject(id), { danger: true }),
   ]);
 }
 
@@ -398,7 +612,7 @@ function joinSheet(prefill = '') {
   } }, 'Paste') : null;
   sheet('Join a shared list', [
     h('p', { class: 'sheet-note' }, ui.local || store.meta.token
-      ? 'Paste the invite link someone sent you. The list then shows here as a tab and stays in step with theirs.'
+      ? 'Paste the invite link someone sent you. The list then shows up among your lists and stays in step with theirs.'
       : 'Paste the invite link someone sent you. Without a sync of your own, this app opens lists of this address only; for any other, open the invite link itself and choose “Use it in this browser” there.'),
     h('div', { class: 'field-row' }, input, paste),
     h('div', { class: 'btn-row' }, h('button', { class: 'btn', onclick: closeSheet }, 'Cancel'), h('button', { class: 'btn primary', onclick: go }, 'Join')),
@@ -423,7 +637,7 @@ function confirmJoin(link, inv) {
     : store.meta.token ? `Your sync service (${hostOf(store.meta.server || location.origin)}) keeps it in step with theirs for this app and your other phones, and reminds you of its deadlines.`
       : 'It stays in this browser: no account and no sync of your own needed. Later, the list\'s menu can move it to your Saqme app.';
   sheet('Join shared list?', [
-    h('p', {}, `A list shared from ${host} shows here as a new tab. ${how} What you change in it goes to ${host}, which belongs to the person who shared it: they (and only they) can see your changes.`),
+    h('p', {}, `A list shared from ${host} shows up here as a new list. ${how} What you change in it goes to ${host}, which belongs to the person who shared it: they (and only they) can see your changes.`),
     h('div', { class: 'btn-row' },
       h('button', { class: 'btn', onclick: closeSheet }, 'Not now'),
       h('button', { class: 'btn primary', onclick: async (e) => {
@@ -520,18 +734,18 @@ async function checkClipboardForInvite() {
 
 function projectNameSheet(id) {
   const p = id ? store.get('project', id) : null;
-  const input = h('input', { class: 'field', value: p ? p.fields.name.v : '', placeholder: 'Project name', maxLength: 100, enterKeyHint: 'done', autocapitalize: 'words' });
+  const input = h('input', { class: 'field', value: p ? p.fields.name.v : '', placeholder: 'List name', 'aria-label': 'List name', maxLength: 100, enterKeyHint: 'done', autocapitalize: 'words' });
   const save = () => {
     const name = input.value.trim();
     if (!name) { input.classList.add('bad'); return; }
     const clash = store.projects().find((x) => x.id !== id && x.fields.name.v.toLowerCase() === name.toLowerCase());
-    if (clash) { input.classList.add('bad'); toast('A project with that name already exists'); return; }
+    if (clash) { input.classList.add('bad'); toast('A list with that name already exists'); return; }
     if (id) store.renameProject(id, name);
     else { const nid = store.addProject(name); if (nid) { ui.project = nid; ls.set('project', nid); ui.view = 'list'; } }
     closeSheet();
   };
   input.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); save(); } });
-  sheet(id ? 'Rename project' : 'New project', [
+  sheet(id ? 'Rename list' : 'New list', [
     h('div', { class: 'field-row' }, input),
     h('div', { class: 'btn-row' }, h('button', { class: 'btn', onclick: closeSheet }, 'Cancel'), h('button', { class: 'btn primary', onclick: save }, id ? 'Rename' : 'Create')),
   ]);
@@ -542,12 +756,12 @@ function projectNameSheet(id) {
 function confirmDeleteProject(id) {
   const p = store.get('project', id);
   sheet(`Delete “${p.fields.name.v}”?`, [
-    h('p', {}, 'Its tasks move to Recently deleted (Settings › Your lists), nothing is erased. You can restore the project from there.'),
+    h('p', {}, 'Its tasks move to Recently deleted (Settings › Your lists), nothing is erased. You can restore the list from there.'),
     h('div', { class: 'btn-row' },
       h('button', { class: 'btn', onclick: closeSheet }, 'Cancel'),
       h('button', { class: 'btn primary', onclick: () => {
         store.deleteProject(id); closeSheet();
-        toast('Project deleted', { label: 'Undo', run: () => store.restoreProject(id) });
+        toast('List deleted', { label: 'Undo', run: () => store.restoreProject(id) });
       } }, 'Delete')),
   ]);
 }
@@ -610,8 +824,8 @@ function renderTasks() {
   const proj = currentProject();
   if (!proj) {
     frag.push(h('div', { class: 'welcome' },
-      h('p', {}, 'No projects yet.'),
-      h('button', { class: 'btn primary', onclick: () => projectNameSheet(null) }, icon('plus'), 'New project')));
+      h('p', {}, 'No lists yet.'),
+      h('button', { class: 'btn primary', onclick: () => projectNameSheet(null) }, icon('plus'), 'New list')));
     els.list.replaceChildren(...frag);
     return;
   }
@@ -794,19 +1008,30 @@ function taskRow(node, section, draft = null) {
   return row;
 }
 
-/** Touch long-press -> fn; the click that follows the release is swallowed. */
+/**
+ * Touch long-press -> fn. The click that may follow the release is swallowed wherever it lands: on the element, or
+ * on what fn just put under the finger (a sheet's backdrop, which would close the sheet at once).
+ */
 function onLongPress(el, fn) {
   let timer = null;
   let start = null;
-  let firedAt = 0;
   el.addEventListener('pointerdown', (e) => {
     if (e.pointerType === 'mouse' || e.target.closest('.grip, textarea, input')) return;
     start = [e.clientX, e.clientY];
-    timer = setTimeout(() => { timer = null; firedAt = Date.now(); navigator.vibrate?.(8); fn(); }, 480);
+    timer = setTimeout(() => {
+      timer = null;
+      const swallow = (ev) => { ev.stopPropagation(); ev.preventDefault(); };
+      const stop = () => document.removeEventListener('click', swallow, true);
+      document.addEventListener('click', swallow, true);
+      // (until the click this release may make: 350 ms after it, or at once when the next touch starts)
+      const release = () => setTimeout(stop, 350);
+      document.addEventListener('pointerup', release, { capture: true, once: true });
+      document.addEventListener('pointercancel', release, { capture: true, once: true });
+      document.addEventListener('pointerdown', stop, { capture: true, once: true });
+      navigator.vibrate?.(8);
+      fn();
+    }, 480);
   });
-  el.addEventListener('click', (e) => {
-    if (Date.now() - firedAt < 800) { e.stopPropagation(); e.preventDefault(); firedAt = 0; }
-  }, true);
   const cancel = () => { clearTimeout(timer); timer = null; };
   el.addEventListener('pointermove', (e) => { if (timer && Math.hypot(e.clientX - start[0], e.clientY - start[1]) > 8) cancel(); });
   el.addEventListener('pointerup', cancel);
@@ -1052,6 +1277,7 @@ function addSubtask(id) {
 
 // ---------------------------------------------------------------- sheets
 function sheet(title, children) {
+  closeListMenu();   // (its row had focus: the title gets it, and the sheet gives it back there)
   if (els.sheetWrap.hidden) ui.sheetOpener = document.activeElement?.dataset?.fk || null;
   els.sheet.replaceChildren(h('div', { class: 'sheet-handle', 'aria-hidden': 'true' }), title ? h('h2', { id: 'sheetTitle' }, title) : null, ...children.filter(Boolean));
   if (title) { els.sheet.setAttribute('aria-labelledby', 'sheetTitle'); els.sheet.removeAttribute('aria-label'); }
@@ -1276,7 +1502,7 @@ els.add.addEventListener('focus', () => { if (ui.editing || ui.notesEditing) { c
 // ---------------------------------------------------------------- keyboard (hardware keyboards / desktop browsers)
 document.addEventListener('keydown', (e) => {
   const t = e.target;
-  if (t instanceof HTMLTextAreaElement || t instanceof HTMLInputElement || !els.sheetWrap.hidden || ui.view !== 'list') return;
+  if (t instanceof HTMLTextAreaElement || t instanceof HTMLInputElement || !els.sheetWrap.hidden || menuOpen() || ui.view !== 'list') return;
   if ((e.key === 'Enter' || e.key === ' ') && t.closest?.('button, a[href], select, summary')) return;   // the control's own action
   const vis = ui.visible;
   const i = ui.sel ? vis.indexOf(ui.sel) : -1;
@@ -1510,6 +1736,10 @@ function keysPage() {
       [`${alt}+Up / ${alt}+Down`, 'Move the task'], [`${mod}+D`, 'Deadline'], [`${mod}+I`, 'Notes / links'], [`${mod}+M`, 'Task menu'],
       [`${mod}+N`, 'New task'], ['Esc', 'Clear the selection'],
     ], 'A screen reader reads the selected task. The task menu has the deadline, notes, subtasks, moves and delete; a right-click (or a long press) on a task opens it too.'],
+    ['Lists', [
+      ['Left / Right', 'Previous / next list'], ['Enter / Down', 'All lists'], ['Up / Down', 'Choose a list'], ['Enter', 'Switch to it'],
+      [`${mod}+M`, 'Its menu'], ['Esc', 'Close the lists menu'],
+    ], 'Left / Right and Enter work on the list\'s name at the top. In the lists menu, a list\'s own menu (share, rename, move, delete) also opens with a right-click or a long press on it, or Shift+F10.'],
     ['While editing a task', [
       ['Enter', 'Save, new task below'], ['Shift+Enter', 'Save, new subtask'], ['Enter', 'Stop (on an empty line)'], ['Up / Down', 'Edit the previous / next'],
       ['Tab / Shift+Tab', 'Subtask / back out'], ['Esc', 'Cancel'], [`${mod}+Enter`, 'Save the notes'],
@@ -1704,8 +1934,8 @@ function sharedListSettings() {
   return [
     head('Shared lists'),
     card(rows),
-    foot(ui.local ? 'Someone shared a list with you? Paste the invite link they sent (or run saqme join LINK); it works without cloud sync too. To share one of your own lists, right-click its tab and choose Share.'
-      : store.meta.token ? 'Someone shared a list with you? Paste the invite link they sent: your sync service keeps the list for this app and your other phones. To share one of your own lists, long-press its tab and choose Share.'
+    foot(ui.local ? 'Someone shared a list with you? Paste the invite link they sent (or run saqme join LINK); it works without cloud sync too. To share one of your own lists, right-click its name at the top (or in the lists menu) and choose Share.'
+      : store.meta.token ? 'Someone shared a list with you? Paste the invite link they sent: your sync service keeps the list for this app and your other phones. To share one of your own lists, long-press its name at the top (or in the lists menu) and choose Share.'
         : 'Someone shared a list with you? No sync of your own needed: open the invite link itself, and its page opens the list in this browser.'),
   ];
 }
@@ -1942,7 +2172,7 @@ async function loadLocalInfo() {
     const sharesWere = JSON.stringify([ui.local?.shares, ui.local?.sharedByMe, ui.local?.notices]);
     ui.local = cfg.local ?? null;
     if (JSON.stringify(ui.local) !== was && ui.view !== 'list' && !ui.editing) requestRender();
-    // lists shared with this computer (and by it) change tabs, badges and what can be edited: everywhere
+    // lists shared with this computer (and by it) change the lists, their badges and what can be edited: everywhere
     else if (JSON.stringify([ui.local?.shares, ui.local?.sharedByMe, ui.local?.notices]) !== sharesWere) requestRender();
     for (const ended of ui.local?.ended ?? []) {
       if (ls.get(`ended.${ended.id}`)) continue;
@@ -2440,8 +2670,6 @@ document.addEventListener('visibilitychange', () => { if (document.visibilitySta
 setInterval(() => { if (document.visibilityState === 'visible') watchVersion(); }, 30 * 60_000);
 
 els.addBar.querySelector('.add-plus').append(icon('plus'));
-els.tabAdd.append(icon('plus'));
-els.tabAdd.addEventListener('click', () => { commitAll(); projectNameSheet(null); });
 await store.open();
 // ask the browser not to clear the lists when space runs low (granted to installed apps, mostly)
 navigator.storage?.persist?.().catch(() => {});
