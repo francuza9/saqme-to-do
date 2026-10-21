@@ -3779,7 +3779,7 @@ function Render-SharedListSettings {
     Set-Name $lv "Leave $([string]$b['file'])" "$about. It goes from this PC; nothing changes in the owner's list"
     Add-CardRow (New-InfoRow ([string]$b['file']) $(if ($trouble) { 'Not synced' } else { $access }) $lv -Dot:$trouble -Tip $about)
   }
-  Add-Footnote 'Someone shared a list with you? Paste the invite link they sent; it works without sync of your own too. To share one of your own lists, right-click its tab and choose Share.'
+  Add-Footnote 'Someone shared a list with you? Paste the invite link they sent; it works without sync of your own too. To share one of your own lists, right-click it in the lists menu (or the title) and choose Share.'
 }
 
 function Format-ConflictValue([string]$field, $v) {
