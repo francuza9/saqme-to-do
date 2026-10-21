@@ -2833,7 +2833,7 @@ function Render-YourListsPage {
   Add-Heading 'Lists'
   Add-CardRow (New-ActionRow 'Open the lists folder' { Start-Process explorer.exe -ArgumentList "`"$listsDir`"" } -Help (Format-Path $listsDir))
   Add-CardRow (New-LinkRow 'Recently deleted' '' 'trash' -Help 'Deleted tasks, ready to restore for 30 days')
-  Add-Footnote "Plain markdown files, one per project, in $(Format-Path $listsDir). Editors and AI assistants can change them too; the app picks up their changes by itself."
+  Add-Footnote "Plain markdown files, one per list, in $(Format-Path $listsDir). Editors and AI assistants can change them too; the app picks up their changes by itself."
 }
 
 function Render-AboutPage {
