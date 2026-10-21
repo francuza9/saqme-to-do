@@ -5,7 +5,7 @@
 #   - a list that is still being written is not reloaded (and stamped with ids) until it has settled
 #   - a list that cannot be read when its tab is opened shows as busy and is not written over
 #   - quitting while a save keeps failing leaves a copy in lists\.recovery
-#   - Settings > Sync > Set up sync, with a stand-in for setup.ps1: success starts sync and shows the QR code;
+#   - Settings > Sync & sharing > Set up sync, with a stand-in for setup.ps1: success starts sync and shows the QR code;
 #     a failure or a closed window leaves sync off and says so
 #   powershell -NoProfile -ExecutionPolicy Bypass -File scripts\dev\widget-files-check.ps1
 $ErrorActionPreference = 'Stop'
@@ -52,7 +52,7 @@ $inject = @"
   `$state = { "saveFailed=`$(`$script:saveFailed);busy=`$(`$script:listBusy);proj=`$(`$script:proj);tasks=`$((@(`$script:items | Where-Object { `$_.Kind -eq 'task' } | ForEach-Object { `$_.Text })) -join '|');setup=`$([bool]`$script:setupRun);view=`$(`$script:view);sync=`$([bool]`$script:sync);outcome=`$(`$script:setupOutcome.message)" }
   if (`$cmd -match '^edit (.*)$') { @(`$script:items | Where-Object { `$_.Kind -eq 'task' })[0].Text = `$matches[1]; Save-Items }
   elseif (`$cmd -match '^switch (.*)$') { Switch-Project `$matches[1] }
-  elseif (`$cmd -eq 'setup') { `$script:view = 'settings'; Start-SyncSetup }
+  elseif (`$cmd -eq 'setup') { `$script:view = 'sync'; Start-SyncSetup }
   elseif (`$cmd -eq 'quit') { [IO.File]::WriteAllText('$answer', (& `$state)); Quit-App; return }
   [IO.File]::WriteAllText('$answer', (& `$state))
 })
@@ -135,11 +135,11 @@ try {
   Check (Wait-For { (Ask 'state') -match 'busy=False;proj=Home;tasks=home\|home 2' }) 'shows the list once it is free'
   Check ((Read-Now $home2) -eq "- [ ] home ^hhhhhhhh`n- [ ] home 2 ^hhhhhhh2`n") 'and never wrote over it'
 
-  Write-Host 'Settings > Sync > Set up sync'
+  Write-Host 'Settings > Sync & sharing > Set up sync'
   foreach ($case in @(@('fail', 'Deploying the Worker failed'), @('close', 'closed before it finished'))) {
     [IO.File]::WriteAllText($mode, $case[0], $utf8)
     Check ((Ask 'setup') -match 'setup=True') "$($case[0]): runs setup, the app keeps going"
-    Check (Wait-For { (Ask 'state') -match "setup=False;view=settings;sync=False;outcome=.*$($case[1])" }) "$($case[0]): sync stays off, and it says why"
+    Check (Wait-For { (Ask 'state') -match "setup=False;view=sync;sync=False;outcome=.*$($case[1])" }) "$($case[0]): sync stays off, and it says why"
   }
   Check (-not (Test-Path (Join-Path $data 'sync\config.json'))) 'nothing changed'
   [IO.File]::WriteAllText($mode, 'ok', $utf8)

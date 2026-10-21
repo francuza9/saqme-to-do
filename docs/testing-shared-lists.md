@@ -43,7 +43,8 @@ The people (one person can play several roles on different devices):
 
 - [ ] Install Saqme with the one-liner from the invite page (no sync needed).
 - [ ] In the browser: **Move to my Saqme app** shows a one-time link (and a QR code on a computer). Open it
-      in Saqme (**Open in Saqme To Do**, or paste it in Settings > Sync > Join a shared list).
+      in Saqme (**Open in Saqme To Do**, or paste it in Settings > Sync > Join a shared list; on Windows
+      Settings > Sync & sharing).
 - [ ] The list appears in the app with C's edits. The browser says it moved to the app and the list is gone
       there. A still sees one person C, not two. C gets reminders only from the app now, not twice.
 
@@ -62,7 +63,8 @@ The people (one person can play several roles on different devices):
 
 - [ ] Join from the invite (or `saqme join '<link>'` on Linux/macOS): the list syncs with A, nothing else does.
 - [ ] Set up sync on D later: D's own lists upload, the shared one stays out of D's sync and keeps syncing
-      with A. Turn D's sync off again (Settings > Sync): the shared list keeps syncing.
+      with A. Turn D's sync off again (Settings > Sync; on Windows Settings > Sync & sharing > Advanced): the
+      shared list keeps syncing.
 
 ## 6. Everything at once
 

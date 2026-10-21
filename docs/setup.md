@@ -17,8 +17,8 @@ This page lists every step, including the few clicks only you can do, and what t
 ## Which setup is for you
 
 Every platform works without any account. Sync is an extra you can add at any time from the app
-(**Settings > Sync > Set up sync**) or with the same setup command; it runs in your own free Cloudflare
-account.
+(**Set up sync**: on Windows in **Settings > Sync & sharing**, in the Linux/macOS window in **Settings > Sync**)
+or with the same setup command; it runs in your own free Cloudflare account.
 
 | Platform | On its own (no account) | With sync | How |
 |---|---|---|---|
@@ -35,7 +35,7 @@ What is automated and what you do yourself:
 |---|---|---|
 | Install / update the app, start at login, menu entry | Windows, Linux, macOS | run one command |
 | Node.js (Linux, macOS) | uses yours if it is 22.13 or newer, otherwise downloads Node.js 24 just for Saqme | very old or unusual systems: install Node.js 22.13+ yourself ([details](#requirements-linux-and-macos)) |
-| Cloudflare database, Worker, keys, deploy | Settings > Sync > **Set up sync** in the app (or setup with `-Cloud` / `--cloud`) | sign in to Cloudflare and click **Allow** (once); pick a workers.dev name (first time only) |
+| Cloudflare database, Worker, keys, deploy | **Set up sync** in the app's Settings (Windows: Sync & sharing; Linux, macOS: Sync), or setup with `-Cloud` / `--cloud` | sign in to Cloudflare and click **Allow** (once); pick a workers.dev name (first time only) |
 | Connecting the desktop app to sync | yes | — |
 | Phone | — | scan the QR code, add to Home Screen, type the pairing code (iPhone), enable notifications |
 | The phone app without a cloud account | published on GitHub Pages ([section 7](#7-phones-and-browsers-without-a-cloud-account)) | open its address |
@@ -82,9 +82,25 @@ What setup does on Windows (no administrator rights needed, everything is per us
 | With `-Cloud`: the cloud part ([section 3](#3-cloud-sync-cloudflare-account-and-login)); then starts the app | |
 
 Without options nothing is sent anywhere: the lists stay on this PC. Add sync any time later from the app:
-**Settings > Sync > Set up sync** ([section 3](#3-cloud-sync-cloudflare-account-and-login)), or paste a pairing
-link from a device that already syncs there. `setup.cmd -Cloud` does the same from the command line.
+**Settings > Sync & sharing > Set up sync** ([section 3](#3-cloud-sync-cloudflare-account-and-login)), or paste
+a pairing link from a device that already syncs there. `setup.cmd -Cloud` does the same from the command line.
 `-CloudOnly` redoes only the cloud part.
+
+**Settings in the Windows app** (the logo at the top left, *Options > Settings*, or Ctrl+,) is a short list of
+pages; each row says what is on it or how it stands. Esc (or the title) goes back one level.
+
+| Page | What is on it |
+|---|---|
+| **General** | Theme (Dark / Light / Auto), *Start with Windows*, *Keyboard shortcuts* |
+| **Notifications** | *Daily summary at* (shared with your phone), *Send test* |
+| **Sync & sharing** | *Set up sync* or how sync stands, *Sync now*, *Pair phone*, conflicts; *Join a shared list* and the lists shared with this PC (*Leave*); *Deletions paused* when that happens; under **Advanced**: *Turn off sync*, a new sync key, the sync log |
+| **Updates** | the version, *Check now* / *Update now* / *Sign in*, *Install updates automatically* |
+| **Your lists** | the lists folder (*Open folder*), *Recently deleted* |
+| **About** | the version and where it is installed, your data folder (*Open folder*) |
+
+The line at the bottom of every Settings page says *Saqme To Do* and its version. When an update is available,
+or one waits for you to sign in to Cloudflare, it adds a violet dot and says so; click it to open **Updates**.
+Hovering the tray icon shows the version too.
 
 ## 2. Install on Linux or macOS
 
@@ -154,9 +170,10 @@ again, and it uses that one. (Tested on Alpine 3.22 with its own `nodejs` packag
 
 ## 3. Cloud sync: Cloudflare account and login
 
-**From the app:** **Settings > Sync > Set up sync.** It creates your own free sync service in your Cloudflare
-account; your lists stay on this computer and are uploaded there, nothing is deleted. You need a free
-Cloudflare account and one sign-in in the browser.
+**From the app:** **Set up sync**, in **Settings > Sync & sharing** on Windows and in **Settings > Sync** in the
+Linux/macOS window. It creates your own free sync service in your Cloudflare account; your lists stay on this
+computer and are uploaded there, nothing is deleted. You need a free Cloudflare account and one sign-in in the
+browser.
 
 - **Windows:** a setup window opens next to the app, which keeps running. Node.js, the Cloudflare sign-in and
   any questions happen in that window. When it is done the app starts syncing and shows the QR code for your
@@ -217,7 +234,8 @@ Needs iOS 16.4 or later for notifications (everything else works on older versio
 
 1. **Open the pairing link.** Scan the QR code the computer app showed after setting up sync with the
    **Camera** app and tap the banner. It opens in **Safari**, which shows your lists. The apps show the QR code
-   again under **Settings > Sync > Pair phone** (or `saqme pair-phone` in a terminal on Linux and macOS).
+   again under **Pair phone**: on Windows **Settings > Sync & sharing > Pair phone**, on Linux and macOS in the
+   window's **Settings > Sync** (or `saqme pair-phone` in a terminal).
 2. **Install.** In Safari tap the **Share** button (square with an arrow), scroll, **Add to Home Screen**,
    **Add**.
 3. **Open Saqme from the Home Screen and type the pairing code.** iOS starts a Home Screen app at its own
@@ -281,9 +299,9 @@ uses them from the invite's own page instead (*Use it in this browser*), at thei
 
 - **Another iPhone / iPad / Android phone:** same as above. A phone that already syncs can pair the next
   one too: its **Settings > Sync > Pair a phone** shows the QR code and a code.
-- **Another Windows PC:** install with `setup.cmd`, then in the app **Settings > Sync** paste
-  the pairing link (from a device that already syncs: **Settings > Sync > Pair phone > Copy link**) into
-  the box and click **Connect**. Lists with the same name are merged. (**Set up sync** on the second PC would
+- **Another Windows PC:** install with `setup.cmd`, then in the app **Settings > Sync & sharing** paste
+  the pairing link (from a device that already syncs: its **Pair phone** page, **Copy link**; on Windows that is
+  **Settings > Sync & sharing > Pair phone**) into the box and click **Connect**. Lists with the same name are merged. (**Set up sync** on the second PC would
   need the key that only the first one has; it stops and explains this instead of replacing it.)
 - **Another Linux or macOS computer:** install with `scripts/setup.sh`, then paste the pairing link into the
   window's **Settings > Sync** and click **Connect** (or run `saqme connect '<link>'`). It starts syncing within
@@ -301,7 +319,7 @@ your list through their Worker.)
 
 1. Right-click the list's tab (phone: long-press it) and choose **Share…**. On Windows the current tab also
    shows a share icon while the mouse is over it. Without sync of your own, Share is greyed out: a shared list
-   needs your sync service to live on (Settings > Sync > Set up sync).
+   needs your sync service to live on (**Set up sync**: Windows Settings > Sync & sharing, elsewhere Settings > Sync).
 2. Type a **name** for the person (only you see it, to recognise them later) and pick **Can edit** or **Can
    view**, then **Create invite link**. The link is copied (the desktop also shows it as a QR code).
 3. Send it to them yourself, in a message or an email. It works **once, for 24 hours**: whoever opens it first
@@ -321,8 +339,8 @@ your list through their Worker.)
 - **Windows, macOS or Linux with Saqme installed:** open the link. The page asks the browser to open Saqme To
   Do (allow it); the app asks *Join shared list?* and the list appears as a new tab (a list whose name you
   already have says whose it is: "Groceries (from nuca)"). If nothing opens, copy the link (**Copy invite** on
-  that page) and paste it into **Settings > Sync > Join a shared list** (Linux/macOS: that field in the window,
-  or `saqme join '<link>'`). This works without sync of your own.
+  that page) and paste it into **Settings > Sync & sharing > Join a shared list** (Linux/macOS: that field in the
+  window's Settings > Sync, or `saqme join '<link>'`). This works without sync of your own.
 - **The phone app, paired with your own sync:** a link from another site cannot open it. Tap **Copy invite**
   on the page, open Saqme, then **Settings > Sync > Join a shared list > Paste > Join**. Your sync service
   keeps the list for all your phones and reminds you of its deadlines like of your own.
@@ -335,12 +353,14 @@ your list through their Worker.)
   assistant), it goes back to the owner's version, and what was typed is kept under **Conflicts** as *Not
   saved*.
 
-Turning your own sync off (Settings > Sync) keeps the lists shared with you on computers; on a phone they wait
+Turning your own sync off (Windows: Settings > Sync & sharing > Advanced; elsewhere Settings > Sync) keeps the
+lists shared with you on computers; on a phone they wait
 until it is paired again. Something to try with a second person: [testing-shared-lists.md](testing-shared-lists.md).
 
 ## Windows notifications
 
-The app uses normal Windows notifications. If none appear (try **Settings > Send test** in the app):
+The app uses normal Windows notifications. If none appear (try **Settings > Notifications > Send test** in the
+app):
 
 - **Do Not Disturb / Focus** is on: click the clock in the taskbar and turn it off, or
 - add Saqme as a **priority app**: Windows Settings > System > Notifications > *Set priority notifications* >
@@ -352,7 +372,8 @@ The app uses normal Windows notifications. If none appear (try **Settings > Send
 **No commands any more.** The app updates itself, your Worker and the phone app with it:
 
 - It checks for a new release on GitHub when it starts and about once a day. **Settings > Updates** says
-  *Update available* with **Update now**. With **Install updates automatically** (on unless you switch it off)
+  *Update available* with **Update now** (on Windows the version line at the bottom of every Settings page and
+  the Updates row get a violet dot then; clicking the line opens Updates). With **Install updates automatically** (on unless you switch it off)
   it installs it by itself while the app is idle: the window hidden, or nobody at the keyboard for ten
   minutes, and never while you are typing in it. Saqme restarts and is back within a minute.
 - It downloads the release's zip from GitHub, checks it against the release's manifest (size and SHA-256), puts
@@ -381,7 +402,7 @@ run from it) does not update itself: `git pull` and run setup.
 | Problem | Fix |
 |---|---|
 | Sync icon shows a red warning | Hover it for the reason. *Token rejected*: run setup's cloud part again (or pair again). *Server error*: wait a minute; it retries on its own. |
-| "N tasks vanished from the lists folder … deletions paused" | A list file was emptied or replaced in one go. Restore it (Recycle Bin, Trash, `lists/.trash`) — or, if it was on purpose, confirm: Windows **Settings > Sync > Delete them**; Linux/macOS **Delete them** in the window's settings, or `saqme allow-deletes`. |
+| "N tasks vanished from the lists folder … deletions paused" | A list file was emptied or replaced in one go. Restore it (Recycle Bin, Trash, `lists/.trash`) — or, if it was on purpose, confirm: Windows **Settings > Sync & sharing > Deletions paused > Delete them**; Linux/macOS **Delete them** in the window's settings, or `saqme allow-deletes`. |
 | Phone shows the welcome screen after installing | Expected on iPhone: type the pairing code (**Pair phone** on the computer, or the one Safari showed) into the field on that screen. *Wrong or expired*: show a new one; a code works once, for 10 minutes. Pasting the pairing link works too. |
 | Setup stops: "running inside another app's package" | It was started from a shell that belongs to a Store app (for example an AI assistant in a desktop app); Windows would keep what it installs in that app's private copy of `AppData`. Run the command it prints from File Explorer (double-click `setup.cmd`) or Win+R. In the app: quit Saqme from the tray icon, start it from the Start menu, then **Set up sync**. |
 | Linux/macOS window says it is "not connected" | It was opened from a bookmark. Open Saqme from the menu (or `saqme open`); that hands the window its key. |
@@ -401,7 +422,7 @@ run from it) does not update itself: `git pull` and run setup.
 | Settings > Updates: "did not start, so Saqme went back" | The new version did not come up on this computer; the one before runs again. Please report it with the log (below). |
 | "Your sync service could not update its database" | The Worker's own database update failed; it tries again with the next request. If it keeps saying so, the reason is in the message; please report it. |
 | Sharing says the sync service "runs an older version" | Your Worker is not updated yet: Settings > Updates on the computer (it updates the Worker too). |
-| Logs | Windows: `%APPDATA%\SaqmeToDo\sync\sync.log`, updates in `%LOCALAPPDATA%\Programs\SaqmeToDo\update\result.json`. Linux/macOS: `local/saqme.log` in the data folder. |
+| Logs | Windows: `%APPDATA%\SaqmeToDo\sync\sync.log` (Settings > Sync & sharing > Advanced > *Sync log* opens it), updates in `%LOCALAPPDATA%\Programs\SaqmeToDo\update\result.json`. Linux/macOS: `local/saqme.log` in the data folder. |
 
 Re-running setup is always safe: finished steps are skipped and existing keys, database and lists are reused.
 

@@ -363,7 +363,7 @@ function Apply-Theme([string]$name) {
   $strip.Background = $StripBg; $strip.BorderBrush = $Line
   $countText.Foreground = $Faint
   foreach ($b in @($menuBtn, $minBtn, $maxBtn, $clsBtn)) { $b.Child.Foreground = $TabInk }
-  $addBorder.BorderBrush = $Line; $addBox.Foreground = $Ink; $addBox.CaretBrush = $Accent
+  $addBorder.BorderBrush = $Line; $addBox.Foreground = $Ink; $addBox.CaretBrush = $Accent; $verBar.BorderBrush = $Line
   $ph.Foreground = $Accent; $phText.Foreground = $Faint
   $conflictBadge.Background = $AmberSoft; $cbText.Foreground = $Amber
   if ($notice) { Update-NoticeColors }   # (defined further down; not yet at the first theme)
@@ -427,7 +427,7 @@ $script:AccessText = @{
   edit = @('Can edit', 'They can add, change, check off and delete tasks in this list.')
   view = @('Can view', 'They see the list and its updates, but can''t change anything.')
 }
-$script:ShareNeedsSync = 'Sharing needs sync with your own Cloudflare account (Settings > Sync): a shared list lives on your sync service, where the people you share it with sync it from.'
+$script:ShareNeedsSync = 'Sharing needs sync with your own Cloudflare account (Settings > Sync & sharing): a shared list lives on your sync service, where the people you share it with sync it from.'
 # a Worker below this API has no shared lists (worker/src/version.js SHARING_API; the phone app's store.js says the same)
 $script:SharingApi = 2
 $script:WorkerTooOld = 'Your sync service runs an older version, without shared lists yet. It is updated together with this app (Settings > Updates); then try again.'
@@ -1094,7 +1094,7 @@ function Format-Deleted([long]$ms) {
   return $t.ToString('d MMM H:mm', $CI)
 }
 function Render-TrashView {
-  [void]$list.Children.Add((New-SettingsHeader 'Recently deleted' 'settings'))
+  [void]$list.Children.Add((New-SettingsHeader 'Recently deleted'))
   $entries = @(Get-DeletedEntries)
   if (-not $entries.Count) { $t = New-Text 'Nothing deleted in the last 30 days.' $TypeSize.body $Faint; $t.Margin = '8,6,8,6'; [void]$list.Children.Add($t) }
   foreach ($en in $entries) {
@@ -1792,20 +1792,20 @@ $countText.Visibility = 'Collapsed'   # per-tab counts already show open tasks
 # sync status (hidden while sync is off) and a badge when edits on two devices collided
 $syncBox = New-Object System.Windows.Controls.StackPanel
 $syncBox.Orientation = 'Horizontal'; $syncBox.VerticalAlignment = 'Center'; $syncBox.Margin = '4,0,2,5'
-$conflictBadge = New-Control 'button' 'Conflicts' 'Changed on two devices at once - choose which version to keep' { param($s, $e) Commit-Edit; $script:view = 'conflicts'; Render }
+$conflictBadge = New-Control 'button' 'Conflicts' 'Changed on two devices at once - choose which version to keep' { param($s, $e) Show-View 'conflicts' }
 $conflictBadge.CornerRadius = New-Object System.Windows.CornerRadius($Tokens.Radius.control); $conflictBadge.Padding = '8,2,8,3'; $conflictBadge.Cursor = 'Hand'
 $conflictBadge.Background = $AmberSoft; $conflictBadge.Visibility = 'Collapsed'; $conflictBadge.Margin = '0,0,3,0'; $conflictBadge.VerticalAlignment = 'Center'
 $conflictBadge.ToolTip = 'Changed on two devices at once - click to choose'
 $cbText = New-Object System.Windows.Controls.TextBlock; $cbText.FontFamily = $UI; $cbText.FontSize = $TypeSize.small; $cbText.FontWeight = 'Medium'; $cbText.Foreground = $Amber
 $conflictBadge.Child = $cbText
-$conflictBadge.Add_MouseLeftButtonDown({ param($s, $e) $e.Handled = $true; Commit-Edit; $script:view = 'conflicts'; Render })
+$conflictBadge.Add_MouseLeftButtonDown({ param($s, $e) $e.Handled = $true; Show-View 'conflicts' })
 # the cloud glyph is a button whose name says the sync state in words (the glyph and its colour are extra)
-$syncButton = New-Control 'button' 'Sync' 'Opens the sync settings' { param($s, $e) Commit-Edit; Request-Sync; $script:view = 'settings'; Render }
+$syncButton = New-Control 'button' 'Sync' 'Opens Settings, Sync & sharing' { param($s, $e) Request-Sync; Show-View 'sync' }
 $syncGlyph = New-Object System.Windows.Controls.TextBlock
 $syncGlyph.FontFamily = $MDL2; $syncGlyph.FontSize = 13
 $syncButton.Child = $syncGlyph; $syncButton.Padding = '5,4,5,3'; $syncButton.Cursor = 'Hand'
 $syncButton.Background = $Clear; $syncButton.Visibility = 'Collapsed'; $syncButton.VerticalAlignment = 'Center'
-$syncButton.Add_MouseLeftButtonDown({ param($s, $e) $e.Handled = $true; Commit-Edit; Request-Sync; $script:view = 'settings'; Render })
+$syncButton.Add_MouseLeftButtonDown({ param($s, $e) $e.Handled = $true; Request-Sync; Show-View 'sync' })
 foreach ($x in @($conflictBadge, $syncButton)) { [System.Windows.Shell.WindowChrome]::SetIsHitTestVisibleInChrome($x, $true); [void]$syncBox.Children.Add($x) }
 [System.Windows.Controls.Grid]::SetColumn($syncBox, 2); [void]$stripGrid.Children.Add($syncBox)
 
@@ -1887,7 +1887,7 @@ function Show-AppMenu($s) {
   $reload = New-MenuItem 'Reload'
   $reload.Add_Click({ [void](Use-Loaded (Load-Items)); Render })
   $trashItem = New-MenuItem 'Recently deleted'
-  $trashItem.Add_Click({ $script:view = 'trash'; Render })
+  $trashItem.Add_Click({ Show-View 'trash' })
   foreach ($x in @($theme, $trashItem, $open, $folder, $fit, $test, $reload)) { [void]$m.Items.Add($x) }
   if ($script:sync) {
     $sn = New-MenuItem 'Sync now'
@@ -1914,6 +1914,10 @@ $phText.IsHitTestVisible = $false; $phText.VerticalAlignment = 'Center'; $phText
 [void]$addGrid.Children.Add($addBox); [void]$addGrid.Children.Add((Hide-Decoration $ph)); [void]$addGrid.Children.Add((Hide-Decoration $phText))
 $addBorder.Child = $addGrid
 [System.Windows.Controls.DockPanel]::SetDock($addBorder, 'Bottom'); [void]$dock.Children.Add($addBorder)
+# the Settings views' bottom line, where the add-task line is in the list: the version (Update-VersionDisplay)
+$verBar = New-Object System.Windows.Controls.Border
+$verBar.BorderBrush = $Line; $verBar.BorderThickness = '0,1,0,0'; $verBar.Padding = '0,5,0,6'; $verBar.Margin = '8,4,8,0'; $verBar.Visibility = 'Collapsed'
+[System.Windows.Controls.DockPanel]::SetDock($verBar, 'Bottom'); [void]$dock.Children.Add($verBar)
 
 # a short message above the add line ("Deleted ...  Undo", "Not saved ..."); it goes away by itself
 $notice = New-Object System.Windows.Controls.Border
@@ -1968,7 +1972,7 @@ $list.Margin = '0,0,4,0'
 $scroll.Content = $list
 [void]$dock.Children.Add($scroll)
 $tabGroup = 0
-foreach ($area in @($strip, $scroll, $addBorder)) {
+foreach ($area in @($strip, $scroll, $addBorder, $verBar)) {
   [System.Windows.Input.KeyboardNavigation]::SetTabNavigation($area, 'Local'); [System.Windows.Input.KeyboardNavigation]::SetTabIndex($area, $tabGroup); $tabGroup++
 }
 
@@ -2021,7 +2025,9 @@ function Render {
   Update-ReadOnly
   if ($script:view -ne 'list') { Render-Settings; return }
   $addBorder.Visibility = $(if ($script:readOnly) { 'Collapsed' } else { 'Visible' })
-  $hadFocus = $list.IsKeyboardFocusWithin
+  $fromSettings = $script:renderedView -ne 'list'; $script:renderedView = 'list'
+  $hadFocus = $list.IsKeyboardFocusWithin -or ($fromSettings -and $verBar.IsKeyboardFocusWithin)
+  $verBar.Visibility = 'Collapsed'
   $list.Children.Clear()
   if ($script:HasA11y) { $list.Role = 'list' }
   Set-Name $list "$($script:proj) tasks"
@@ -2118,10 +2124,60 @@ function Render {
   # the rows were rebuilt: keep a keyboard user on the selected task (one Tab stop for the list either way)
   $f = [System.Windows.Input.Keyboard]::FocusedElement
   Set-Sel $script:sel -Focus:($hadFocus -and ($null -eq $f -or $f -eq $w -or -not $f.IsVisible))
+  # back from Settings with the keyboard and no task selected: focus goes back to the Settings button that opened it
+  if ($fromSettings -and $hadFocus -and -not $script:sel -and $logo) { [void]$logo.Focus() }
 }
 
 # ---------------------------------------------------------------- settings view (logo / ... > Settings / Ctrl+,)
+# Settings is a short list of sections, each a page of its own, so a narrow window stays easy to scan (docs/setup.md
+# names them). On a page, actions are buttons and places to go have a chevron; rare and risky actions sit at the
+# bottom, under Advanced. A quiet line under every Settings view says the version, with a dot when an update needs
+# a look (it opens Updates); the tray icon's tooltip says it too.
 $script:view = 'list'
+$script:SettingsPages = [ordered]@{ general = 'General'; notifications = 'Notifications'; sync = 'Sync & sharing'; updates = 'Updates'; yourlists = 'Your lists'; about = 'About' }
+# where Back (the header, Esc) goes from each view
+$script:ViewParent = @{ settings = 'list'; share = 'list'; keys = 'general'; pair = 'sync'; conflicts = 'sync'; trash = 'yourlists' }
+$script:ViewTitles = @{ list = 'the list'; settings = 'Settings'; keys = 'Keyboard shortcuts'; pair = 'Pair phone'; conflicts = 'Conflicts'; trash = 'Recently deleted'; share = 'Share' }
+foreach ($k in $script:SettingsPages.Keys) { $script:ViewParent[$k] = 'settings'; $script:ViewTitles[$k] = $script:SettingsPages[$k] }
+$script:advancedOpen = $false; $script:focusKey = ''; $script:renderedView = 'list'
+function Get-ViewParent([string]$v) { if ($script:ViewParent.ContainsKey($v)) { return $script:ViewParent[$v] }; return 'settings' }
+# opens a view; keyboard focus goes to the control whose key (Get-FocusKey) is $focus, else to the view's header
+function Show-View([string]$v, [string]$focus = '') {
+  Commit-Edit
+  $script:view = $v; $script:focusKey = $focus
+  Render
+}
+# Back (the header, Esc): one level up, with focus on what opened the view just left
+function Go-Back {
+  $from = $script:view
+  Show-View (Get-ViewParent $from) "open-$from"
+}
+# the controls inside an element, depth first (the logical tree, which a view is built of)
+function Get-Controls($root, $acc = $null) {
+  if ($null -eq $acc) { $acc = New-Object System.Collections.ArrayList }
+  foreach ($c in [System.Windows.LogicalTreeHelper]::GetChildren($root)) {
+    if ($c -is [System.Windows.UIElement]) { [void]$acc.Add($c); [void](Get-Controls $c $acc) }
+  }
+  return ,$acc
+}
+# what finds a control again after a view is rebuilt: its AutomationId, else its name
+function Get-FocusKey($el) {
+  $id = [System.Windows.Automation.AutomationProperties]::GetAutomationId($el)
+  if ($id) { return $id }
+  return [System.Windows.Automation.AutomationProperties]::GetName($el)
+}
+function Find-Control($root, [string]$key) {
+  foreach ($c in (Get-Controls $root)) { if ($c.Focusable -and (Get-FocusKey $c) -eq $key) { return $c } }
+  return $null
+}
+# a path under %APPDATA% and friends written that way (shorter, and without the account name)
+function Format-Path([string]$p) {
+  foreach ($v in 'LOCALAPPDATA', 'APPDATA', 'USERPROFILE') {
+    $base = ([string][Environment]::GetEnvironmentVariable($v)).TrimEnd('\')
+    if ($base -and $p.StartsWith($base + '\', [StringComparison]::OrdinalIgnoreCase)) { return "%$v%" + $p.Substring($base.Length) }
+  }
+  return $p
+}
 $startupLnk = Join-Path ([Environment]::GetFolderPath('Startup')) 'Saqme To Do.lnk'
 function Set-StartWithWindows([bool]$on) {
   if ($on) {
@@ -2162,14 +2218,12 @@ $script:Keybinds = @(
   @('Shift+F10', 'Menu of the focused tab or task'),
   @('Ctrl+Tab / Ctrl+Shift+Tab', 'Next / previous project'),
   @('Scroll over the tabs', 'Scroll through projects'),
-  @('Ctrl+,', 'Settings'),
-  @('Esc', 'Close settings')
+  @('Ctrl+,', 'Settings (again: back to the list)'),
+  @('Esc', 'Back: from a Settings page to Settings, from Settings to the list')
 )
 
 function Toggle-Settings {
-  Commit-Edit
-  $script:view = $(if ($script:view -eq 'list') { 'settings' } else { 'list' })
-  Render
+  Show-View $(if ($script:view -eq 'list') { 'settings' } else { 'list' })
 }
 function Set-Theme([string]$pref) {
   $script:cfg.theme = $pref; Save-Settings
@@ -2180,15 +2234,67 @@ function New-Text([string]$text, [double]$size, $brush) {
   $t.Text = $text; $t.FontFamily = $UI; $t.FontSize = $size; $t.Foreground = $brush; $t.TextWrapping = 'Wrap'
   return $t
 }
-function New-SettingRow([string]$label, [string]$hint, $control) {
+# a setting: its name, a one-line hint under it, and its control on the right. -Dot: the hint is something that
+# needs a look (an update, a conflict): a violet dot before it, and ink instead of the quiet colour
+function New-SettingRow([string]$label, [string]$hint, $control, [switch]$Dot) {
   $g = New-Object System.Windows.Controls.Grid; $g.Margin = '8,8,6,8'
   foreach ($wd in @('*', 'Auto')) { $cd = New-Object System.Windows.Controls.ColumnDefinition; $cd.Width = $wd; $g.ColumnDefinitions.Add($cd) }
   $sp = New-Object System.Windows.Controls.StackPanel; $sp.VerticalAlignment = 'Center'
   [void]$sp.Children.Add((New-Text $label $TypeSize.body $Ink))
-  if ($hint) { $h = New-Text $hint $TypeSize.meta $Faint; $h.Margin = '0,2,12,0'; [void]$sp.Children.Add($h) }
+  if ($hint -and $Dot) {
+    $hg = New-Object System.Windows.Controls.Grid; $hg.Margin = '0,2,12,0'
+    foreach ($wd in @('Auto', '*')) { $cd = New-Object System.Windows.Controls.ColumnDefinition; $cd.Width = $wd; $hg.ColumnDefinitions.Add($cd) }
+    $d = New-Dot; $d.VerticalAlignment = 'Top'; $d.Margin = '0,6,7,0'
+    $h = New-Text $hint $TypeSize.meta $Ink; [System.Windows.Controls.Grid]::SetColumn($h, 1)
+    [void]$hg.Children.Add($d); [void]$hg.Children.Add($h); [void]$sp.Children.Add($hg)
+  } elseif ($hint) { $h = New-Text $hint $TypeSize.meta $Faint; $h.Margin = '0,2,12,0'; [void]$sp.Children.Add($h) }
   [void]$g.Children.Add($sp)
   if ($control) { $control.VerticalAlignment = 'Center'; [System.Windows.Controls.Grid]::SetColumn($control, 1); [void]$g.Children.Add($control) }
   return $g
+}
+# the "needs a look" mark: a small violet dot (always next to words that say what it is about)
+function New-Dot {
+  $d = New-Object System.Windows.Shapes.Ellipse; $d.Width = 7; $d.Height = 7; $d.Fill = $Accent
+  return $d
+}
+# a row that opens another view (a Settings page, Keyboard shortcuts, Pair phone, ...): name, hint and a chevron.
+# Its key is "open-<view>", so Back puts keyboard focus on it again. -Name: what a screen reader says (default: the label)
+function New-LinkRow([string]$label, [string]$hint, [string]$view, [switch]$Dot, [string]$Name = '') {
+  $chev = New-Text (G 0xE76C) 10 $TabInk; $chev.FontFamily = $MDL2; $chev.Margin = '8,0,2,0'
+  $r = New-SettingRow $label $hint $chev -Dot:$Dot
+  $b = New-Control 'button' $(if ($Name) { $Name } else { $label }) $(if ($Name) { '' } else { $hint }) { param($s, $e) Show-View $s.Tag }
+  [System.Windows.Automation.AutomationProperties]::SetAutomationId($b, "open-$view")
+  $b.Child = $r; $b.Tag = $view; $b.Cursor = 'Hand'; $b.Background = $Clear; $b.CornerRadius = New-Object System.Windows.CornerRadius($Tokens.Radius.control)
+  $b.Add_MouseEnter({ param($s, $e) $s.Background = $Hover })
+  $b.Add_MouseLeave({ param($s, $e) $s.Background = $Clear })
+  $b.Add_MouseLeftButtonUp({ param($s, $e) $e.Handled = $true; Show-View $s.Tag })
+  return $b
+}
+# a disclosure, drawn like the "Completed" section break: chevron, small label, hairline. Shows or hides what follows
+# it on the page; screen readers hear it as a button that is expanded or collapsed. $help says what is inside.
+function New-Disclosure([string]$text, [string]$help, [bool]$open, [scriptblock]$onToggle) {
+  $h = New-Control 'disclosure' $text $help { param($s, $e) & $s.Tag }
+  if ($script:HasA11y) { $h.IsExpanded = $open }
+  [System.Windows.Automation.AutomationProperties]::SetAutomationId($h, 'advanced')
+  $h.Tag = $onToggle; $h.Margin = '0,14,0,2'; $h.Padding = '8,7,6,7'; $h.Cursor = 'Hand'; $h.Background = $Clear
+  $h.CornerRadius = New-Object System.Windows.CornerRadius($Tokens.Radius.control)
+  $g = New-Object System.Windows.Controls.Grid
+  foreach ($wd in @('16', 'Auto', '*')) { $cd = New-Object System.Windows.Controls.ColumnDefinition; $cd.Width = $wd; $g.ColumnDefinitions.Add($cd) }
+  $chev = New-Text $(if ($open) { G 0xE70D } else { G 0xE76C }) 8 $Faint; $chev.FontFamily = $MDL2; $chev.VerticalAlignment = 'Center'
+  $lbl = New-Text $text $TypeSize.small $Faint; $lbl.FontWeight = 'Medium'; $lbl.VerticalAlignment = 'Center'
+  $rule = New-Object System.Windows.Controls.Border; $rule.Height = 1; $rule.Background = $Line; $rule.VerticalAlignment = 'Center'; $rule.Margin = '12,1,0,0'
+  [System.Windows.Controls.Grid]::SetColumn($lbl, 1); [System.Windows.Controls.Grid]::SetColumn($rule, 2)
+  foreach ($x in @($chev, $lbl, $rule)) { [void]$g.Children.Add($x) }
+  $h.Child = $g
+  $h.Add_MouseEnter({ param($s, $e) $s.Child.Children[1].Foreground = $Ink })
+  $h.Add_MouseLeave({ param($s, $e) $s.Child.Children[1].Foreground = $Faint })
+  $h.Add_MouseLeftButtonUp({ param($s, $e) $e.Handled = $true; & $s.Tag })
+  return $h
+}
+# a quiet paragraph at the end of a page
+function New-Note([string]$text) {
+  $t = New-Text $text $TypeSize.meta $Faint; $t.Margin = '8,10,8,8'
+  return $t
 }
 function New-Segmented($options, [string]$current, [scriptblock]$onPick, [string]$group = '') {
   $wrap = New-Object System.Windows.Controls.Border
@@ -2218,10 +2324,12 @@ function New-Toggle([bool]$on, [scriptblock]$onToggle, [string]$name = '') {
   $b.Add_MouseLeftButtonUp({ param($s, $e) $e.Handled = $true; & $s.Tag.F (-not $s.Tag.On) })
   return $b
 }
-function New-SettingsHeader([string]$title, [string]$backTo) {
-  $h = New-Control 'button' $(if ($backTo -eq 'list') { "$title - back to the list" } else { "$title - back to settings" }) 'Esc goes back too' { param($s, $e) $script:view = $s.Tag; Render }
+# a view's title, which is also its Back button (to where Get-ViewParent says)
+function New-SettingsHeader([string]$title) {
+  $h = New-Control 'button' "$title - back to $($script:ViewTitles[(Get-ViewParent $script:view)])" 'Esc goes back too' { param($s, $e) Go-Back }
+  [System.Windows.Automation.AutomationProperties]::SetAutomationId($h, 'back')
   $h.Padding = '6,4,6,6'; $h.Margin = '0,0,0,4'; $h.Cursor = 'Hand'; $h.Background = $Clear
-  $h.CornerRadius = New-Object System.Windows.CornerRadius($Tokens.Radius.control); $h.Tag = $backTo
+  $h.CornerRadius = New-Object System.Windows.CornerRadius($Tokens.Radius.control)
   $sp = New-Object System.Windows.Controls.StackPanel; $sp.Orientation = 'Horizontal'
   $c = New-Object System.Windows.Controls.TextBlock; $c.Text = G 0xE76B; $c.FontFamily = $MDL2; $c.FontSize = 10
   $c.Foreground = $TabInk; $c.VerticalAlignment = 'Center'; $c.Margin = '0,1,10,0'
@@ -2230,21 +2338,51 @@ function New-SettingsHeader([string]$title, [string]$backTo) {
   $h.Child = $sp
   $h.Add_MouseEnter({ param($s, $e) $s.Background = $Hover })
   $h.Add_MouseLeave({ param($s, $e) $s.Background = $Clear })
-  $h.Add_MouseLeftButtonUp({ param($s, $e) $e.Handled = $true; $script:view = $s.Tag; Render })
+  $h.Add_MouseLeftButtonUp({ param($s, $e) $e.Handled = $true; Go-Back })
   return $h
 }
+# every view but the list: Settings and its pages, and the views they open (also Share and Conflicts)
 function Render-Settings {
+  if ($script:view -eq 'share' -and -not $script:shareView) { $script:view = 'list'; Render; return }
   $addBorder.Visibility = 'Collapsed'
+  # keyboard focus: on the same control when a view is rebuilt in place (a sync update, a switch flipped), else on
+  # what Show-View asked for or on the new view's header, so keyboard and screen reader users land on the new page
+  $changed = $script:view -ne $script:renderedView
+  $f = [System.Windows.Input.Keyboard]::FocusedElement
+  $keep = $(if (-not $changed -and $f -is [System.Windows.DependencyObject] -and $list.IsKeyboardFocusWithin) { Get-FocusKey $f } else { '' })
   $list.Children.Clear()
   if ($script:HasA11y) { $list.Role = 'group' }
-  Set-Name $list $(switch ($script:view) { 'pair' { 'Pair phone' } 'conflicts' { 'Conflicts' } 'keys' { 'Keyboard shortcuts' } 'trash' { 'Recently deleted' } 'share' { 'Share' } default { 'Settings' } })
+  Set-Name $list $(if ($script:view -eq 'share') { 'Share' } elseif ($script:ViewTitles.ContainsKey($script:view)) { $script:ViewTitles[$script:view] } else { 'Settings' })
   $script:visible = New-Object System.Collections.ArrayList
-  if ($script:view -eq 'pair') { Render-PairView; return }
-  if ($script:view -eq 'share') { if ($script:shareView) { Render-ShareView } else { $script:view = 'list'; Render }; return }
-  if ($script:view -eq 'trash') { Render-TrashView; return }
-  if ($script:view -eq 'conflicts') { Render-ConflictsView; return }
-  if ($script:view -eq 'keys') {
-    [void]$list.Children.Add((New-SettingsHeader 'Keyboard shortcuts' 'settings'))
+  Render-SettingsView
+  $verBar.Visibility = 'Visible'; Update-VersionDisplay
+  $want = $(if ($script:focusKey) { $script:focusKey } elseif ($changed) { 'back' } else { $keep })
+  $script:focusKey = ''; $script:renderedView = $script:view
+  if ($want) {
+    $el = Find-Control $list $want
+    if (-not $el -and $changed) { $el = Find-Control $list 'back' }
+    if ($el) { [void]$el.Focus() }
+  }
+}
+function Render-SettingsView {
+  switch ($script:view) {
+    'pair' { Render-PairView; return }
+    'share' { Render-ShareView; return }
+    'trash' { Render-TrashView; return }
+    'conflicts' { Render-ConflictsView; return }
+    'keys' { Render-KeysView; return }
+    'general' { Render-GeneralPage; return }
+    'notifications' { Render-NotificationsPage; return }
+    'sync' { Render-SyncPage; return }
+    'updates' { [void]$list.Children.Add((New-SettingsHeader 'Updates')); Render-UpdateSettings; return }
+    'yourlists' { Render-YourListsPage; return }
+    'about' { Render-AboutPage; return }
+  }
+  $script:view = 'settings'
+  Render-SettingsHome
+}
+function Render-KeysView {
+    [void]$list.Children.Add((New-SettingsHeader 'Keyboard shortcuts'))
     foreach ($kb in $script:Keybinds) {
       if (-not $kb[0]) { [void]$list.Children.Add((New-SectionLabel $kb[1])); continue }
       $g = New-Object System.Windows.Controls.Grid; $g.Margin = '8,3,6,3'
@@ -2262,15 +2400,54 @@ function Render-Settings {
       [System.Windows.Controls.Grid]::SetColumn($d, 1); [void]$g.Children.Add($d)
       [void]$list.Children.Add($g)
     }
-    return
-  }
-  [void]$list.Children.Add((New-SettingsHeader 'Settings' 'list'))
+}
 
-  [void]$list.Children.Add((New-SectionLabel 'Appearance'))
+# Settings: one row per page, each saying what is in it or how it stands
+function Render-SettingsHome {
+  [void]$list.Children.Add((New-SettingsHeader 'Settings'))
+  $page = {
+    param([string]$id, [string]$summary, [bool]$dot = $false)
+    [void]$list.Children.Add((New-LinkRow $script:SettingsPages[$id] $summary $id -Dot:$dot -Name "$($script:SettingsPages[$id]), $summary"))
+  }
+  & $page 'general' 'Theme, start with Windows, keyboard shortcuts'
+  & $page 'notifications' "Daily summary at $($script:cfg.notifyAt)"
+  $sync = Get-SyncSummary
+  & $page 'sync' $sync.Text $sync.Dot
+  $badge = Get-UpdateBadge
+  & $page 'updates' $(if ($badge) { $badge.Text } else { Get-UpdateSummary }) ([bool]($badge -and $badge.Dot))
+  & $page 'yourlists' 'Lists folder, recently deleted'
+  & $page 'about' 'Version, where your data is'
+}
+# the Sync & sharing row: own sync (off, setting up, its state), conflicts, lists shared with this PC, paused deletes
+function Get-SyncSummary {
+  $parts = New-Object System.Collections.ArrayList
+  if ($script:setupRun) { [void]$parts.Add('Setting up sync...') }
+  elseif (Read-SyncConfigUi) { [void]$parts.Add((Get-SyncStatusLine)) }
+  else { [void]$parts.Add('Sync is off') }
+  $n = @(Get-OpenConflictList).Count + @(Get-NoticeList).Count
+  if ($n) { [void]$parts.Add($(if ($n -eq 1) { '1 conflict' } else { "$n conflicts" })) }
+  $sh = @($script:bindings).Count
+  if ($sh) { [void]$parts.Add($(if ($sh -eq 1) { '1 shared list' } else { "$sh shared lists" })) }
+  $guarded = $script:sync -and $script:sync.Guarded
+  if ($guarded) { [void]$parts.Add('deletions paused') }
+  return @{ Text = ($parts -join ', '); Dot = [bool]($n -or $guarded) }
+}
+
+function Render-GeneralPage {
+  [void]$list.Children.Add((New-SettingsHeader 'General'))
   $seg = New-Segmented @(@('dark', 'Dark'), @('light', 'Light'), @('auto', 'Auto')) $script:cfg.theme { param($v) Set-Theme $v } 'Theme'
   [void]$list.Children.Add((New-SettingRow 'Theme' 'Auto follows the Windows light / dark setting' $seg))
+  $tg = New-Toggle (Test-Path -LiteralPath $startupLnk) {
+    param($on)
+    try { Set-StartWithWindows $on } catch {}
+    Render
+  } 'Start with Windows'
+  [void]$list.Children.Add((New-SettingRow 'Start with Windows' 'Saqme opens when you sign in to Windows' $tg))
+  [void]$list.Children.Add((New-LinkRow 'Keyboard shortcuts' 'Everything you can do without the mouse' 'keys'))
+}
 
-  [void]$list.Children.Add((New-SectionLabel 'Reminders'))
+function Render-NotificationsPage {
+  [void]$list.Children.Add((New-SettingsHeader 'Notifications'))
   $tb = New-Object System.Windows.Controls.TextBox
   Set-Name $tb 'Daily summary time' 'Hours and minutes, for example 9:30'
   $tb.Text = $script:cfg.notifyAt; $tb.Width = 64; $tb.FontFamily = $UI; $tb.FontSize = $TypeSize.label; $tb.TextAlignment = 'Center'; Set-Tabular $tb
@@ -2285,47 +2462,77 @@ function Render-Settings {
   $tb.Tag = $save
   $tb.Add_PreviewKeyDown({ param($s, $e) if ($e.Key -eq 'Return') { $e.Handled = $true; & $s.Tag $s; [void]$w.Focus() } })
   $tb.Add_LostKeyboardFocus({ param($s, $e) & $s.Tag $s })
-  [void]$list.Children.Add((New-SettingRow 'Daily summary at' 'Tasks due today or overdue, one notification' $tb))
+  [void]$list.Children.Add((New-SettingRow 'Daily summary at' 'One notification with what is due today or overdue; your phone uses the same time' $tb))
   $tst = New-Control 'button' 'Send a test notification' '' { param($s, $e) Show-Toast 'Saqme To Do' 'Notifications are working.' $script:proj }
   $tst.Background = $ButtonBg; $tst.CornerRadius = New-Object System.Windows.CornerRadius($Tokens.Radius.control); $tst.Padding = '12,5,12,6'; $tst.Cursor = 'Hand'
   $tst.Child = (New-Text 'Send test' $TypeSize.label $Ink); $tst.Child.FontWeight = 'Medium'
   $tst.Add_MouseLeftButtonUp({ param($s, $e) $e.Handled = $true; Show-Toast 'Saqme To Do' 'Notifications are working.' $script:proj })
-  [void]$list.Children.Add((New-SettingRow 'Test notification' 'Blocked? Turn off Do Not Disturb or make Saqme a priority app' $tst))
+  [void]$list.Children.Add((New-SettingRow 'Test notification' 'Nothing shows up? Turn off Do Not Disturb, or make Saqme a priority app' $tst))
+  [void]$list.Children.Add((New-Note 'A task with a deadline time also reminds you 15 minutes before it and at the time.'))
+}
 
+function Render-SyncPage {
+  [void]$list.Children.Add((New-SettingsHeader 'Sync & sharing'))
   [void]$list.Children.Add((New-SectionLabel 'Sync'))
   Render-SyncSettings
-
   [void]$list.Children.Add((New-SectionLabel 'Shared lists'))
   Render-SharedListSettings
+  # a pending decision: shown whenever it is there, below the everyday rows
+  if ($script:sync -and $script:sync.Guarded) {
+    $msg = $(if (Read-SyncConfigUi) { "$($script:sync.Guarded) tasks vanished from the lists folder at once. Deleting them on your other devices is paused in case that was an accident: restore the file, or confirm." }
+             else { "$($script:sync.Guarded) tasks vanished from a shared list's file at once. Deleting them for its owner is paused in case that was an accident: restore the file, or confirm." })
+    $del = New-SmallButton 'Delete them' { $script:sync.AllowMassDelete = $true; Request-Sync; Render } $Red
+    Set-Name $del 'Delete them' 'Confirms the paused deletions: the tasks are deleted on your other devices too'
+    [void]$list.Children.Add((New-SettingRow 'Deletions paused' $msg $del -Dot))
+  }
+  Render-SyncAdvanced
+}
+# Sync & sharing > Advanced: turning sync off, a new key, the sync log
+function Render-SyncAdvanced {
+  $own = Read-SyncConfigUi
+  $log = Join-Path $syncDir 'sync.log'
+  $hasLog = Test-Path -LiteralPath $log
+  if (-not $own -and -not $hasLog) { return }
+  $inside = @()
+  if ($own) { $inside += 'Turn off sync', 'a new sync key' }
+  if ($hasLog) { $inside += $(if ($own) { 'the sync log' } else { 'The sync log' }) }
+  [void]$list.Children.Add((New-Disclosure 'Advanced' ($inside -join ', ') $script:advancedOpen { $script:advancedOpen = -not $script:advancedOpen; Render }))
+  if (-not $script:advancedOpen) { return }
+  if ($own) {
+    $off = New-SmallButton 'Turn off' {
+            $r = [System.Windows.MessageBox]::Show($w, "Turn off sync on this PC?`n`n$($script:TurnOffHelp)", 'Saqme To Do', 'YesNo', 'Question')
+            if ("$r" -eq 'Yes') { Disable-Sync; Render } } $Red
+    $off.ToolTip = $script:TurnOffHelp; Set-Name $off 'Turn off sync' $script:TurnOffHelp
+    [void]$list.Children.Add((New-SettingRow 'Turn off sync' $script:TurnOffHelp $off))
+    [void]$list.Children.Add((New-SettingRow 'New sync key' 'If a pairing link got out: run setup again with -RotateToken. The old key stops working; pair your devices again.' $null))
+  }
+  if ($hasLog) {
+    $lb = New-SmallButton 'Open' { Start-Process notepad.exe -ArgumentList "`"$(Join-Path $syncDir 'sync.log')`"" }
+    Set-Name $lb 'Open the sync log' 'In Notepad'
+    [void]$list.Children.Add((New-SettingRow 'Sync log' 'What sync did, for a bug report (sync\sync.log in your data folder)' $lb))
+  }
+}
 
-  [void]$list.Children.Add((New-SectionLabel 'Startup'))
-  $tg = New-Toggle (Test-Path -LiteralPath $startupLnk) {
-    param($on)
-    try { Set-StartWithWindows $on } catch {}
-    Render
-  } 'Start with Windows'
-  [void]$list.Children.Add((New-SettingRow 'Start with Windows' '' $tg))
+function Render-YourListsPage {
+  [void]$list.Children.Add((New-SettingsHeader 'Your lists'))
+  $fo = New-SmallButton 'Open folder' { Start-Process explorer.exe -ArgumentList "`"$listsDir`"" }
+  Set-Name $fo 'Open the lists folder' (Format-Path $listsDir)
+  [void]$list.Children.Add((New-SettingRow 'Lists folder' "Plain markdown files, one per project`n$(Format-Path $listsDir)" $fo))
+  [void]$list.Children.Add((New-LinkRow 'Recently deleted' 'Deleted tasks, ready to restore for 30 days' 'trash'))
+  [void]$list.Children.Add((New-Note 'Editors and AI assistants can change these files too; the app picks up their changes by itself.'))
+}
 
-  [void]$list.Children.Add((New-SectionLabel 'Updates'))
-  Render-UpdateSettings
-
-  [void]$list.Children.Add((New-SectionLabel 'Keyboard'))
-  $kr = New-SettingRow 'Keyboard shortcuts' 'Everything you can do without the mouse' (New-Text (G 0xE76C) 10 $TabInk)
-  $kr.Children[1].FontFamily = $MDL2
-  $kb = New-Control 'button' 'Keyboard shortcuts' 'Everything you can do without the mouse' { param($s, $e) $script:view = 'keys'; Render }
-  $kb.Child = $kr; $kb.Cursor = 'Hand'; $kb.Background = $Clear; $kb.CornerRadius = New-Object System.Windows.CornerRadius($Tokens.Radius.control)
-  $kb.Add_MouseEnter({ param($s, $e) $s.Background = $Hover })
-  $kb.Add_MouseLeave({ param($s, $e) $s.Background = $Clear })
-  $kb.Add_MouseLeftButtonUp({ param($s, $e) $e.Handled = $true; $script:view = 'keys'; Render })
-  [void]$list.Children.Add($kb)
-
-  [void]$list.Children.Add((New-SectionLabel 'Data'))
-  $fo = New-Control 'button' 'Open the lists folder' '' { param($s, $e) Start-Process explorer.exe -ArgumentList "`"$listsDir`"" }
-  $fo.Background = $ButtonBg; $fo.CornerRadius = New-Object System.Windows.CornerRadius($Tokens.Radius.control); $fo.Padding = '12,5,12,6'; $fo.Cursor = 'Hand'
-  $fo.Child = (New-Text 'Open folder' $TypeSize.label $Ink); $fo.Child.FontWeight = 'Medium'
-  $fo.Add_MouseLeftButtonUp({ param($s, $e) $e.Handled = $true; Start-Process explorer.exe -ArgumentList "`"$listsDir`"" })
-  [void]$list.Children.Add((New-SettingRow 'Lists' 'Plain markdown files, one per project' $fo))
-  [void]$list.Children.Add((New-SettingRow 'Recently deleted' 'Deleted tasks, ready to restore for 30 days' (New-SmallButton 'Show' { $script:view = 'trash'; Render })))
+function Render-AboutPage {
+  [void]$list.Children.Add((New-SettingsHeader 'About'))
+  $where = $(if ($InstallRoot) { "Installed, and it updates itself`n$(Format-Path $InstallRoot)" }
+             else { "A copy that runs from its folder and does not update itself (setup.cmd installs it)`n$(Format-Path $dir)" })
+  [void]$list.Children.Add((New-SettingRow (Get-VersionText) $where $null))
+  $badge = Get-UpdateBadge
+  if ($badge) { [void]$list.Children.Add((New-LinkRow 'Updates' $badge.Text 'updates' -Dot:$badge.Dot -Name "Updates, $($badge.Text)")) }
+  $fo = New-SmallButton 'Open folder' { Start-Process explorer.exe -ArgumentList "`"$DataDir`"" }
+  Set-Name $fo 'Open the data folder' (Format-Path $DataDir)
+  [void]$list.Children.Add((New-SettingRow 'Your data' "Your lists, these settings and the sync keys`n$(Format-Path $DataDir)" $fo))
+  [void]$list.Children.Add((New-Note 'Saqme To Do is free and open source (MIT license). Your lists are plain markdown files: this app, AI assistants and any editor can change them.'))
 }
 
 # ---------------------------------------------------------------- sync (cloud): UI side
@@ -2475,7 +2682,7 @@ function Connect-Sync([string]$link) {
   return 'ok'
 }
 
-# ---------------------------------------------------------------- Settings > Sync > Set up sync
+# ---------------------------------------------------------------- Settings > Sync & sharing > Set up sync
 # Runs the cloud part of setup (what setup.cmd -Cloud does) in a console window of its own: Node.js, the
 # Cloudflare sign-in in the browser and any questions happen there, while the app keeps running. Its result
 # file says how it ended (Watch-SyncSetup); without one, the window was closed before it finished.
@@ -2573,16 +2780,16 @@ function Render-SyncSettings {
     } else {
       $b = New-SmallButton 'Set up sync' { Start-SyncSetup }
       $b.ToolTip = $script:SetupHelp; Set-Name $b 'Set up sync' $script:SetupHelp
-      [void]$list.Children.Add((New-SettingRow 'Sync with your phone' "Off for now. $($script:SetupHelp)" $b))
+      [void]$list.Children.Add((New-SettingRow 'Sync with your phone' 'Off. Set it up once: your own free sync service, in your Cloudflare account' $b))
     }
     if ($script:setupOutcome) {
       [void]$list.Children.Add((New-SettingRow 'Sync was not set up' (($script:setupOutcome.message, $script:setupOutcome.next | Where-Object { $_ }) -join ' ') $null))
     }
-    [void]$list.Children.Add((New-SettingRow 'Already syncing elsewhere?' 'Paste the pairing link from a device that already syncs (its Settings, Sync, Pair phone, Copy link).' $null))
+    [void]$list.Children.Add((New-SettingRow 'Already syncing on another device?' 'Paste its pairing link (there: Pair phone, Copy link)' $null))
     $g = New-Object System.Windows.Controls.Grid; $g.Margin = '8,0,6,8'
     foreach ($wd in @('*', 'Auto')) { $cd = New-Object System.Windows.Controls.ColumnDefinition; $cd.Width = $wd; $g.ColumnDefinitions.Add($cd) }
     $box = New-Object System.Windows.Controls.TextBox
-    Set-Name $box 'Pairing link' 'From a device that already syncs: Settings, Sync, Pair phone, Copy link'
+    Set-Name $box 'Pairing link' 'From a device that already syncs: its Pair phone page, Copy link'
     $box.FontFamily = $UI; $box.FontSize = $TypeSize.meta; $box.Background = $Hover; $box.Foreground = $Ink; $box.CaretBrush = $Accent
     $box.BorderThickness = '0,0,0,1.5'; $box.BorderBrush = $Line; $box.Padding = '6,4,6,4'; $box.VerticalContentAlignment = 'Center'
     $hint = New-Text 'https://...workers.dev/#pair=...' $TypeSize.meta $Faint; $hint.IsHitTestVisible = $false; $hint.Margin = '8,5,0,0'
@@ -2605,19 +2812,11 @@ function Render-SyncSettings {
   $srvHost = try { ([Uri][string]$syncCfg['url']).Host } catch { [string]$syncCfg['url'] }
   $line = Get-SyncStatusLine
   $wv = $(if ($script:sync -and $script:sync.WorkerVersion) { ", version $($script:sync.WorkerVersion)" } elseif ($script:sync -and $script:sync.WorkerApi) { ', an older version' } else { '' })
-  [void]$list.Children.Add((New-SettingRow $line "Your Cloudflare Worker: $srvHost$wv" (New-SmallButton 'Sync now' { Request-Sync; if ($script:sync) { $script:sync.Status = 'syncing' }; [void](Update-SyncIndicator -Force); Render })))
-  [void]$list.Children.Add((New-SettingRow 'Pair phone' 'QR code for the iPhone app (or another PC)' (New-SmallButton 'Pair phone' { $script:view = 'pair'; Render })))
-  $n = @(Get-OpenConflictList).Count
-  if ($n) { [void]$list.Children.Add((New-SettingRow "$n conflict$(if ($n -gt 1) { 's' })" 'Changed on two devices at once - pick which version to keep' (New-SmallButton 'Review' { $script:view = 'conflicts'; Render }))) }
-  if ($script:sync -and $script:sync.Guarded) {
-    $msg = "$($script:sync.Guarded) tasks vanished from the lists folder at once. Deleting them on your other devices is paused in case that was an accident - restore the file, or confirm."
-    [void]$list.Children.Add((New-SettingRow 'Deletions paused' $msg (New-SmallButton 'Delete them' { $script:sync.AllowMassDelete = $true; Request-Sync; Render } $Red)))
-  }
-  $off = New-SmallButton 'Turn off' {
-          $r = [System.Windows.MessageBox]::Show($w, "Turn off sync on this PC?`n`n$($script:TurnOffHelp)", 'Saqme To Do', 'YesNo', 'Question')
-          if ("$r" -eq 'Yes') { Disable-Sync; Render } } $Red
-  $off.ToolTip = $script:TurnOffHelp; Set-Name $off 'Turn off sync' $script:TurnOffHelp
-  [void]$list.Children.Add((New-SettingRow 'Turn off sync' $script:TurnOffHelp $off))
+  [void]$list.Children.Add((New-SettingRow $line "Your sync service: $srvHost$wv" (New-SmallButton 'Sync now' { Request-Sync; if ($script:sync) { $script:sync.Status = 'syncing' }; [void](Update-SyncIndicator -Force); Render })))
+  [void]$list.Children.Add((New-LinkRow 'Pair phone' 'QR code and pairing code for your phone (or another PC)' 'pair'))
+  # (Turn off sync is under Advanced, at the bottom of the page)
+  $n = @(Get-OpenConflictList).Count + @(Get-NoticeList).Count
+  if ($n) { [void]$list.Children.Add((New-LinkRow "$n conflict$(if ($n -gt 1) { 's' })" 'Changed on two devices at once: pick which version to keep' 'conflicts' -Dot)) }
 }
 
 function New-QrImage([string]$text) {
@@ -2661,9 +2860,9 @@ function Receive-PairCode {
 }
 
 function Render-PairView {
-  [void]$list.Children.Add((New-SettingsHeader 'Pair phone' 'settings'))
+  [void]$list.Children.Add((New-SettingsHeader 'Pair phone'))
   $syncCfg = Read-SyncConfigUi
-  if (-not $syncCfg) { $t = New-Text 'Sync is not set up on this PC yet (Settings > Sync).' $TypeSize.body $Faint; $t.Margin = '8,6,8,6'; [void]$list.Children.Add($t); return }
+  if (-not $syncCfg) { $t = New-Text 'Sync is not set up on this PC yet (Settings > Sync & sharing).' $TypeSize.body $Faint; $t.Margin = '8,6,8,6'; [void]$list.Children.Add($t); return }
   Request-PairCode $syncCfg
   $code = $(if ($script:pairCode -and $script:pairCode.Until -gt (Get-Date)) { $script:pairCode.Code } else { $null })
   $link = ([string]$syncCfg['url']).TrimEnd('/') + '/#pair=' + [string]$syncCfg['token']
@@ -2726,6 +2925,7 @@ public static long Ms() { LastInput i = new LastInput(); i.Size = (uint)Marshal.
 function Get-IdleMs { try { return [long][SaqmeApp.Idle]::Ms() } catch { return [long]0 } }
 
 function Test-UpdateRunning {
+  if ($SmokeTest) { return $false }   # (setup runs the self-check inside an update: that one is not this copy's)
   if ($script:upd.Proc -and -not $script:upd.Proc.HasExited) { return $true }
   $m = $null
   if ([System.Threading.Mutex]::TryOpenExisting('Local\SaqmeToDo.Update', [ref]$m)) { $m.Dispose(); return $true }
@@ -2811,8 +3011,63 @@ function Watch-CloudLogin {
   Render-IfSettings
 }
 function Render-IfSettings {
+  Update-VersionDisplay
   $typing = [System.Windows.Input.Keyboard]::FocusedElement -is [System.Windows.Controls.TextBox]
-  if ($script:view -eq 'settings' -and -not $typing) { Render }
+  if (@('settings', 'updates', 'about') -contains $script:view -and -not $typing) { Render }
+}
+
+# ---------------------------------------------------------------- the version: under every Settings view, in About, on the tray icon
+function Get-VersionText { return "Saqme To Do $($script:Release.Version)" }
+# when an update needs a look: what the version line adds (Dot: something to do or decide), else $null
+function Get-UpdateBadge {
+  if (-not $InstallRoot) { return $null }
+  if (Test-UpdateRunning) { return @{ Text = 'Updating...'; Dot = $false } }
+  $res = Get-UpdateResult
+  if ($res -and $res['needsLogin']) { return @{ Text = 'Sign in to Cloudflare to finish the update'; Dot = $true } }
+  $avail = Get-AvailableUpdate
+  if ($avail) { return @{ Text = "Update available: $($avail.version)"; Dot = $true } }
+  if ($res -and -not $res['ok'] -and $res['version']) { return @{ Text = "The update to $($res['version']) is waiting"; Dot = $true } }
+  return $null
+}
+# the Updates row in Settings when there is no badge
+function Get-UpdateSummary {
+  if (-not $InstallRoot) { return 'This copy does not update itself' }
+  if ($script:upd.Checking) { return 'Checking for updates...' }
+  if ($script:upd.Error) { return 'Could not check for updates' }
+  if ($script:upd.CheckedAt) { return 'Up to date' }
+  return $(if ($script:cfg.autoUpdate -eq '1') { 'Checked once a day, installed by itself when idle' } else { 'Checked once a day' })
+}
+# the quiet line at the bottom of the Settings views, and the tray icon's tooltip. With a badge, the line is a link to Updates.
+$script:versionShown = ''
+function Update-VersionDisplay {
+  $text = Get-VersionText
+  $badge = Get-UpdateBadge
+  if ($tray) {
+    $tip = $text + $(if ($badge) { "`n" + $badge.Text } else { '' })
+    $tray.Text = $(if ($tip.Length -gt 63) { $tip.Substring(0, 62) + [char]0x2026 } else { $tip })   # (NotifyIcon's limit)
+  }
+  $link = $badge -and $script:view -ne 'updates'
+  $sig = "$text|$(if ($badge) { $badge.Text + $badge.Dot })|$link|$($script:themeName)"
+  if ($sig -eq $script:versionShown -and $verBar.Child) { return }
+  $script:versionShown = $sig
+  $row = New-Object System.Windows.Controls.WrapPanel
+  $v = New-Text $text $TypeSize.meta $Faint; Set-Tabular $v; [void]$row.Children.Add($v)
+  if ($badge) {
+    $more = New-Object System.Windows.Controls.StackPanel; $more.Orientation = 'Horizontal'; $more.Margin = '10,0,0,0'
+    if ($badge.Dot) { $d = New-Dot; $d.VerticalAlignment = 'Center'; $d.Margin = '0,1,6,0'; [void]$more.Children.Add($d) }
+    $bt = New-Text $badge.Text $TypeSize.meta $(if ($link) { $Accent } else { $Ink }); Set-Tabular $bt; [void]$more.Children.Add($bt)
+    [void]$row.Children.Add($more)
+  }
+  if ($link) {
+    $b = New-Control 'link' "$text. $($badge.Text)" 'Opens Settings, Updates' { param($s, $e) Show-View 'updates' }
+    [System.Windows.Automation.AutomationProperties]::SetAutomationId($b, 'version')
+    $b.Child = $row; $b.Tag = 'updates'; $b.Cursor = 'Hand'; $b.Background = $Clear; $b.Padding = '6,3,6,3'; $b.HorizontalAlignment = 'Left'
+    $b.CornerRadius = New-Object System.Windows.CornerRadius($Tokens.Radius.control); $b.ToolTip = 'Open Updates'
+    $b.Add_MouseEnter({ param($s, $e) $s.Background = $Hover })
+    $b.Add_MouseLeave({ param($s, $e) $s.Background = $Clear })
+    $b.Add_MouseLeftButtonUp({ param($s, $e) $e.Handled = $true; Show-View 'updates' })
+    $verBar.Child = $b
+  } else { $row.Margin = '6,3,6,3'; $verBar.Child = $row }
 }
 # the timer, every few seconds: the daily check, an idle update, what a running one says
 function Step-Updates {
@@ -2849,7 +3104,7 @@ function Step-Updates {
   }
   $st = Read-UpdateFile $InstallRoot 'status.json'
   $sig = "$running|$(if ($st) { $st['state'] })|$(if ($res) { $res['at'] })|$($script:upd.CheckedAt)|$([bool]$script:upd.Checking)|$([bool]$script:upd.Login)|$($script:upd.LoginError)"
-  if ($sig -ne $script:upd.Sig) { $script:upd.Sig = $sig; Render-IfSettings }
+  if ($sig -ne $script:upd.Sig) { $script:upd.Sig = $sig; Render-IfSettings }   # (also the version line and the tray tooltip)
 }
 
 function Render-UpdateSettings {
@@ -2887,6 +3142,8 @@ function Render-UpdateSettings {
   } elseif (-not $running -and $res -and ($res['needsLogin'] -or -not $res['ok'] -or $res['worker'] -eq 'pending')) {
     $hint = (([string]$res['message']), ([string]$res['next']), $script:upd.LoginError | Where-Object { $_ }) -join ' '
     if ($res['needsLogin']) {
+      # (the message is usually this row's own title)
+      $hint = (([string]$res['message']), ([string]$res['next']), $script:upd.LoginError | Where-Object { $_ -and $_.TrimEnd('.') -ne 'Sign in to Cloudflare to finish the update' }) -join ' '
       $b = New-SmallButton 'Sign in' { Start-CloudLogin } $OnAccent; $b.Background = $Accent
       Set-Name $b 'Sign in to Cloudflare' 'Opens the browser; the update finishes by itself afterwards'
       [void]$list.Children.Add((New-SettingRow 'Sign in to Cloudflare to finish the update' $hint $b))
@@ -3000,7 +3257,7 @@ function Remove-ShareAccess($person) {
 
 function Render-ShareView {
   $sv = $script:shareView
-  [void]$list.Children.Add((New-SettingsHeader "Share '$($sv.Name)'" 'list'))
+  [void]$list.Children.Add((New-SettingsHeader "Share '$($sv.Name)'"))
   $say = { param([string]$t, $brush) $x = New-Text $t $TypeSize.meta $(if ($brush) { $brush } else { $Faint }); $x.Margin = '8,4,8,6'; [void]$list.Children.Add($x) }
   if (-not (Read-SyncConfigUi)) { & $say $script:ShareNeedsSync; return }
   if ($script:sync -and $script:sync.WorkerApi -and $script:sync.WorkerApi -lt $script:SharingApi) { & $say $script:WorkerTooOld; return }
@@ -3078,7 +3335,7 @@ function Render-ShareView {
 }
 
 # ---------------------------------------------------------------- joining and leaving (the other side)
-# Join: an invite link pasted in Settings > Sync, or handed over by a saqme://join link (the owner's join page).
+# Join: an invite link pasted in Settings > Sync & sharing, or handed over by a saqme://join link (the owner's join page).
 # The app asks before it uses up the one-time code; the sync loop then claims it and binds a new file.
 $script:joining = $null
 function Start-JoinShare([string]$link) {
@@ -3136,9 +3393,9 @@ function Leave-SharedList([string]$name) {
   Show-Notice "Left '$name'."
 }
 
-# Settings > Sync > Shared lists: join one (paste the invite link), and those this PC has, each with Leave
+# Settings > Sync & sharing > Shared lists: join one (paste the invite link), and those this PC has, each with Leave
 function Render-SharedListSettings {
-  [void]$list.Children.Add((New-SettingRow 'Join a shared list' 'Paste the invite link someone sent you (https://.../join#code=...). Works without sync of your own too.' $null))
+  [void]$list.Children.Add((New-SettingRow 'Join a shared list' 'Paste the invite link someone sent you. Works without sync of your own too.' $null))
   $g = New-Object System.Windows.Controls.Grid; $g.Margin = '8,0,6,8'
   foreach ($wd in @('*', 'Auto')) { $cd = New-Object System.Windows.Controls.ColumnDefinition; $cd.Width = $wd; $g.ColumnDefinitions.Add($cd) }
   $box = New-Object System.Windows.Controls.TextBox
@@ -3154,17 +3411,16 @@ function Render-SharedListSettings {
   [void]$g.Children.Add($box); [void]$g.Children.Add((Hide-Decoration $hint))
   $btn = New-SmallButton 'Join' $go; [System.Windows.Controls.Grid]::SetColumn($btn, 1); [void]$g.Children.Add($btn)
   [void]$list.Children.Add($g)
-  if ($script:sync -and $script:sync.Guarded -and -not (Read-SyncConfigUi)) {
-    # (with sync of its own, the same row is in the Sync section above)
-    $msg = "$($script:sync.Guarded) tasks vanished from a shared list's file at once. Deleting them for its owner is paused in case that was an accident - restore the file, or confirm."
-    [void]$list.Children.Add((New-SettingRow 'Deletions paused' $msg (New-SmallButton 'Delete them' { $script:sync.AllowMassDelete = $true; Request-Sync; Render } $Red)))
-  }
+  # (Deletions paused, for this PC's own lists or a shared one, is further down the Sync & sharing page)
   foreach ($b in $script:bindings) {
     $st = $(if ($script:sync -and $script:sync.Shares) { @($script:sync.Shares | Where-Object { $_.Id -eq [string]$b['id'] })[0] } else { $null })
     $status = $(if ($st -and @('offline', 'error') -contains $st.State) { ", $($st.Message)" } else { '' })
     $lv = New-SmallButton 'Leave' { param($x) Leave-SharedList $x } $Red ([string]$b['file'])
+    Set-Name $lv "Leave $([string]$b['file'])" 'It goes from this PC; nothing changes in the owner''s list'
     [void]$list.Children.Add((New-SettingRow ([string]$b['file']) "From $(Get-ShareHost $b), $($script:AccessText[[string]$b['access']][0].ToLower())$status" $lv))
   }
+  $t = New-Text 'To share one of your own lists, right-click its tab and choose Share.' $TypeSize.meta $Faint; $t.Margin = '8,4,8,4'
+  [void]$list.Children.Add($t)
 }
 
 function Format-ConflictValue([string]$field, $v) {
@@ -3196,7 +3452,7 @@ function Dismiss-SyncNotice($n) {
 }
 
 function Render-ConflictsView {
-  [void]$list.Children.Add((New-SettingsHeader 'Conflicts' 'settings'))
+  [void]$list.Children.Add((New-SettingsHeader 'Conflicts'))
   $all = @(Get-OpenConflictList)
   $notices = @(Get-NoticeList)
   if (-not $all.Count -and -not $notices.Count) {
@@ -3308,7 +3564,7 @@ $w.Add_PreviewKeyDown({
 
   if ($ctrl -and $key -eq 'Z') { $e.Handled = $true; Undo-Last; return }   # (text boxes keep their own Ctrl+Z)
   if ($script:view -ne 'list') {
-    if ($key -eq 'Escape') { $e.Handled = $true; $script:view = $(if ($script:view -eq 'settings' -or $script:view -eq 'share') { 'list' } else { 'settings' }); Render }
+    if ($key -eq 'Escape') { $e.Handled = $true; Go-Back }
     return
   }
 
@@ -3422,7 +3678,7 @@ function Quit-App {
   $w.Dispatcher.InvokeShutdown()
 }
 $tray = New-Object System.Windows.Forms.NotifyIcon
-$tray.Text = 'Saqme To Do'
+$tray.Text = Get-VersionText   # (with what an update needs, when it needs something: Update-VersionDisplay)
 try {
   $src = [System.Drawing.Image]::FromFile($logoFile)
   $ib = New-Object System.Drawing.Bitmap 32, 32
@@ -3489,7 +3745,8 @@ $timer.Add_Tick({
   if ($script:sync) {
     if ($script:sync.Plan) { Apply-SyncPlan }
     $typing = [System.Windows.Input.Keyboard]::FocusedElement -is [System.Windows.Controls.TextBox]
-    if ((Update-SyncIndicator) -and $script:view -ne 'list' -and $script:view -ne 'keys' -and -not $typing) { Render }
+    # (the views that show how sync stands; the others stay as they are, with keyboard focus where it was)
+    if ((Update-SyncIndicator) -and @('settings', 'sync', 'conflicts', 'share', 'pair', 'trash') -contains $script:view -and -not $typing) { Render }
   }
   if ($script:posDirty -and $w.IsLoaded -and -not $script:maxed -and $w.WindowState -eq 'Normal') {
     $script:posDirty = $false
@@ -3557,21 +3814,98 @@ if ($SmokeTest) {
     $script:openState[(Open-Key $first)] = '1'; Render
     $text = [IO.File]::ReadAllText($script:todo)
     if ($text -notmatch ('- \[ \] smoke task one due:\d{4}-\d{2}-\d{2}T9:00 \^' + $first.Id)) { throw "unexpected file content: $text" }
-    foreach ($v in 'settings', 'keys', 'pair', 'conflicts', 'list') { $script:view = $v; Render }
+    foreach ($v in @('settings') + @($script:SettingsPages.Keys) + @('keys', 'pair', 'conflicts', 'trash', 'list')) { $script:view = $v; Render }
+    # Settings: every setting and action is on its page, each page opens from Settings the way Enter or a screen
+    # reader's Invoke opens it, and Back (the header, Esc) goes up one level. Nothing here is switched or pressed
+    # (Start with Windows is the real Startup folder's shortcut). The settings file keeps its keys.
+    $find = { param($root, [string]$k) foreach ($c in (Get-Controls $root)) { if ((Get-FocusKey $c) -eq $k) { return $c } }; return $null }
+    $activate = { param($el) if ($script:HasA11y) { $el.RaiseActivate() } elseif ($el.Tag -is [scriptblock]) { & $el.Tag } else { Show-View $el.Tag } }
+    $mustHave = [ordered]@{
+      general       = @('Dark', 'Light', 'Auto', 'Start with Windows', 'open-keys')
+      notifications = @('Daily summary time', 'Send a test notification')
+      sync          = @('Set up sync', 'Pairing link', 'Connect', 'Invite link', 'Join')
+      updates       = @('back')
+      yourlists     = @('Open the lists folder', 'open-trash')
+      about         = @('Open the data folder')
+    }
+    if ((@($mustHave.Keys) -join ',') -ne (@($script:SettingsPages.Keys) -join ',')) { throw 'a Settings page without checks' }
+    foreach ($pg in $mustHave.Keys) {
+      Show-View 'settings'
+      $row = & $find $list "open-$pg"
+      if (-not $row) { throw "Settings has no row for $pg" }
+      & $activate $row
+      if ($script:view -ne $pg) { throw "the $pg row opened '$($script:view)'" }
+      foreach ($k in $mustHave[$pg]) {
+        $c = & $find $list $k
+        if (-not $c -or -not $c.IsEnabled -or ($script:HasA11y -and -not $c.Focusable)) { throw "Settings > $($script:SettingsPages[$pg]): '$k' missing or out of keyboard reach" }
+      }
+      Go-Back
+      if ($script:view -ne 'settings') { throw "Back from $pg went to '$($script:view)'" }
+    }
+    foreach ($sub in @(@('general', 'keys'), @('yourlists', 'trash'))) {
+      Show-View $sub[0]; & $activate (& $find $list "open-$($sub[1])")
+      if ($script:view -ne $sub[1]) { throw "$($sub[0]) did not open $($sub[1])" }
+      Go-Back
+      if ($script:view -ne $sub[0]) { throw "Back from $($sub[1]) went to '$($script:view)'" }
+    }
+    foreach ($p in @(@('settings', 'list'), @('share', 'list'), @('keys', 'general'), @('pair', 'sync'), @('conflicts', 'sync'), @('trash', 'yourlists'), @('about', 'settings'))) {
+      if ((Get-ViewParent $p[0]) -ne $p[1]) { throw "Back from $($p[0]) goes to $(Get-ViewParent $p[0])" }
+    }
+    # with sync set up: Sync now, Pair phone, and Advanced, closed at first, with Turn off sync in it
+    $hadCfg = Test-Path -LiteralPath $syncCfgFile
+    if (-not $hadCfg) { [void](New-Item -ItemType Directory -Path $syncDir -Force); Write-TextFileAtomic $syncCfgFile (ConvertTo-JsonText @{ url = 'https://saqme.example.workers.dev'; token = ('k' * 43); deviceId = 'pc-smoke'; enabled = $true }) }
+    $script:advancedOpen = $false; Show-View 'sync'
+    foreach ($k in 'Sync now', 'open-pair', 'advanced') { if (-not (& $find $list $k)) { throw "Sync & sharing: '$k' missing" } }
+    if ((& $find $list 'Turn off sync') -or ($script:HasA11y -and (& $find $list 'advanced').IsExpanded)) { throw 'Advanced is open at first' }
+    & $activate (& $find $list 'advanced')
+    if (-not (& $find $list 'Turn off sync') -or ($script:HasA11y -and -not (& $find $list 'advanced').IsExpanded)) { throw 'Advanced did not open' }
+    $script:advancedOpen = $false
+    if (-not $hadCfg) { Remove-Item -LiteralPath $syncCfgFile -Force }
+    $keys = @(Read-Lines $cfgFile | Where-Object { $_ -match '^\w+=' } | ForEach-Object { ($_ -split '=', 2)[0] } | Sort-Object)
+    if (($keys -join ',') -ne 'active,autoUpdate,height,notifyAt,showCompleted,theme,updatedSeen,width') { throw "the settings file's keys changed: $($keys -join ',')" }
+    # the version: the line under every Settings view (plain while no update needs a look), About, the tray icon's tooltip
+    $ver = Get-VersionText
+    $hasText = { param($root, [string]$t) foreach ($c in (Get-Controls $root)) { if ($c -is [System.Windows.Controls.TextBlock] -and $c.Text -eq $t) { return $true } }; return $false }
+    if ($ver -notmatch '^Saqme To Do \d+\.\d+\.\d+$') { throw "version: $ver" }
+    foreach ($v in @('settings') + @($script:SettingsPages.Keys) + @('keys', 'trash')) {
+      Show-View $v
+      if ($verBar.Visibility -ne 'Visible' -or -not (& $hasText $verBar $ver)) { throw "no version line under $v" }
+    }
+    if ($null -eq $InstallRoot -and (& $find $verBar 'version')) { throw 'the version line links to Updates with nothing to show' }
+    Show-View 'about'
+    if (-not (& $hasText $list $ver)) { throw 'About does not say the version' }
+    if (-not $tray.Text.StartsWith($ver)) { throw "tray tooltip: $($tray.Text)" }
+    Show-View 'list'
+    if ($verBar.Visibility -ne 'Collapsed') { throw 'the version line shows in the list' }
     # Set up sync from inside a packaged app explains itself instead of starting setup there
     $env:SAQME_TEST_PACKAGE = 'Some.App_1.0.0.0_x64__test'
     try { Start-SyncSetup } finally { Remove-Item Env:\SAQME_TEST_PACKAGE }
     if ($script:setupRun -or [string]$script:setupOutcome.message -notmatch 'Some\.App_1\.0\.0\.0') { throw 'Set up sync started inside a package' }
     $script:setupOutcome = $null
-    # Settings > Updates as an installed copy sees it: an update available, one waiting for the Cloudflare sign-in
+    # Settings > Updates as an installed copy sees it: an update available, one waiting for the Cloudflare sign-in. The
+    # version line gets a dot and opens Updates; the Updates row in Settings and the tray icon's tooltip say it too
     $keepRoot = $InstallRoot; $InstallRoot = Join-Path $DataDir 'smoke-install'
     [void](New-Item -ItemType Directory -Path (Join-Path $InstallRoot 'update') -Force)
     Write-TextFileAtomic (Join-Path $InstallRoot 'update\result.json') (ConvertTo-JsonText @{ ok = $false; held = $true; needsLogin = $true; version = '99.0.0'; message = 'Sign in to Cloudflare to finish the update.'; at = 1 })
     $script:upd.Latest = @{ version = '99.0.0' }
-    $script:view = 'settings'; Render
+    Show-View 'settings'
     if (-not (Get-AvailableUpdate) -or -not (Get-UpdateResult)['needsLogin']) { throw 'Settings > Updates' }
+    $nameOf = { param($el) [System.Windows.Automation.AutomationProperties]::GetName($el) }
+    $vl = & $find $verBar 'version'
+    if (-not $vl -or (& $nameOf $vl) -notmatch "^$([regex]::Escape($ver))\. Sign in to Cloudflare") { throw 'the version line does not say the update waits for the sign-in' }
+    if ((& $nameOf (& $find $list 'open-updates')) -notmatch 'Sign in to Cloudflare') { throw 'the Updates row does not say it' }
+    if ($tray.Text -notmatch "^$([regex]::Escape($ver))`nSign in") { throw "tray tooltip: $($tray.Text)" }
+    & $activate $vl
+    if ($script:view -ne 'updates') { throw "the version line opened '$($script:view)'" }
+    foreach ($k in 'Update now to 99.0.0', 'Sign in to Cloudflare', 'Install updates automatically') { if (-not (& $find $list $k)) { throw "Settings > Updates: '$k' missing" } }
+    if (& $find $verBar 'version') { throw 'on Updates, the version line links to Updates' }
+    Remove-Item -LiteralPath (Join-Path $InstallRoot 'update\result.json') -Force   # signed in: only available now
+    Show-View 'about'
+    if ((& $nameOf (& $find $verBar 'version')) -notmatch 'Update available: 99\.0\.0' -or -not (& $find $list 'open-updates')) { throw 'About and the version line: update available' }
     $script:upd.Latest = $null; Remove-Item -LiteralPath $InstallRoot -Recurse -Force; $InstallRoot = $keepRoot
-    $script:view = 'list'; Render
+    Show-View 'list'; Update-VersionDisplay
+    if ($null -eq $InstallRoot -and $tray.Text -ne $ver) { throw "tray tooltip after the update: $($tray.Text)" }
+    Write-Output 'SETTINGS OK'
     Apply-Theme $(if ($script:themeName -eq 'dark') { 'light' } else { 'dark' })
     [void](New-QrImage 'https://saqme.example.workers.dev/#pair=0123456789abcdefghijklmnopqrstuvwxyzABCDEFG')
     Check-Reminders
@@ -3671,7 +4005,7 @@ if ($SmokeTest) {
     $tab = @($tabs.Children | Where-Object { $_.Tag -eq 'Shared check' })[0]
     if (@($tab.ContextMenu.Items | Where-Object { $_.Header -eq 'Leave this list' }).Count -ne 1 -or @($tab.ContextMenu.Items | Where-Object { $_.Header -eq 'Delete project' }).Count) { throw 'shared tab menu' }
     Show-Share $homeList; Render-Settings
-    foreach ($v in 'settings', 'conflicts', 'list') { $script:view = $v; Render }
+    foreach ($v in 'settings', 'sync', 'conflicts', 'list') { $script:view = $v; Render }
     if (-not (Get-InviteLink 'https://owner.example/join#code=AAAAAAAAAAAAAAAAAAAAAA')) { throw 'invite link' }
     Save-ShareBindings $listsDir @(); $script:bindSig = $null
     Switch-Project $homeList
@@ -3759,7 +4093,7 @@ if ($SmokeTest) {
       $w.Height = 640
       foreach ($theme in 'dark', 'light') {
         Apply-Theme $theme
-        foreach ($v in 'list', 'settings', 'pair', 'conflicts') { $script:view = $v; Render; & $shot "$v-$theme" }
+        foreach ($v in @('list', 'settings') + @($script:SettingsPages.Keys) + @('pair', 'conflicts')) { $script:view = $v; Render; & $shot "$v-$theme" }
       }
     }
     Write-Output 'SMOKE OK'

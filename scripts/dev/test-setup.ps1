@@ -91,7 +91,7 @@ try {
   [IO.File]::WriteAllText((Join-Path $app 'source\worker\node_modules\wrangler\marker.txt'), 'kept', $utf8)
   $r = Invoke-Setup -NoStart -Import $old -Yes
   Check ($r.Code -eq 0) "setup exit code 0`n$($r.Out)"
-  Check ($r.Out -notmatch 'Cloudflare account' -and $r.Out -match 'Settings > Sync > Set up sync' -and $r.Out -match 'setup.cmd -Cloud') 'sync left out by default, with a hint how to add it'
+  Check ($r.Out -notmatch 'Cloudflare account' -and $r.Out -match 'Settings > Sync & sharing > Set up sync' -and $r.Out -match 'setup.cmd -Cloud') 'sync left out by default, with a hint how to add it'
   $vdir = Join-Path $app "versions\$ver"
   foreach ($f in 'widget.ps1', 'tokens.ps1', 'rules.ps1', 'a11y.cs', 'sync-core.ps1', 'sync-worker.ps1', 'qr.ps1', 'start-widget.vbs', 'update.ps1', 'update-core.ps1', 'setup.ps1', 'release.json', 'assets\saqme.ico', 'fonts\FiraGO-Regular.ttf', 'fonts\OFL.txt') { Check (Test-Path (Join-Path $vdir $f)) "app file versions\$ver\$f" }
   foreach ($f in 'start-widget.vbs', 'setup.ps1', 'assets\saqme.ico', 'cloud\scripts\cloud-setup.mjs', 'cloud\worker\src\index.js', 'cloud\worker\package.json') { Check (Test-Path (Join-Path $app $f)) "install file $f" }
@@ -172,7 +172,7 @@ try {
   Check (-not (Test-SandboxApp)) '... and quits when asked'
   $r = Invoke-Setup -NoStart
   Check ($r.Out -notmatch 'FAKE-CLOUD') 'no cloud part without asking for it'
-  # the app's Settings > Sync > Set up sync
+  # the app's Settings > Sync & sharing > Set up sync
   $result = Join-Path $sb 'result.json'
   $r = Invoke-Setup -FromApp -ResultFile $result
   Check ($r.Code -eq 0 -and $r.Out -match 'FAKE-CLOUD .*--result' -and $r.Out -notmatch 'Desktop app') 'from the app: only the cloud part, told where to report'

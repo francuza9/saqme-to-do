@@ -148,6 +148,11 @@ The full account, with how each part is checked: [accessibility.md](accessibilit
   in a sheet. Other buttons are ink on a faint tint.
 - **No cards, no shadows.** Sheets use the frame colour with a hairline top edge; settings are plain rows
   separated by small section labels (principle 1).
+- **Settings in a narrow window is a list of pages.** On the desktop, Settings shows one row per page (General,
+  Notifications, Sync & sharing, Updates, Your lists, About) with a one-line summary and a chevron; each page is
+  short, plain rows again. Places you go to have a chevron, actions are buttons. Rare or risky actions sit at the
+  bottom of their page under *Advanced*, a disclosure drawn like the *Completed* break. A quiet meta line under
+  every Settings view says the version; a violet dot (with words) marks what needs a look: an update, a conflict.
 - **Pills only when time is short.** A deadline gets a pill when it is overdue, today or tomorrow; later
   ones are plain text, so the list never looks like a tag cloud.
 - **Status lives in the chip.** Task text is never tinted by status: the coloured chip already says it, and

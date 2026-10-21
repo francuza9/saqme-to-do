@@ -373,7 +373,8 @@ relay, in a table of its own, never in the synced rows).
   the phone app, `/#join=<code>`: nothing to install, no account), **Open in Saqme To Do** (`saqme://join?server=
   …&code=…`, tried by itself in Chromium browsers on computers) and *Copy invite*, and **install Saqme** (the
   one-line installers and the setup guide). The apps always ask before they use up the code. Pasting the link
-  works everywhere: Settings > Sync > *Join a shared list*, `saqme join LINK` on Linux/macOS. The phone app also
+  works everywhere: Settings > Sync > *Join a shared list* (Windows: Settings > Sync & sharing), `saqme join LINK`
+  on Linux/macOS. The phone app also
   offers to join when it finds an invite link on the clipboard (where the browser allows reading it: not on
   iPhone, which needs the Paste button there).
 - **Move to my Saqme app** (on a list used in the browser): a move code (above) as a link, a QR code on larger

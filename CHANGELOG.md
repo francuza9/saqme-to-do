@@ -1,5 +1,29 @@
 # Changes
 
+## Unreleased
+
+**Windows: Settings is easier to read, and the version is easy to find.**
+
+- **Settings is a short list of pages** instead of one long page: *General* (theme, start with Windows,
+  keyboard shortcuts), *Notifications* (daily summary, test notification), *Sync & sharing* (set up sync or how
+  it stands, pair phone, conflicts, join and leave shared lists), *Updates*, *Your lists* (lists folder,
+  recently deleted) and *About*. Each row says what is on its page or how it stands, with a violet dot when
+  something needs a look (an update, a conflict, paused deletions). Esc goes back one level; the cloud icon opens
+  Sync & sharing directly. Shorter hints, one line under each setting that needs one.
+- **Rare and risky actions moved down:** *Turn off sync* is under **Advanced** at the bottom of Sync & sharing,
+  next to how to get a new sync key and (new) a button that opens the sync log. *Deletions paused* shows below
+  the everyday rows when it happens.
+- **The version** is on a quiet line at the bottom of every Settings page, in *About* (with where the app is
+  installed and an *Open folder* for your data), and in the tray icon's tooltip. When an update is available or
+  waits for the Cloudflare sign-in, the line gets a dot and says so; click it for Updates.
+- Keyboard and screen readers: opening a page puts focus on its title (its Back button), going back returns to
+  the row you came from, and a page that refreshes (sync status) keeps focus where it was. *Advanced* reports
+  expanded or collapsed to Narrator.
+- Nothing was removed and settings are kept as they were (same file, same values). The self-check covers every
+  page, every setting on it and the version line; `scripts/dev/uia-check.ps1` walks all pages through UI
+  Automation, and `scripts/dev/render-widget.ps1` can render any page, full length (`-Full`) and at its most
+  crowded (`-Busy`).
+
 ## 1.1.0
 
 **Updates without commands.** From this version on the app updates itself, your Worker and the phone app with

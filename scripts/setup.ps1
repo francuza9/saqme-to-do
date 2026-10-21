@@ -20,7 +20,7 @@
   .\setup.cmd -Import "D:\lists"        also copy lists (*.md) from another folder (copies, never moves)
   .\setup.cmd -RotateToken -CloudOnly   new access key: the old one stops working (pair your devices again)
   .\setup.cmd -Uninstall                remove the app (keeps your lists; -PurgeData deletes them too)
-  The apps run it too: Settings > Sync > Set up sync (-FromApp -ResultFile <file>, the cloud part only), and the
+  The apps run it too: Settings > Sync & sharing > Set up sync (-FromApp -ResultFile <file>, the cloud part only), and the
   updater (desktop\update.ps1: -Update -Source <release>; -WorkerUpdate; -CloudLogin).
 #>
 [CmdletBinding()]
@@ -38,7 +38,7 @@ param(
   [switch]$Yes,
   [ValidatePattern('^[a-z0-9][a-z0-9-]{0,40}$')][string]$WorkerName = 'saqme',
   [string]$Source,
-  [switch]$FromApp,       # started by the app (Settings > Sync > Set up sync): the cloud part, window stays readable
+  [switch]$FromApp,       # started by the app (Settings > Sync & sharing > Set up sync): the cloud part, window stays readable
   [string]$ResultFile,    # how it ended, as JSON, for the app: { ok, url } or { ok: false, message, next }
   [string]$DataDir,       # the app's data folder, when it is not the usual one (the app passes its own)
   [switch]$Update,        # the updater: install the release in -Source next to the running version, update the
@@ -413,7 +413,7 @@ function Register-Windows {
   Write-Ok 'Start menu shortcut'
   if ($NoAutostart) { Write-Info 'start with Windows: left as it was (-NoAutostart)' }
   elseif ($Update) { if (Test-Path -LiteralPath $StartupLnk) { New-Shortcut $StartupLnk $AppName } }   # (an update keeps the user's choice)
-  else { New-Shortcut $StartupLnk $AppName; Write-Ok 'starts with Windows (switch off in the app: Settings > Startup)' }
+  else { New-Shortcut $StartupLnk $AppName; Write-Ok 'starts with Windows (switch off in the app: Settings > General)' }
   # Settings > Apps entry
   New-Item -Path $UninstallKey -Force | Out-Null
   $ps = Join-Path $env:WINDIR 'System32\WindowsPowerShell\v1.0\powershell.exe'
@@ -671,7 +671,7 @@ try {
     Write-Host ''
     if (Test-Path -LiteralPath (Join-Path $DataDir 'sync\config.json')) { Write-Info 'Cloud sync stays on (set up earlier); the app keeps it updated by itself.' }
     else {
-      Write-Info 'Your lists stay on this PC. To have them on your phone too: in the app, Settings > Sync > Set up sync.'
+      Write-Info 'Your lists stay on this PC. To have them on your phone too: in the app, Settings > Sync & sharing > Set up sync.'
       Write-Info "(or run: $(Get-SetupCommand '-Cloud'); a device that already syncs: paste its pairing link there)"
     }
   }

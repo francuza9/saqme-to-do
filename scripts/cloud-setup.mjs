@@ -409,7 +409,7 @@ async function printPairing(url, token, pairAgain, reachable) {
   console.log(code ? `  3. Open Saqme from the Home Screen and type the code ${c('1', code)} (works once, for 10 minutes).`
     : '  3. Open Saqme from the Home Screen and type the code Safari shows after step 1.');
   console.log('  4. In Saqme, Settings > Notifications > Enable.');
-  console.log(pairAgain ? `  (Show this code again any time with: ${pairAgain})\n` : '  (The desktop app shows this QR code again under Settings > Sync > Pair phone.)\n');
+  console.log(pairAgain ? `  (Show this code again any time with: ${pairAgain})\n` : '  (The desktop app shows this QR code again: Settings > Sync & sharing > Pair phone; Linux, macOS: Settings > Sync.)\n');
 }
 
 // ---------------------------------------------------------------- main
@@ -477,8 +477,8 @@ async function updateMain(opts, workerDir) {
 
   say.step(3, total, `Updating your sync service to ${version}`);
   const secrets = await workerSecrets(workerDir, accountEnv);
-  if (secrets === 'missing') throw new SetupError(`There is no sync service called "${workerName}" in this Cloudflare account.`, 'Set up sync again (Settings > Sync) to make it. Nothing was changed.');
-  if (secrets && !secrets.has('AUTH_TOKEN')) throw new SetupError('Your sync service has no access key on Cloudflare, so updating it would leave it locked.', 'Set up sync again (Settings > Sync). Nothing was changed.');
+  if (secrets === 'missing') throw new SetupError(`There is no sync service called "${workerName}" in this Cloudflare account.`, 'Set up sync again (Settings > Sync & sharing; Linux, macOS: Settings > Sync) to make it. Nothing was changed.');
+  if (secrets && !secrets.has('AUTH_TOKEN')) throw new SetupError('Your sync service has no access key on Cloudflare, so updating it would leave it locked.', 'Set up sync again (Settings > Sync & sharing; Linux, macOS: Settings > Sync). Nothing was changed.');
   const url = await deploy(workerDir, null, accountEnv, { ...opts, knownUrl: state.url || desktop?.url || '' });
   say.ok('code and phone app updated; your keys and lists stay as they are');
   Object.assign(state, { accountId: account.id, workerName, databaseName: db.name, databaseId: db.id, url, updatedAt: new Date().toISOString() });
@@ -547,9 +547,10 @@ async function main(opts) {
       say.ok('reusing the access key this computer\'s app already syncs with (sync was set up on another computer)');
     } else {
       throw new SetupError('Saqme is already set up in this Cloudflare account (from another computer).',
-        'To connect this PC, copy the pairing link on a device that already syncs (desktop: Settings > Sync > Pair phone > Copy link)\n'
-        + '          and paste it into this PC\'s Settings > Sync. To start over with a new key instead (all devices pair again,\n'
-        + '          phones re-enable notifications), run setup with -RotateToken (setup.sh: --rotate-token).');
+        'To connect this PC, copy the pairing link on a device that already syncs (Windows: Settings > Sync & sharing >\n'
+        + '          Pair phone > Copy link) and paste it into this PC\'s Settings > Sync & sharing (Linux, macOS: Settings > Sync).\n'
+        + '          To start over with a new key instead (all devices pair again, phones re-enable notifications), run setup\n'
+        + '          with -RotateToken (setup.sh: --rotate-token).');
     }
   }
   const newToken = !state.token || opts.rotateToken;
@@ -573,7 +574,7 @@ async function main(opts) {
   say.step(6, total, 'Checking it works');
   const reachable = await verify(url, secrets.token);
   if (opts.desktopConfig) writeDesktopConfig(opts.desktopConfig, url, secrets.token);
-  else say.info('(no desktop app on this machine - on Windows, paste the link below into Settings > Sync)');
+  else say.info('(no desktop app on this machine - on Windows, paste the link below into Settings > Sync & sharing)');
   if (opts.rotateToken) await forgetPushSubscriptions(workerDir, db, accountEnv);
 
   say.step(7, total, 'Done');

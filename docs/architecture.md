@@ -94,8 +94,9 @@ device id), `sync\state.json` (sync engine state), `sync\sync.log`, `cloud.json`
   own lists others have) from the local server, which also relays the window's sharing to the cloud Worker.
 - **Settings > Sync > Set up sync** runs `scripts/cloud-setup.mjs` (installed with the app; it fetches the
   Cloudflare tools on first use) from the local server and streams its output to the window; it writes
-  `sync/config.json` when it succeeds and the cloud engine starts. On Windows the widget runs
-  `setup.ps1 -FromApp` in a console window of its own and reads the result file it leaves.
+  `sync/config.json` when it succeeds and the cloud engine starts. On Windows (**Settings > Sync & sharing >
+  Set up sync**) the widget runs `setup.ps1 -FromApp` in a console window of its own and reads the result file
+  it leaves.
 - **Process and start:** `setup.sh` installs the files to `~/.local/lib/saqme/versions/<version>` (macOS:
   `~/Library/Application Support/Saqme To Do/app/versions/<version>`), a launcher `~/.local/bin/saqme` that runs
   the version `current` names, a menu entry or `~/Applications/Saqme To Do.app`, and starts `saqme serve` at

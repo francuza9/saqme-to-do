@@ -7,7 +7,9 @@
 #   - the tasks are a list of items whose names include their status in words; the projects are a tab list
 #   - no icon-font glyphs leak out as text
 #   - the Tab order (WPF's: focusable tab stops in visual order) goes header, tabs, window buttons, list, add box
-# It also opens Settings and Keyboard shortcuts through UI Automation (Invoke), and checks those too.
+# It also opens Settings, each of its pages and Keyboard shortcuts through UI Automation (Invoke, Expand), and checks
+# those too: the pages are a list of buttons, each page has what belongs on it, Back returns, Advanced is a
+# disclosure that says whether it is expanded, and the version line is read out.
 #   powershell -NoProfile -ExecutionPolicy Bypass -File scripts\dev\uia-check.ps1 [-Out C:\temp\uia]
 param([string]$Out = (Join-Path ([IO.Path]::GetTempPath()) 'saqme-uia'))
 $ErrorActionPreference = 'Stop'
@@ -23,6 +25,8 @@ foreach ($f in Get-ChildItem (Join-Path $root 'scripts\dev\sample') -Force -File
   [IO.File]::WriteAllText((Join-Path $data "lists\$($f.Name)"), $text, $utf8)
 }
 [IO.File]::WriteAllText((Join-Path $data '.widget-settings'), "active=Work`nwidth=440`nheight=700`ntheme=dark`n", $utf8)
+New-Item -ItemType Directory -Path (Join-Path $data 'sync') -Force | Out-Null   # a sync log (no sync set up): Sync & sharing has Advanced
+[IO.File]::WriteAllText((Join-Path $data 'sync\sync.log'), "a line of the sync log`n", $utf8)
 $hwndFile = Join-Path $tmp 'hwnd.txt'; $quitFile = Join-Path $tmp 'quit.txt'; $orderFile = Join-Path $tmp 'taborder.txt'; $orderAsk = Join-Path $tmp 'taborder.ask'
 
 # ---------------------------------------------------------------- the widget copy
@@ -102,6 +106,7 @@ function Get-Tree($el, [int]$depth, $acc) {
   $state = ''
   if ($pats -contains 'SelectionItem') { if ($el.GetCurrentPattern([System.Windows.Automation.SelectionItemPattern]::Pattern).Current.IsSelected) { $state = ' [selected]' } }
   if ($pats -contains 'Toggle') { $state = ' [' + $el.GetCurrentPattern([System.Windows.Automation.TogglePattern]::Pattern).Current.ToggleState + ']' }
+  if ($pats -contains 'ExpandCollapse') { $state = ' [' + $el.GetCurrentPattern([System.Windows.Automation.ExpandCollapsePattern]::Pattern).Current.ExpandCollapseState + ']' }
   [void]$acc.Add([pscustomobject]@{ El = $el; Type = $type; Name = $c.Name; Help = $c.HelpText; Focusable = $c.IsKeyboardFocusable; Patterns = $pats; Depth = $depth; State = $state })
   $wk = [System.Windows.Automation.TreeWalker]::ControlViewWalker
   $ch = $wk.GetFirstChild($el)
@@ -158,20 +163,68 @@ try {
   Check (@($order | Where-Object { $_ -match "$statusWords" -and $_ -notlike 'Status:*' }).Count -eq 1) 'the list is one Tab stop (arrow keys move inside it)'
   Check (@($order | Where-Object { $_ -like '(*' }).Count -eq 0) 'every Tab stop has a name'
 
-  # ---- Settings, opened the way a screen reader would: Invoke on the Settings button
+  # ---- Settings, opened the way a screen reader would: Invoke on the Settings button, then on each page's row
+  $byId = { param([string]$id) $win.FindFirst([System.Windows.Automation.TreeScope]::Descendants, (New-Object System.Windows.Automation.PropertyCondition($A::AutomationIdProperty, $id))) }
+  $invoke = { param($el, [string]$what) if (-not $el) { Check $false "$what is there"; return $false }; $el.GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern).Invoke(); Start-Sleep -Milliseconds 900; return $true }
   $settings = $win.FindFirst([System.Windows.Automation.TreeScope]::Descendants, (New-Object System.Windows.Automation.PropertyCondition($A::NameProperty, 'Settings')))
-  $settings.GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern).Invoke()
-  Start-Sleep -Milliseconds 900
+  [void](& $invoke $settings 'the Settings button')
   $acc = Test-View 'settings view' $win
-  Check (@($acc | Where-Object { $_.Type -eq 'RadioButton' }).Count -eq 3 -and @($acc | Where-Object { $_.Type -eq 'RadioButton' -and $_.State -eq ' [selected]' }).Count -eq 1) 'theme choice: three radio buttons, one selected'
-  Check (@($acc | Where-Object { $_.Type -eq 'CheckBox' -and $_.Name -eq 'Start with Windows' }).Count -eq 1) "'Start with Windows' is a switch with its state"
-  Check (@($acc | Where-Object { $_.Type -eq 'Edit' -and $_.Name -eq 'Daily summary time' }).Count -eq 1) 'the time box is labelled'
+  $pages = @($acc | Where-Object { $_.Type -eq 'Button' -and $_.El.Current.AutomationId -like 'open-*' } | ForEach-Object { ($_.Name -split ', ')[0] })
+  Check (($pages -join ' | ') -eq 'General | Notifications | Sync & sharing | Updates | Your lists | About') "Settings is a list of its pages ($($pages -join ' | '))"
+  Check (@($acc | Where-Object { $_.Type -eq 'Button' -and $_.El.Current.AutomationId -eq 'open-sync' -and $_.Name -match '^Sync & sharing, .+' }).Count -eq 1) 'each page row says how it stands (Sync & sharing, ...)'
+  Check (@($acc | Where-Object { $_.Type -eq 'Text' -and $_.Name -match '^Saqme To Do \d+\.\d+\.\d+$' }).Count -eq 1) 'the version line is read out'
+  Set-Content $orderAsk 'x'; Remove-Item $orderFile -ErrorAction SilentlyContinue
+  [void](Wait-For { Test-Path $orderFile }); Start-Sleep -Milliseconds 200
+  $order = @(Get-Content $orderFile)
+  [void]$report.AppendLine('== Tab order (settings view)'); foreach ($o in $order) { [void]$report.AppendLine("  $o") }
+  $iBack = [array]::IndexOf($order, 'Settings - back to the list'); $iClose = [array]::IndexOf($order, ($order | Where-Object { $_ -like 'Close*' } | Select-Object -First 1))
+  $rowOrder = @($order | Where-Object { $_ -match '^(General|Notifications|Sync & sharing|Updates|Your lists|About), ' } | ForEach-Object { ($_ -split ', ')[0] })
+  Check ($iBack -gt $iClose -and ($rowOrder -join ' | ') -eq ($pages -join ' | ') -and [array]::IndexOf($order, ($order | Where-Object { $_ -like 'General, *' } | Select-Object -First 1)) -gt $iBack) "Tab order: window buttons, then the header (Back), then the pages in order"
 
-  $kb = $win.FindFirst([System.Windows.Automation.TreeScope]::Descendants, (New-Object System.Windows.Automation.PropertyCondition($A::NameProperty, 'Keyboard shortcuts')))
-  $kb.GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern).Invoke()
-  Start-Sleep -Milliseconds 900
-  $acc = Test-View 'keyboard shortcuts view' $win
-  Check (@($acc | Where-Object { $_.Name -like 'Move between the tabs*' }).Count -ge 1) 'the shortcuts list explains Tab'
+  if (& $invoke (& $byId 'open-general') 'the General row') {
+    $acc = Test-View 'Settings > General' $win
+    Check (@($acc | Where-Object { $_.Type -eq 'RadioButton' }).Count -eq 3 -and @($acc | Where-Object { $_.Type -eq 'RadioButton' -and $_.State -eq ' [selected]' }).Count -eq 1) 'theme choice: three radio buttons, one selected'
+    Check (@($acc | Where-Object { $_.Type -eq 'CheckBox' -and $_.Name -eq 'Start with Windows' }).Count -eq 1) "'Start with Windows' is a switch with its state"
+    Check (@($acc | Where-Object { $_.Type -eq 'Button' -and $_.Name -eq 'General - back to Settings' }).Count -eq 1) 'the page header is a Back button that names the page'
+    if (& $invoke (& $byId 'open-keys') 'the Keyboard shortcuts row') {
+      $acc = Test-View 'keyboard shortcuts view' $win
+      Check (@($acc | Where-Object { $_.Name -like 'Move between the tabs*' }).Count -ge 1) 'the shortcuts list explains Tab'
+      [void](& $invoke (& $byId 'back') 'Back')
+      Check ($null -ne (& $byId 'open-keys')) 'Back from Keyboard shortcuts returns to General'
+    }
+    [void](& $invoke (& $byId 'back') 'Back')
+    Check ($null -ne (& $byId 'open-general')) 'Back from General returns to Settings'
+  }
+  if (& $invoke (& $byId 'open-notifications') 'the Notifications row') {
+    $acc = Test-View 'Settings > Notifications' $win
+    Check (@($acc | Where-Object { $_.Type -eq 'Edit' -and $_.Name -eq 'Daily summary time' }).Count -eq 1) 'the time box is labelled'
+    Check (@($acc | Where-Object { $_.Type -eq 'Button' -and $_.Name -eq 'Send a test notification' }).Count -eq 1) 'the test notification button is named'
+    [void](& $invoke (& $byId 'back') 'Back')
+  }
+  if (& $invoke (& $byId 'open-sync') 'the Sync & sharing row') {
+    $acc = Test-View 'Settings > Sync & sharing' $win
+    Check (@($acc | Where-Object { $_.Type -eq 'Edit' -and $_.Name -in 'Pairing link', 'Invite link' }).Count -eq 2 -and @($acc | Where-Object { $_.Type -eq 'Button' -and $_.Name -eq 'Set up sync' }).Count -eq 1) 'Set up sync, and the pairing and invite link boxes'
+    $adv = @($acc | Where-Object { $_.El.Current.AutomationId -eq 'advanced' })[0]
+    Check ($adv -and $adv.Type -eq 'Button' -and $adv.State -eq ' [Collapsed]' -and $adv.Help) "Advanced is a disclosure, collapsed, that says what is in it ('$($adv.Help)')"
+    if ($adv) {
+      $adv.El.GetCurrentPattern([System.Windows.Automation.ExpandCollapsePattern]::Pattern).Expand(); Start-Sleep -Milliseconds 900
+      $acc = Test-View 'Settings > Sync & sharing, Advanced open' $win
+      Check (@($acc | Where-Object { $_.El.Current.AutomationId -eq 'advanced' -and $_.State -eq ' [Expanded]' }).Count -eq 1 -and @($acc | Where-Object { $_.Type -eq 'Button' -and $_.Name -eq 'Open the sync log' }).Count -eq 1) 'Expand opens it, and it says so'
+    }
+    [void](& $invoke (& $byId 'back') 'Back')
+  }
+  if (& $invoke (& $byId 'open-yourlists') 'the Your lists row') {
+    $acc = Test-View 'Settings > Your lists' $win
+    Check (@($acc | Where-Object { $_.Type -eq 'Button' -and $_.Name -in 'Open the lists folder', 'Recently deleted' }).Count -eq 2) 'the lists folder and Recently deleted'
+    [void](& $invoke (& $byId 'back') 'Back')
+  }
+  if (& $invoke (& $byId 'open-about') 'the About row') {
+    $acc = Test-View 'Settings > About' $win
+    Check (@($acc | Where-Object { $_.Type -eq 'Text' -and $_.Name -match '^Saqme To Do \d+\.\d+\.\d+$' }).Count -ge 2) 'About says the version (and so does the line under it)'
+    [void](& $invoke (& $byId 'back') 'Back')
+  }
+  [void](& $invoke (& $byId 'open-updates') 'the Updates row')
+  [void](Test-View 'Settings > Updates' $win)
 } finally {
   Set-Content $quitFile 'x'
   [void](Wait-For { $proc.HasExited } 8000)

@@ -5,7 +5,7 @@ part is checked; and what is not verified automatically. Target: WCAG 2.2 level 
 
 | | Phone app (iPhone, Android, browsers, and the window of the Linux/macOS app) | Windows widget |
 |---|---|---|
-| Checked with | `worker/test/ui/pwa-a11y-check.mjs`: axe-core 4 (WCAG 2.2 A/AA + best practices) on every main view in both themes, plus keyboard, focus, announcement, motion and zoom checks in Chromium | `scripts/dev/uia-check.ps1`: reads the UI Automation tree, which is what Narrator and other Windows screen readers use, in the list, settings and shortcuts views |
+| Checked with | `worker/test/ui/pwa-a11y-check.mjs`: axe-core 4 (WCAG 2.2 A/AA + best practices) on every main view in both themes, plus keyboard, focus, announcement, motion and zoom checks in Chromium | `scripts/dev/uia-check.ps1`: reads the UI Automation tree, which is what Narrator and other Windows screen readers use, in the list, Settings and each of its pages, and the shortcuts view |
 | Result | no serious or critical axe findings; all behaviour checks pass | every control named, operable and focusable; structure and Tab order as below |
 | Colours | `worker/test/node/tokens.test.js` for both apps: text ≥ 4.5 : 1, status chips, their glyphs and the focus ring ≥ 3 : 1 (also on hovered and selected rows), in both themes | |
 
@@ -51,15 +51,27 @@ milliseconds) and falls back to the old elements if that ever fails.
   window buttons and the settings button (the logo). Every text box has a name and a hint (placeholders are
   not labels). Decorative glyphs and placeholders are hidden from screen readers; hidden hover tools are not
   in the tree.
+- **Settings.** A list of pages, each a button whose name says the page and how it stands ("Sync & sharing,
+  Synced 2 min ago, 1 conflict"). Every view's title is its Back button and names where it goes ("General -
+  back to Settings"). *Advanced* on Sync & sharing is a disclosure: a button that reports expanded or collapsed
+  (UI Automation's ExpandCollapse) and says in its hint what is inside. The version line under the Settings views
+  is read as text; when an update needs a look it becomes a link that says so ("Saqme To Do 1.1.0. Update
+  available: 1.2.0") and opens Updates. The violet "needs a look" dot is never alone: the words next to it say
+  what it is about.
 - **Keyboard and Tab order.** Tab moves through the window: Settings, the current project tab (Left / Right
   switch projects), New project, sync and conflicts when shown, Options, Minimize, Fullscreen, Close, the task
   list (one stop: the selected task), the *Completed* toggle, the new-task box. Enter / Space use the focused
   control. In the list, Up / Down move the selection and keyboard focus together, so Narrator reads each
   task; Enter edits, Space marks done, Ctrl+M opens the task menu (now with *Change status...*), Shift+F10 the
-  menu of the focused tab or task. The keyboard shortcuts page in Settings lists them all.
+  menu of the focused tab or task. The keyboard shortcuts page (Settings > General) lists them all. In Settings,
+  Tab goes from the window buttons to the view's title (Back), then down the page, and last to the version line
+  when it is a link; Esc goes back one level (a page to Settings, Settings to the list), and Ctrl+, opens or
+  closes Settings.
 - **Focus.** A 2 px violet ring (the theme's accent, ≥ 3 : 1) on the focused control, shown for keyboard focus
   only; the selected task keeps its tinted line and violet edge. After every change the widget puts focus back
-  on the selected task.
+  on the selected task. Opening a Settings view puts focus on its title, so a screen reader says where you are;
+  going back puts it on the row you came from (or, back in the list with no task selected, on the Settings
+  button); a view rebuilt in place (sync status, a switch flipped) keeps focus on the same control.
 
 ## Colour and contrast
 
@@ -93,8 +105,9 @@ All in `design/tokens.json`, shared by both apps and tested on every run:
   iOS 15.5); its accessibility tree was not inspected.
 - **The desktop focus ring on screen.** It is a standard WPF focus visual with a tested colour, but the check
   window runs off-screen without taking focus (so it never disturbs your desktop), so the ring was not seen.
-- **Windows High Contrast themes** are not supported: the widget keeps its own colours. Larger text works
-  through Windows display scaling, not through the separate *Text size* setting.
+- **Windows High Contrast themes** are not supported: the widget keeps its own colours (tested for contrast
+  above, Settings included). Larger text works through Windows display scaling, not through the separate *Text
+  size* setting.
 - **iOS Dynamic Type** does not change the phone app's text size (it uses fixed sizes); page zoom does.
 
 ## Running the checks

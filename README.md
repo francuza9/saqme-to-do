@@ -50,11 +50,12 @@ curl -fsSL https://raw.githubusercontent.com/francuza9/saqme-to-do/main/scripts/
 ```
 
 Setup installs the app with your lists on this computer; no account is needed. To have them on your phone
-too, open the app's **Settings > Sync** and choose **Set up sync**. It creates your own free sync service in
-your Cloudflare account and uploads your lists (nothing is deleted). The one step it cannot do for you is the
-Cloudflare login: a browser window opens, you sign in (or create a free account) and click **Allow**. Then the
-app shows a QR code for your phone. From then on the app updates itself, your sync service and the phone app
-with it (**Settings > Updates**); running setup again is still safe at any time and repairs the app.
+too, open the app's **Settings > Sync & sharing** (Linux/macOS: **Settings > Sync**) and choose **Set up
+sync**. It creates your own free sync service in your Cloudflare account and uploads your lists (nothing is
+deleted). The one step it cannot do for you is the Cloudflare login: a browser window opens, you sign in (or
+create a free account) and click **Allow**. Then the app shows a QR code for your phone. From then on the app
+updates itself, your sync service and the phone app with it (**Settings > Updates**); running setup again is
+still safe at any time and repairs the app.
 
 | | Without an account | With sync |
 |---|---|---|
@@ -71,7 +72,7 @@ Prefer to look first? Download the repository as a ZIP and run **`setup.cmd`** (
 | Windows | macOS, Linux | What it does |
 |---|---|---|
 | (default) | (default) | only the app; your lists stay on this computer |
-| `-Cloud` | `--cloud` | the app and the cloud part (what Settings > Sync > Set up sync does; also updates it) |
+| `-Cloud` | `--cloud` | the app and the cloud part (what *Set up sync* in the app's Settings does; also updates it) |
 | `-CloudOnly` | `--cloud-only` | only the cloud part |
 | `-RotateToken` | `--rotate-token` | a new access key: the old one stops working at once (pair your devices again) |
 | `-DeviceLogin` | `--device-login` | log in to Cloudflare with a code instead of a browser redirect |
@@ -83,7 +84,8 @@ Prefer to look first? Download the repository as a ZIP and run **`setup.cmd`** (
 ## Your phone in 3 steps
 
 1. **Scan the QR code** the computer app shows after setting up sync with the phone camera, and open the
-   link (Safari on iPhone, Chrome on Android). To see it again: **Settings > Sync > Pair phone**.
+   link (Safari on iPhone, Chrome on Android). To see it again: **Settings > Sync & sharing > Pair phone** on
+   Windows, **Settings > Sync** on Linux and macOS.
 2. **Add it to the Home Screen:** on iPhone tap **Share**, then **Add to Home Screen**; on Android, **Install app**.
    On iPhone, open Saqme from the Home Screen and type the **pairing code** shown under the QR code (and in
    Safari after step 1): iOS gives Home Screen apps storage of their own, so the app starts unpaired.
