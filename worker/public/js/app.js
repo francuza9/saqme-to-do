@@ -34,7 +34,9 @@ const isStandalone = () => matchMedia('(display-mode: standalone)').matches || n
 const isIOS = () => /iPad|iPhone|iPod/.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
 
 const ui = {
-  view: 'list',          // list | settings | trash | conflicts
+  view: 'list',          // list | settings | one of its pages (PAGES) | keys | trash | conflicts
+  focusKey: '',          // the control (data-fk) that gets keyboard focus after the next render (a view just opened)
+  advancedOpen: false,   // Settings > Sync & sharing > Advanced
   project: ls.get('project'),
   editing: null,         // { id } or { draft: { projectId, parentId, index, afterId, depth } }
   notesEditing: null,    // task id
@@ -125,7 +127,12 @@ function render() {
   renderTabs();
   renderStatus();
   if (!(ui.editing || ui.notesEditing || ui.drag)) renderMain();   // never pull the rug while typing / dragging
-  if (fk && (document.activeElement === document.body || !document.activeElement?.isConnected)) focusKey(fk);
+  if (ui.focusKey) {
+    // a view just opened: focus on what go() asked for, else on its Back button (keyboard and screen readers land there)
+    const want = ui.focusKey;
+    ui.focusKey = '';
+    if (!focusKey(want) && ui.view !== 'list') focusKey('back');
+  } else if (fk && (document.activeElement === document.body || !document.activeElement?.isConnected)) focusKey(fk);
 }
 
 // ---------------------------------------------------------------- shared lists
@@ -157,7 +164,7 @@ const ACCESS = {
   edit: { name: 'Can edit', help: 'They can add, change, check off and delete tasks in this list.' },
   view: { name: 'Can view', help: 'They see the list and its updates, but can\'t change anything.' },
 };
-const SHARE_NEEDS_SYNC = 'Sharing needs sync with your own Cloudflare account (Settings, Sync): a shared list lives on your sync service, where the people you share it with sync it from.';
+const SHARE_NEEDS_SYNC = 'Sharing needs sync with your own Cloudflare account (Settings › Sync & sharing): a shared list lives on your sync service, where the people you share it with sync it from.';
 /** A sharing call's error -> what to say: "not updated yet" when one's own sync service is older than sharing. */
 function shareError(e) {
   const older = ui.local ? (ui.local.cloud?.workerApi ?? SHARING_API) < SHARING_API : store.olderServer(SHARING_API);
@@ -264,8 +271,11 @@ function confirmLeave(projectId, share = null) {
 async function shareSheet(projectId) {
   const p = store.get('project', projectId);
   if (!p) return;
-  const state = { access: 'edit', invite: null, people: null, error: '' };
-  const name = h('input', { class: 'field', placeholder: 'Their name, e.g. Nuca', maxLength: 60, autocapitalize: 'words', 'aria-label': 'Their name (only you see it)', enterKeyHint: 'done' });
+  const state = { access: 'edit', invite: null, people: null, error: '', open: null, busy: false };
+  const name = h('input', {
+    class: 'g-input', placeholder: 'Their name, e.g. Nuca', maxLength: 60, autocapitalize: 'words', 'aria-label': 'Their name',
+    'aria-description': 'Only you see it: it is how you recognise them in this list later', enterKeyHint: 'done', dataset: { fk: 'share-name' },
+  });
   const draw = () => {
     if (els.sheetWrap.hidden && state.drawn) return;   // closed meanwhile
     state.drawn = true;
@@ -277,33 +287,38 @@ async function shareSheet(projectId) {
     const create = async () => {
       const alias = name.value.trim();
       if (!alias) { name.classList.add('bad'); name.focus(); return; }
+      if (state.busy) return;
+      state.busy = true; draw();
       try {
         state.invite = await shareApi.invite(projectId, alias, state.access);
         name.value = '';
         if (ui.local) loadLocalInfo();
         else if (!store.sharedByMe(projectId)) store.setMeta({ shared: [...(store.meta.shared ?? []), projectId] });
+        state.busy = false;
         await refresh();
-      } catch (e) { state.error = shareError(e); draw(); }
+      } catch (e) { state.busy = false; state.error = shareError(e); draw(); }
     };
     name.onkeydown = (e) => { if (e.key === 'Enter') { e.preventDefault(); create(); } };
     name.oninput = () => name.classList.remove('bad');
+    // who (a name only you see), what they may do, and the link; then who has it, one row each
     const out = [
-      h('p', { class: 'sheet-note' }, 'They get a link that works once, for 24 hours. The list stays on your sync service; they sync it from there with a key that reaches this list only.'),
-      h('div', { class: 'field-row' }, name),
-      h('div', { class: 'field-row' }, accessPick),
-      h('p', { class: 'sheet-note' }, ACCESS[state.access].help),
-      h('div', { class: 'btn-row' }, h('button', { class: 'btn primary', onclick: create }, 'Create invite link')),
-      state.error ? h('div', { class: 'callout', role: 'alert' }, state.error) : null,
+      head('Invite someone', 3),
+      card(inputRow(name), infoRow('Access', '', accessPick),
+        actionRow(state.busy ? 'Creating…' : 'Create invite link', create, { name: 'Create invite link', fk: 'share-create' })),
+      foot(`Only you see their name. ${ACCESS[state.access].help} They get a link that works once, for 24 hours; the list stays on your sync service, and they sync it from there with a key that reaches this list only.`),
+      state.error ? foot(state.error, { alert: true }) : null,
     ];
-    if (state.invite) out.push(inviteBlock(state.invite));
-    out.push(h('h3', { class: 'sheet-label' }, 'Shared with'));
-    if (!state.people) out.push(h('p', { class: 'sheet-note' }, 'Loading…'));
-    else if (!state.people.length) out.push(h('p', { class: 'sheet-note' }, 'Nobody yet.'));
-    for (const s of state.people ?? []) out.push(personRow(s, refresh));
+    if (state.invite) out.push(...inviteBlock(state.invite));
+    out.push(head('Shared with', 3));
+    if (!state.people) out.push(note('Loading…'));
+    else if (!state.people.length) out.push(note('Nobody yet.'));
+    else out.push(card(state.people.map((s) => personRows(s, state, draw, refresh))));
     out.push(h('div', { class: 'btn-row' }, h('button', { class: 'btn', onclick: closeSheet }, 'Done')));
-    const focusName = document.activeElement === name;
+    // (the sheet is rebuilt: keyboard focus stays on the same control)
+    const fk = els.sheet.contains(document.activeElement) ? document.activeElement?.dataset?.fk : '';
     sheet(`Share “${p.fields.name.v}”`, out);
-    if (focusName) name.focus();
+    if (fk) focusKey(fk);
+    if (state.error) announce(state.error);
   };
   const refresh = async () => {
     try { state.people = (await shareApi.list(projectId)).shares; state.error = ''; } catch (e) { state.people = state.people ?? []; state.error = shareError(e); }
@@ -315,38 +330,57 @@ async function shareSheet(projectId) {
   await refresh();
 }
 
-/** The invite just made: its link (copy, QR on larger screens), and what it does. */
+/** The invite just made: its link with Copy (and a QR code on larger screens), and what it does. */
 function inviteBlock(inv) {
-  const box = h('input', { class: 'field', value: inv.link, readOnly: true, 'aria-label': 'Invite link', onfocus: (e) => e.target.select() });
-  const block = h('div', { class: 'invite' },
-    h('p', { class: 'sheet-note' }, h('b', {}, `Invite for ${inv.share.alias}`), ` · ${ACCESS[inv.share.access].name} · works once, until ${new Date(inv.expiresAt).toLocaleString([], { weekday: 'short', hour: '2-digit', minute: '2-digit' })}`),
-    h('div', { class: 'field-row' }, box, h('button', { class: 'btn primary', onclick: () => copyText(inv.link, 'Invite link copied') }, 'Copy')),
-    h('p', { class: 'sheet-note' }, 'Send it to them yourself (a message, an email). Whoever opens it first joins, so send it to them only.'));
+  const box = h('input', { class: 'g-input', value: inv.link, readOnly: true, 'aria-label': 'Invite link', onfocus: (e) => e.target.select(), dataset: { fk: 'invite-link' } });
+  const out = [
+    head('Invite link', 3),
+    h('div', { class: 'group invite' }, inputRow(box, textButton('Copy', () => copyText(inv.link, 'Invite link copied'), { name: 'Copy the invite link', fk: 'invite-copy' }))),
+    foot(`For ${inv.share.alias}, ${ACCESS[inv.share.access].name.toLowerCase()}. It works once, until ${new Date(inv.expiresAt).toLocaleString([], { weekday: 'short', hour: '2-digit', minute: '2-digit' })}. Send it to them yourself (a message, an email): whoever opens it first joins, so send it to them only.`),
+  ];
   if (matchMedia('(min-width: 560px) and (pointer: fine)').matches) {
+    const img = h('img', { class: 'qr in-group', alt: 'QR code with the invite link', hidden: true });
     import('./qr.js').then(({ qrMatrix, qrToSvg }) => {
       const svg = qrToSvg(qrMatrix(inv.link, 'M'), { margin: 4, scale: 5 });
-      block.append(h('img', { class: 'qr', alt: 'QR code with the invite link', src: `data:image/svg+xml;charset=utf-8,${encodeURIComponent(svg)}` }));
+      img.src = `data:image/svg+xml;charset=utf-8,${encodeURIComponent(svg)}`;
+      img.hidden = false;
     }).catch(() => {});
+    out.push(img);
   }
-  return block;
+  return out;
 }
 
-/** One person a list is shared with: name, access (changeable), joined or invited, and revoke / cancel. */
-function personRow(s, refresh) {
+/**
+ * One person a list is shared with: a row (their name, their access or "Invited") that opens the rows under it: when
+ * they joined or were invited, the access choices, and revoke / cancel the invite / remove it.
+ */
+function personRows(s, state, draw, refresh) {
   const when = (ms) => new Date(ms).toLocaleDateString([], { day: 'numeric', month: 'short' });
-  const state = s.state === 'joined' ? `joined ${when(s.joinedAt)}` : s.state === 'pending' ? `invited ${when(s.createdAt)}, not joined yet` : 'invite expired';
+  const stand = s.state === 'joined' ? `Joined ${when(s.joinedAt)}` : s.state === 'pending' ? `Invited ${when(s.createdAt)}, not joined yet` : 'Invite expired, never used';
+  const access = ACCESS[s.access]?.name ?? s.access;
+  const value = s.state === 'joined' ? access : s.state === 'pending' ? 'Invited' : 'Expired';
+  const open = state.open === s.id;
   const act = async (fn, done) => { try { await fn(); toast(done); } catch (e) { toast(e.message); } await refresh(); };
-  const access = h('div', { class: 'segmented small', role: 'group', 'aria-label': `Access for ${s.alias}` },
-    ...Object.entries(ACCESS).map(([v, a]) => h('button', {
-      class: v === s.access ? 'on' : '', 'aria-pressed': String(v === s.access), title: a.help,
-      onclick: () => { if (v !== s.access) act(() => shareApi.update(s.id, v), `${s.alias}: ${a.name.toLowerCase()}`); },
-    }, a.name)));
-  const end = s.state === 'joined'
-    ? h('button', { class: 'btn danger', title: 'Their key stops working now; the list stays on their device as their own copy.', onclick: () => act(() => shareApi.revoke(s.id), `${s.alias} no longer has the list`) }, 'Revoke')
-    : h('button', { class: 'btn', onclick: () => act(() => shareApi.revoke(s.id), s.state === 'pending' ? 'Invite cancelled' : 'Removed') }, s.state === 'pending' ? 'Cancel invite' : 'Remove');
-  return h('div', { class: 'person' },
-    h('div', { class: 'who' }, h('div', { class: 'what' }, s.alias), h('div', { class: 'sub' }, state)),
-    h('div', { class: 'btn-row' }, access, end));
+  const rows = [h('button', {
+    class: 'g-row link person', 'aria-expanded': String(open), 'aria-description': `${stand}. Opens their access, and revoke`, title: stand, dataset: { fk: `person:${s.id}` },
+    onclick: () => { state.open = open ? null : s.id; draw(); },
+  }, rowParts(s.alias, { value, trailing: chevron() }))];
+  if (!open) return rows;
+  rows.push(h('div', { class: 'g-row sub info' }, h('span', { class: 'g-label' }, stand)));
+  if (s.state !== 'expired') {
+    for (const [v, a] of Object.entries(ACCESS)) {
+      const cur = v === s.access;
+      rows.push(h('button', {
+        class: 'g-row sub choice', 'aria-pressed': String(cur), 'aria-label': `${a.name} for ${s.alias}`, title: a.help, 'aria-description': a.help,
+        dataset: { fk: `access:${s.id}:${v}` }, onclick: () => { if (!cur) act(() => shareApi.update(s.id, v), `${s.alias}: ${a.name.toLowerCase()}`); },
+      }, h('span', { class: 'g-label' }, a.name), cur ? h('span', { class: 'check', 'aria-hidden': 'true' }, icon('check')) : null));
+    }
+  }
+  const [label, danger, help, done] = s.state === 'joined'
+    ? ['Revoke', true, 'Their key stops working now; the list stays on their device as their own copy.', `${s.alias} no longer has the list`]
+    : s.state === 'pending' ? ['Cancel invite', false, '', 'Invite cancelled'] : ['Remove', false, '', 'Removed'];
+  rows.push(actionRow(label, () => act(() => shareApi.revoke(s.id), done), { danger, help, name: `${label}: ${s.alias}`, fk: `end:${s.id}`, cls: 'sub' }));
+  return rows;
 }
 
 /** Join a list someone shares: the invite link pasted (or found on the clipboard). */
@@ -378,7 +412,7 @@ function confirmJoin(link, inv) {
   if (!ui.local && !store.meta.token && inv.server !== location.origin) {
     // no sync of its own: this app reaches its own address only (its security policy), so the list opens there
     sheet('Open the invite link instead', [
-      h('p', {}, `This list is on ${host}. Without a sync of your own, open the invite link itself: its page has “Use it in this browser”, with nothing to install and no account. Or pair this app with your own sync first (Settings, Sync), then join here.`),
+      h('p', {}, `This list is on ${host}. Without a sync of your own, open the invite link itself: its page has “Use it in this browser”, with nothing to install and no account. Or pair this app with your own sync first (Settings › Sync & sharing), then join here.`),
       h('div', { class: 'btn-row' },
         h('button', { class: 'btn', onclick: closeSheet }, 'Not now'),
         h('a', { class: 'btn primary', href: `${inv.server}/join#code=${inv.code}`, rel: 'noreferrer' }, 'Open the invite')),
@@ -398,6 +432,8 @@ function confirmJoin(link, inv) {
           if (ui.local) {
             const r = await api('local/join', { link });
             closeSheet();
+            const box = document.querySelector('[data-fk="join-input"]');   // (Settings stays open here: empty its box)
+            if (box) box.value = '';
             toast(`Joined “${r.name}”. It shows up in a few seconds.`);
             setTimeout(loadLocalInfo, 2500);
           } else {
@@ -444,7 +480,7 @@ async function moveToAppSheet(sh) {
     h('p', {}, 'Your Saqme app takes this list over, with its tasks and your access: no new invite needed. This browser stops syncing it then, and it goes from here.'),
     h('ol', { class: 'steps' },
       h('li', {}, h('b', {}, 'Saqme on this computer: '), 'Open in Saqme To Do (it asks first).'),
-      h('li', {}, h('b', {}, 'The phone app: '), 'copy the link, then in Saqme: Settings › Sync › Join a shared list.'),
+      h('li', {}, h('b', {}, 'The phone app: '), 'copy the link, then in Saqme: Settings › Sync & sharing, and paste it under Shared lists.'),
       h('li', {}, h('b', {}, 'Another computer: '), 'send yourself the link and open it there.')),
     block,
     h('p', { class: 'sheet-note' }, `The link works once, until ${new Date(m.expiresAt).toLocaleString([], { weekday: 'short', hour: '2-digit', minute: '2-digit' })}.`),
@@ -467,7 +503,7 @@ function readJoinLink() {
 /**
  * On open and when the app comes back: an invite link on the clipboard -> "Join shared list?". Only where the
  * browser lets a page read the clipboard without asking (permission granted); elsewhere (iPhone) it is the
- * Paste button in Settings › Sync › Join a shared list.
+ * Paste button in Settings › Sync & sharing › Shared lists.
  */
 async function checkClipboardForInvite() {
   if (ui.local || !navigator.clipboard?.readText || !els.sheetWrap.hidden) return;
@@ -506,7 +542,7 @@ function projectNameSheet(id) {
 function confirmDeleteProject(id) {
   const p = store.get('project', id);
   sheet(`Delete “${p.fields.name.v}”?`, [
-    h('p', {}, 'Its tasks move to Recently deleted (Settings), nothing is erased. You can restore the project from there.'),
+    h('p', {}, 'Its tasks move to Recently deleted (Settings › Your lists), nothing is erased. You can restore the project from there.'),
     h('div', { class: 'btn-row' },
       h('button', { class: 'btn', onclick: closeSheet }, 'Cancel'),
       h('button', { class: 'btn primary', onclick: () => {
@@ -523,7 +559,7 @@ function ago(ms) {
   if (s < 60) return `${s} s ago`;
   if (s < 3600) return `${Math.round(s / 60)} min ago`;
   if (s < 86400) return `${Math.round(s / 3600)} h ago`;
-  return new Date(ms).toLocaleString();
+  return new Date(ms).toLocaleString([], { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' });   // (short: it is a row's value)
 }
 
 function statusText() {
@@ -555,10 +591,9 @@ function renderStatus() {
 function renderMain() {
   const showAdd = ui.view === 'list' && !!currentProject() && !showWelcome() && !readOnly(currentProject().id);
   els.addBar.hidden = !showAdd;
+  els.app.classList.toggle('no-add', !showAdd);
   if (ui.view === 'list' && showWelcome()) return renderWelcome();
-  if (ui.view === 'settings') return renderSettings();
-  if (ui.view === 'trash') return renderTrash();
-  if (ui.view === 'conflicts') return renderConflicts();
+  if (ui.view !== 'list') return renderSettingsView();
   renderTasks();
 }
 
@@ -585,10 +620,11 @@ function renderTasks() {
   const shared = sharing(proj.id)?.withMe;
   if (shared) {
     const st = store.shareStatus.get(shared.id) ?? shared.status;
-    const trouble = st?.state === 'paused' ? ' Not synced while this app is not paired: your sync service keeps it in step. Pair it again in Settings, Sync; what you change meanwhile waits here.'
+    const trouble = st?.state === 'paused' ? ' Not synced while this app is not paired: your sync service keeps it in step. Pair it again in Settings › Sync & sharing; what you change meanwhile waits here.'
       : st && (st.state === 'offline' || st.state === 'error') ? ` Not synced right now: ${st.message || st.state}.` : '';
     if (shared.access === 'view' || trouble) {
-      frag.push(h('div', { class: 'callout shared-note', role: trouble ? 'status' : null },
+      // (a line above the cards, like the Windows app's; in ink when something is wrong)
+      frag.push(h('p', { class: `shared-note${trouble ? ' trouble' : ''}`, role: trouble ? 'status' : null },
         shared.access === 'view' ? h('b', {}, 'View only. ') : null,
         `Shared with you from ${hostOf(shared.server)}.${shared.access === 'view' ? ' You see the changes as they are made, but can\'t change it.' : ''}${trouble}`));
     }
@@ -598,13 +634,14 @@ function renderTasks() {
   const draft = ui.editing?.draft;
   const name = listName(proj);
   frag.push(h('h1', { class: 'sr-only' }, name));
-  const list = (label, items) => (items.length ? h('div', { class: 'tasks', role: 'list', 'aria-label': label }, items) : null);
+  // each section is a card of its tasks (docs/design.md, "Grouped lists"); Postponed and Completed under headings
+  const list = (label, items) => (items.length ? h('div', { class: 'tasks group', role: 'list', 'aria-label': label }, items) : null);
   const activeItems = [];
   for (const n of active) renderNode(activeItems, n, 'active');
   if (draft && !draft.parentId && !draft.afterId) activeItems.push(listItem(0, taskRow(null, 'active', draft)));
   frag.push(list(name, activeItems));
   if (postponed.length) {
-    frag.push(h('h2', { class: 'section-label' }, h('span', {}, 'Postponed')));
+    frag.push(h('h2', { class: 'g-head list-head' }, 'Postponed'));
     const items = [];
     for (const n of postponed) renderNode(items, n, 'postponed');
     frag.push(list('Postponed', items));
@@ -613,8 +650,9 @@ function renderTasks() {
     const show = ls.get('showCompleted') === '1';
     frag.push(h('h2', { class: 'completed-heading' }, h('button', {
       class: `completed-toggle${show ? ' open' : ''}`, 'aria-expanded': String(show), dataset: { fk: 'completed' },
+      'aria-label': `Completed, ${closed.length} ${closed.length === 1 ? 'task' : 'tasks'}`,
       onclick: () => { ls.set('showCompleted', show ? '0' : '1'); commitAll(); render(); },
-    }, icon('chevron'), h('span', {}, 'Completed ', h('span', { class: 'count' }, `· ${closed.length}`)))));
+    }, h('span', {}, 'Completed'), h('span', { class: 'count' }, ` · ${closed.length}`), icon('chevron'))));
     if (show) { const items = []; for (const n of closed) renderNode(items, n, 'closed'); frag.push(list('Completed', items)); }
   }
   if (!ui.visible.length && !draft) {
@@ -624,8 +662,9 @@ function renderTasks() {
   if (ui.sel && !ui.visible.includes(ui.sel)) ui.sel = null;
 }
 
-// one list item per task (its row + notes); nesting is flat in the page and told by aria-level
-const listItem = (depth, ...children) => h('div', { class: 'task-item', role: 'listitem', 'aria-level': String(depth + 1) }, ...children);
+// one list item per task (its row + notes); nesting is flat in the page and told by aria-level. Its depth also
+// places the hairline above it, from where its text starts
+const listItem = (depth, ...children) => h('div', { class: 'task-item', role: 'listitem', 'aria-level': String(depth + 1), style: { '--depth': String(depth) } }, ...children);
 function renderNode(frag, node, section) {
   const draft = ui.editing?.draft;
   ui.visible.push(node.id);
@@ -652,15 +691,15 @@ function installHint() {
     h('div', {}, h('b', {}, 'Install the app: '), 'tap ', h('b', {}, 'Share'), ' then ', h('b', {}, 'Add to Home Screen'),
       ', and open Saqme from the Home Screen for notifications and full screen.'),
     // Safari keeps a tab's data apart from the Home Screen app's, and may clear it after a week without a visit
-    store.meta.token ? null : h('div', {}, 'Lists you make in this Safari tab stay in this tab: the Home Screen app starts empty, and Safari may clear them after a week without opening them. Install first, or export them (Settings, Data) and import them in the app.'),
-    h('div', { class: 'btn-row' }, h('button', { class: 'btn', onclick: () => { ls.set('installHint', 'off'); render(); } }, 'Got it')));
+    store.meta.token ? null : h('div', {}, 'Lists you make in this Safari tab stay in this tab: the Home Screen app starts empty, and Safari may clear them after a week without opening them. Install first, or export them (Settings › Your lists) and import them in the app.'),
+    h('div', { class: 'btn-row' }, h('button', { class: 'g-btn', onclick: () => { ls.set('installHint', 'off'); render(); } }, 'Got it')));
 }
 
 /** Shown while edits cannot be written to the phone's storage (they are kept in memory and retried). */
 function saveWarning() {
   return h('div', { class: 'callout', role: 'alert' },
     h('b', {}, 'Changes are not saved on this phone right now. '),
-    `${store.saveError} They stay while the app is open and are saved as soon as it works again.${store.meta.token ? '' : ' Export your lists (Settings, Data) to be safe.'}`);
+    `${store.saveError} They stay while the app is open and are saved as soon as it works again.${store.meta.token ? '' : ' Export your lists (Settings › Your lists) to be safe.'}`);
 }
 
 function taskRow(node, section, draft = null) {
@@ -674,8 +713,9 @@ function taskRow(node, section, draft = null) {
   const depth = node ? node.depth : draft.depth;
   const ro = !!t && readOnly(t.fields.place.v.project);   // a view-only shared list: read, never change
   // the row takes keyboard focus as one unit (arrow keys move it), and says what it is in one phrase
+  const notesBelow = !!node && (open || ui.notesEditing === id) && (!!notes || ui.notesEditing === id);
   const row = h('div', {
-    class: `row${id && ui.sel === id ? ' sel' : ''}`, dataset: { id: id ?? '', fk: id ? `row:${id}` : '' }, style: { '--depth': String(depth) },
+    class: `row${id && ui.sel === id ? ' sel' : ''}${notesBelow ? ' with-notes' : ''}`, dataset: { id: id ?? '', fk: id ? `row:${id}` : '' }, style: { '--depth': String(depth) },
     role: node ? 'group' : null, tabindex: node ? (ui.sel === id ? '0' : '-1') : null, 'aria-label': node ? rowSummary(node, st) : null,
   });
   if (node) {
@@ -728,7 +768,7 @@ function taskRow(node, section, draft = null) {
       const urgent = tone === 'over' || tone === 'soon';
       const shown = dueLabel(due.date) + (due.time ? ` ${due.time}` : '');
       const b = h(ro ? 'span' : 'button', {
-        class: urgent ? `pill ${tone}` : 'due', title: `Deadline: ${dueLong(due)}`, dataset: { fk: ro ? '' : `due:${id}` }, 'aria-haspopup': ro ? null : 'dialog',
+        class: `m-due ${urgent ? `pill ${tone}` : 'due'}`, title: `Deadline: ${dueLong(due)}`, dataset: { fk: ro ? '' : `due:${id}` }, 'aria-haspopup': ro ? null : 'dialog',
         'aria-label': `Deadline: ${shown}${tone === 'over' ? ', overdue' : ''}`,   // the state in words, not only in colour
       }, shown);
       if (!ro) b.addEventListener('click', () => { commitAll(); dueSheet(id); });
@@ -736,9 +776,9 @@ function taskRow(node, section, draft = null) {
     }
     if (hasKids) {
       const p = progress(node);
-      meta.push(h('span', { class: 'item', title: `${p.done} of ${p.total} subtasks closed` }, h('span', { 'aria-hidden': 'true' }, `${p.done}/${p.total}`), h('span', { class: 'sr-only' }, `${p.done} of ${p.total} subtasks closed`)));
+      meta.push(h('span', { class: 'item m-progress', title: `${p.done} of ${p.total} subtasks closed` }, h('span', { 'aria-hidden': 'true' }, `${p.done}/${p.total}`), h('span', { class: 'sr-only' }, `${p.done} of ${p.total} subtasks closed`)));
     }
-    if (notes && !open) meta.push(h('span', { class: 'item', title: 'Has notes or links' }, icon('link'), h('span', { class: 'sr-only' }, 'Has notes')));
+    if (notes && !open) meta.push(h('span', { class: 'item m-notes', title: 'Has notes or links' }, icon('link'), h('span', { class: 'sr-only' }, 'Has notes')));
     if (meta.length) main.append(h('div', { class: 'meta' }, meta));
   }
   row.append(main);
@@ -786,7 +826,7 @@ function notesBlock(node) {
       else if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) { e.preventDefault(); done(); }
     });
     ta.addEventListener('blur', () => { if (ui.notesEditing === id) done(); });
-    wrap.append(ta, h('div', { class: 'notes-actions' }, h('button', { class: 'btn primary', onpointerdown: (e) => e.preventDefault(), onclick: done }, 'Done')));
+    wrap.append(ta, h('div', { class: 'notes-actions' }, h('button', { class: 'g-btn notes-done', onpointerdown: (e) => e.preventDefault(), onclick: done }, 'Done')));
     queueMicrotask(() => { ta.focus(); autosize(ta); ta.setSelectionRange(ta.value.length, ta.value.length); });
   } else {
     const lines = node.task.fields.notes.v.split('\n');
@@ -1035,7 +1075,12 @@ function closeSheet() {
   // back to the control that opened it (found again by its key after a re-render)
   requestAnimationFrame(() => { if (fk && (document.activeElement === document.body || !document.activeElement)) focusKey(fk); });
 }
-function focusKey(fk) { document.querySelector(`[data-fk="${CSS.escape(fk)}"]`)?.focus({ preventScroll: true }); }
+/** Focuses the control with this data-fk key; false when there is none. */
+function focusKey(fk) {
+  const el = document.querySelector(`[data-fk="${CSS.escape(fk)}"]`);
+  el?.focus({ preventScroll: true });
+  return !!el;
+}
 els.backdrop.addEventListener('click', closeSheet);
 document.addEventListener('keydown', (e) => {
   if (els.sheetWrap.hidden) return;
@@ -1261,19 +1306,123 @@ document.addEventListener('keydown', (e) => {
   if (row && e.key.startsWith('Arrow')) row.focus({ preventScroll: true });   // screen readers announce the task
 });
 
-// ---------------------------------------------------------------- secondary views
-function viewHeader(title, back = 'list') {
-  const go = () => { ui.view = back; render(); els.list.scrollTop = 0; };
-  return h('div', { class: 'view-header', onclick: go },
-    h('button', { class: 'back', 'aria-label': back === 'list' ? 'Back to the list' : 'Back to settings', dataset: { fk: `back:${title}` }, onclick: (e) => { e.stopPropagation(); go(); } }, icon('back')),
+// Settings: Esc goes back one level (a page to Settings, Settings to the list), unless a sheet or an editor used it
+document.addEventListener('keydown', (e) => {
+  if (e.key !== 'Escape' || e.defaultPrevented || ui.view === 'list' || !els.sheetWrap.hidden) return;
+  e.preventDefault();
+  goBack();
+});
+
+// ---------------------------------------------------------------- Settings and the views it opens
+// Settings is a short list of pages, as in the Windows app: General, Notifications, Sync & sharing, Your lists; then
+// App: Updates (the Linux/macOS window only: the phone app updates with its sync service) and About. Every view is a
+// grouped list (docs/design.md, "Grouped lists"): cards of one-line rows, where places to go have a chevron, actions are
+// violet rows (red when risky) and what needs explaining is a footnote under the card. Rare and risky actions sit at the
+// bottom of their page, under Advanced. A quiet line at the bottom of every view says the version.
+const PAGES = { general: 'General', notifications: 'Notifications', sync: 'Sync & sharing', lists: 'Your lists', updates: 'Updates', about: 'About' };
+const VIEW_TITLES = { list: 'the list', settings: 'Settings', ...PAGES, keys: 'Keyboard shortcuts', trash: 'Recently deleted', conflicts: 'Conflicts' };
+// where Back (the header, Esc) goes from each view; a page's is Settings
+const VIEW_PARENT = { settings: 'list', keys: 'general', trash: 'lists', conflicts: 'sync' };
+const parentOf = (view) => VIEW_PARENT[view] ?? 'settings';
+
+/** Opens a view. Keyboard focus goes to the control with the data-fk key `focus`, else to the new view's Back button. */
+function go(view, focus = '') {
+  commitAll();
+  const fromList = ui.view === 'list';
+  ui.view = view;
+  ui.focusKey = focus || (view === 'list' ? '' : 'back');
+  render();
+  els.list.scrollTop = 0;
+  if (fromList && view !== 'list') loadLocalInfo();
+}
+/** Back: one level up, with focus on the row that opened the view just left (in the list: the task, or Settings). */
+function goBack() {
+  const from = ui.view;
+  if (from === 'list') return;
+  const to = parentOf(from);
+  go(to, to !== 'list' ? `open:${from}` : ui.sel ? `row:${ui.sel}` : 'logo');
+}
+
+function viewHeader(title) {
+  const back = `Back to ${VIEW_TITLES[parentOf(ui.view)]}`;
+  return h('div', { class: 'view-header', onclick: goBack },
+    h('button', { class: 'back', 'aria-label': back, title: back, dataset: { fk: 'back' }, onclick: (e) => { e.stopPropagation(); goBack(); } }, icon('back')),
     h('h1', {}, title));
 }
-const label = (text) => h('h2', { class: 'section-label flush' }, h('span', {}, text));   // settings: in line with the rows
-function setting(title, sub, control) {
-  return h('div', { class: 'setting' }, h('div', { class: 'label' }, h('div', {}, title), sub ? h('div', { class: 'sub' }, sub) : null), control);
+
+// ---- the parts of a grouped list
+/** A heading over the next card (level 3 inside a sheet, whose title is the h2). */
+const head = (text, level = 2) => h(`h${level}`, { class: 'g-head' }, text);
+/**
+ * The footnote under a card: what its rows mean, when that is not obvious. alert: something went wrong (in the alert
+ * colour; not a live region, since a view is rebuilt as its status changes: what happens is announced where it happens).
+ */
+const foot = (content, { alert = false } = {}) => (content && (!Array.isArray(content) || content.some(Boolean)) ? h('p', { class: `g-foot${alert ? ' alert' : ''}` }, content) : null);
+/** A quiet paragraph of its own, between cards. */
+const note = (...content) => h('p', { class: 'g-note' }, ...content);
+/** A card of rows; null when there are none. */
+function card(...rows) {
+  const r = rows.flat().filter(Boolean);
+  return r.length ? h('div', { class: 'group' }, r) : null;
 }
-function linkRow(title, sub, fn) {
-  return h('button', { class: 'setting link', onclick: fn }, h('div', { class: 'label' }, h('div', {}, title), sub ? h('div', { class: 'sub' }, sub) : null), icon('chevron'));
+/** A row's content, all on one line: [icon] label ...... [dot] value [trailing]. */
+function rowParts(label, { value = '', dot = false, ic = '', trailing = null } = {}) {
+  return [
+    ic ? h('span', { class: 'g-icon', 'aria-hidden': 'true' }, icon(ic)) : null,
+    h('span', { class: 'g-label' }, label),
+    value || dot ? h('span', { class: 'g-value' }, dot ? h('span', { class: 'dot', 'aria-hidden': 'true' }) : null, value ? h('span', { class: 'g-vtext' }, value) : null) : null,
+    trailing,
+  ];
+}
+const rowClass = (kind, { ic = '', long = false, cls = '' } = {}) => ['g-row', kind, ic ? 'icon' : '', long ? 'long' : '', cls].filter(Boolean).join(' ');
+const chevron = () => h('span', { class: 'g-chev', 'aria-hidden': 'true' }, icon('chevron'));
+/** A row that does nothing by itself: a value (long: the value may be long, and is the one cut short), or a control at its end. */
+function infoRow(label, value = '', trailing = null, { dot = false, ic = '', title = '', long = false } = {}) {
+  return h('div', { class: rowClass('', { ic, long }), title: title || null }, rowParts(label, { value, dot, ic, trailing }));
+}
+/**
+ * A row that opens a view: label, value, chevron. Its name is what it shows (a screen reader reads both); help says
+ * the rest (how it stands in full, what is on the view) as its description and tooltip. Its key is open:<view>, so
+ * Back puts focus on it again.
+ */
+function linkRow(label, value, view, { dot = false, ic = '', help = '' } = {}) {
+  return h('button', {
+    class: rowClass('link', { ic }), title: help || null, 'aria-description': help || null,
+    dataset: { fk: `open:${view}` }, onclick: () => go(view),
+  }, rowParts(label, { value, dot, ic, trailing: chevron() }));
+}
+/**
+ * A row that does something: its label violet, red when it is risky. name: a fuller name for screen readers, which
+ * starts with the label (it is what a voice-control user says); help: what it does, if that is not obvious.
+ */
+function actionRow(label, fn, { danger = false, name = '', help = '', value = '', dot = false, fk = '', cls = '' } = {}) {
+  return h('button', {
+    class: rowClass(`action${danger ? ' danger' : ''}`, { cls }), 'aria-label': name || null, title: help || null, 'aria-description': help || null,
+    dataset: { fk: fk || `do:${label}` }, onclick: () => fn(),
+  }, rowParts(label, { value, dot }));
+}
+/** A switch: the whole row is the switch, and flips it. */
+function switchRow(label, on, onToggle, { help = '', fk = '' } = {}) {
+  return h('button', {
+    class: rowClass('switch-row'), role: 'switch', 'aria-checked': String(on), title: help || null, 'aria-description': help || null,
+    dataset: { fk: fk || `switch:${label}` }, onclick: () => onToggle(!on),
+  }, rowParts(label, { trailing: h('span', { class: `switch${on ? ' on' : ''}`, 'aria-hidden': 'true' }, h('span', { class: 'knob' })) }));
+}
+/** A text box that is a row, with its buttons at the end. */
+const inputRow = (input, ...buttons) => h('div', { class: 'g-row input' }, input, ...buttons);
+/** The box of an input row. Its key keeps what was typed when the view is rebuilt (renderSettingsView). */
+function rowInput(fk, placeholder, label, { help = '', autocapitalize = 'off' } = {}) {
+  return h('input', {
+    class: 'g-input', placeholder, 'aria-label': label, 'aria-description': help || null, title: help || null,
+    autocapitalize, autocomplete: 'off', spellcheck: false, enterKeyHint: 'go', dataset: { fk },
+  });
+}
+/** A small button at the end of a row (Join, Leave, Restore): text only, violet or red. */
+function textButton(text, fn, { danger = false, name = '', help = '', fk = '' } = {}) {
+  return h('button', {
+    class: `g-btn${danger ? ' danger' : ''}`, 'aria-label': name || null, title: help || null, 'aria-description': help || null,
+    dataset: fk ? { fk } : null, onclick: (e) => { e.stopPropagation(); fn(); },
+  }, text);
 }
 function segmented(options, current, onPick, label = '') {
   return h('div', { class: 'segmented', role: 'group', 'aria-label': label || null },
@@ -1287,71 +1436,286 @@ function applyTheme() {
 }
 matchMedia('(prefers-color-scheme: light)').addEventListener('change', applyTheme);
 
-function renderSettings() {
-  const out = [viewHeader('Settings')];
-  out.push(label('Appearance'));
-  out.push(setting('Theme', 'Auto follows the light / dark setting of this device',
-    segmented([['dark', 'Dark'], ['light', 'Light'], ['auto', 'Auto']], ls.get('theme', 'auto'), (v) => { ls.set('theme', v); applyTheme(); render(); }, 'Theme')));
-
-  out.push(label('Reminders'));
-  const at = h('input', { class: 'time-input', type: 'time', value: store.setting('notifyAt', '10:00').padStart(5, '0'), 'aria-label': 'Daily summary time' });
-  at.addEventListener('change', () => { if (at.value) { store.setSetting('notifyAt', `${+at.value.slice(0, 2)}:${at.value.slice(3, 5)}`); syncSharePush(); } });
-  out.push(setting('Daily summary at', 'Tasks due today or overdue, one notification (shared with the desktop)', at));
-  out.push(...notificationSettings());
-
-  out.push(label('Sync'));
-  if (ui.local) out.push(...localSyncSettings());
-  else {
-    out.push(setting(statusText(), store.meta.token ? `This device: ${store.meta.deviceId}`
-      : 'Sync is set up from a computer: in the Saqme app there, Settings, Sync, Set up sync. Then type the code its Pair phone shows here, or scan its QR code.',
-      store.meta.token ? h('button', { class: 'btn', onclick: () => store.sync({ force: true }) }, 'Sync now') : null));
-    if (store.meta.token) {
-      out.push(setting('Pair a phone', 'A one-time code (and the QR code) for the app on another phone, or on this phone\'s Home Screen', h('button', { class: 'btn', onclick: showPairing }, 'Show')));
-      out.push(setting('Server', store.meta.server ? new URL(store.meta.server).host : location.host, h('button', { class: 'btn danger', title: turnOffHelp('device'), onclick: confirmUnpair }, 'Unpair')));
-    } else out.push(pairingField());
+const VIEWS = {
+  settings: settingsHome, general: generalPage, notifications: notificationsPage, sync: syncPage, lists: listsPage,
+  updates: updatesPage, about: aboutPage, keys: keysPage, trash: trashPage, conflicts: conflictsPage,
+};
+/** Every view but the list: its header (Back, title), its cards, and the version line at the bottom. */
+function renderSettingsView() {
+  if (!VIEWS[ui.view] || (ui.view === 'updates' && !ui.local)) ui.view = 'settings';
+  // a view rebuilt in place (sync status, the Linux/macOS app's news) keeps what was typed in its boxes
+  const typed = new Map([...els.list.querySelectorAll('input.g-input[data-fk]')].map((i) => [i.dataset.fk, [i.value, i.selectionStart, i.selectionEnd]]));
+  els.list.replaceChildren(viewHeader(VIEW_TITLES[ui.view]), ...VIEWS[ui.view]().filter(Boolean), versionLine());
+  for (const i of els.list.querySelectorAll('input.g-input[data-fk]')) {
+    const t = typed.get(i.dataset.fk);
+    if (t && !i.readOnly) { i.value = t[0]; try { i.setSelectionRange(t[1], t[2]); } catch { /* not a text box */ } }
   }
-  out.push(...sharedListSettings());
-  if (ui.local) out.push(...localUpdateSettings());
-
-  out.push(label('Data'));
-  if (store.saveError) out.push(saveWarning());
-  out.push(setting('Export lists', 'Markdown files in a zip, the same format as the desktop app', h('button', { class: 'btn', onclick: exportLists }, 'Export')));
-  out.push(setting('Import lists', 'Markdown files or a zip of them. Tasks already here are skipped.', h('button', { class: 'btn', onclick: importLists }, 'Import')));
-  const n = store.conflicts().length;
-  const nn = allNotices().length;
-  out.push(linkRow('Conflicts', [n ? `${n} change${n > 1 ? 's' : ''} made on two devices at once` : '', nn ? `${nn} not saved in a shared list` : ''].filter(Boolean).join(', ') || 'None', () => { ui.view = 'conflicts'; render(); }));
-  out.push(linkRow('Recently deleted', 'Restore deleted tasks and projects', () => { ui.view = 'trash'; render(); }));
-
-  out.push(label('About'));
-  out.push(h('div', { class: 'callout' }, ui.local
-    ? 'Saqme To Do. Your lists are the markdown files in the lists folder above; this window, AI assistants and any editor can change them.'
-    : store.meta.token
-      ? 'Saqme To Do. Your lists live in your own Cloudflare account; this device keeps a full offline copy and syncs in the background.'
-      : 'Saqme To Do. Your lists are stored on this device only. Export them now and then, or pair with your own sync to keep a copy elsewhere.'));
-  if (!ui.local && bootVersion) {
-    out.push(setting(`Version ${bootVersion}`, 'It updates by itself with your sync service (the computer that set it up updates it).', null));
-  }
-  els.list.replaceChildren(...out);
 }
 
-/** Settings › Sync: join a list someone shares, and the lists shared with this device (each can be left). */
-function sharedListSettings() {
-  const out = [label('Shared lists')];
-  out.push(setting('Join a shared list', ui.local ? 'Paste the invite link someone sent you (or run saqme join LINK). Works without cloud sync too.'
-    : store.meta.token ? 'Paste the invite link someone sent you. Your sync service keeps the list for this app and your other phones.'
-      : 'Paste the invite link someone sent you. No sync of your own needed: open the invite link itself, and its page opens the list in this browser.',
-  h('button', { class: 'btn', onclick: () => joinSheet() }, 'Join…')));
-  const mine = ui.local ? (ui.local.shares ?? []) : store.shares();
-  for (const s of mine) {
-    const p = store.get('project', s.projectId);
-    const st = store.shareStatus.get(s.id) ?? s.status;
-    const status = st?.state === 'offline' || st?.state === 'error' || st?.state === 'paused' ? ` · ${st.message || st.state}` : '';
-    const where = inBrowser(s) ? ' · in this browser' : '';
-    const leave = h('button', { class: 'btn danger', onclick: () => confirmLeave(s.projectId, s) }, 'Leave');
-    out.push(setting(p && !ui.local ? listName(p) : (p?.fields.name.v ?? s.name), `From ${hostOf(s.server)} · ${ACCESS[s.access]?.name ?? s.access}${where}${status}`,
-      inBrowser(s) ? h('div', { class: 'btn-row' }, h('button', { class: 'btn', onclick: () => moveToAppSheet(s) }, 'Move to my Saqme app'), leave) : leave));
+/** The version this window runs: the Linux/macOS app's, or the one the server that serves the phone app says. */
+const appVersion = () => ui.local?.version ?? bootVersion;
+/** The quiet line at the bottom of every Settings view. When an update needs a look (Linux, macOS), it says so and opens Updates. */
+function versionLine() {
+  const v = appVersion();
+  const text = v ? `Saqme To Do ${v}` : 'Saqme To Do';
+  const badge = updateBadge();
+  if (badge && ui.view !== 'updates') {
+    return h('button', { class: 'version-line', 'aria-description': 'Opens Settings, Updates', dataset: { fk: 'version' }, onclick: () => go('updates') },
+      h('span', {}, text), h('span', { class: 'upd' }, badge.dot ? h('span', { class: 'dot', 'aria-hidden': 'true' }) : null, badge.text));
+  }
+  return h('p', { class: 'version-line' }, h('span', {}, text), badge ? h('span', {}, badge.text) : null);
+}
+
+const THEMES = { dark: 'Dark', light: 'Light', auto: 'Auto' };
+/** Settings: two cards of pages (the app's own things last), each row with how it stands on the right. */
+function settingsHome() {
+  const sentence = (t) => (t ? `${t[0].toUpperCase()}${t.slice(1)}. ` : '');
+  const page = (id, s, help, ic) => linkRow(PAGES[id], s.short, id, { ic, dot: !!s.dot, help: `${sentence(s.text)}${help}` });
+  const theme = THEMES[ls.get('theme', 'auto')] ?? 'Auto';
+  const v = appVersion();
+  return [
+    card(
+      page('general', { short: theme, text: `${theme.toLowerCase()} theme` }, showKeys() ? 'Theme, keyboard shortcuts' : 'Theme', 'gear'),
+      page('notifications', notificationSummary(), ui.local ? 'Daily summary' : 'Daily summary, notifications on this device', 'bell'),
+      page('sync', syncSummary(), `${ui.local ? 'Set up sync or how it stands' : 'Pairing or how sync stands'}, pair a phone, conflicts, shared lists`, 'cloud'),
+      page('lists', listsSummary(), `${ui.local ? 'Lists folder, ' : ''}export, import, recently deleted`, 'lists'),
+    ),
+    head('App'),
+    card(
+      ui.local ? page('updates', updateBadge() ?? updateSummary(), 'The version, checking and installing updates', 'update') : null,
+      page('about', { short: v ?? '', text: v ? `version ${v}` : 'Saqme To Do' }, 'Version, where your lists are', 'info'),
+    ),
+  ];
+}
+
+/** The keyboard shortcuts page is offered where there is a keyboard to use them: the desktop window, a mouse or trackpad. */
+const showKeys = () => !!ui.local || matchMedia('(any-pointer: fine)').matches;
+function generalPage() {
+  const theme = segmented([['dark', 'Dark'], ['light', 'Light'], ['auto', 'Auto']], ls.get('theme', 'auto'), (v) => { ls.set('theme', v); applyTheme(); render(); }, 'Theme');
+  return [
+    card(infoRow('Theme', '', theme)),
+    foot('Auto follows the light or dark setting of this device.'),
+    showKeys() ? card(linkRow('Keyboard shortcuts', '', 'keys', { help: 'Everything you can do with the keyboard' })) : null,
+  ];
+}
+
+const IS_MAC = /Mac|iPhone|iPad|iPod/.test(navigator.platform);
+/** What the keyboard does (the list's handler, the editors' and the sheets'): what on the left, its keys on the right. */
+function keysPage() {
+  const mod = IS_MAC ? 'Cmd' : 'Ctrl';
+  const alt = IS_MAC ? 'Option' : 'Alt';
+  const sections = [
+    ['Tasks', [
+      ['Up / Down', 'Previous / next task'], ['Enter', 'Edit the task'], ['Space', 'Done / not done'], ['Right / Left', 'Open / close a task'],
+      [`${alt}+Up / ${alt}+Down`, 'Move the task'], [`${mod}+D`, 'Deadline'], [`${mod}+I`, 'Notes / links'], [`${mod}+M`, 'Task menu'],
+      [`${mod}+N`, 'New task'], ['Esc', 'Clear the selection'],
+    ], 'A screen reader reads the selected task. The task menu has the deadline, notes, subtasks, moves and delete; a right-click (or a long press) on a task opens it too.'],
+    ['While editing a task', [
+      ['Enter', 'Save, new task below'], ['Shift+Enter', 'Save, new subtask'], ['Enter', 'Stop (on an empty line)'], ['Up / Down', 'Edit the previous / next'],
+      ['Tab / Shift+Tab', 'Subtask / back out'], ['Esc', 'Cancel'], [`${mod}+Enter`, 'Save the notes'],
+    ]],
+    ['Everywhere', [
+      ['Tab / Shift+Tab', 'Move around the window'], ['Enter / Space', 'Use the focused button'], ['Esc', 'Close a menu, back one level'],
+    ], 'Esc goes from a Settings page to Settings, and from Settings to the list.'],
+  ];
+  const out = [];
+  for (const [title, rows, footnote] of sections) {
+    out.push(head(title), card(rows.map(([keys, what]) => infoRow(what, '', h('span', { class: 'keys' },
+      h('span', { class: 'sr-only' }, ': '), keys.split(' / ').map((k, i) => [i ? h('span', { class: 'sr-only' }, ' or ') : null, h('kbd', {}, k)])), { title: `${what}: ${keys}` }))));
+    if (footnote) out.push(foot(footnote));
   }
   return out;
+}
+
+function notificationSummary() {
+  const at = store.setting('notifyAt', '10:00');
+  if (ui.local) return { short: at, text: `daily summary at ${at}` };
+  const p = pushState();
+  return p.state === 'on' ? { short: at, text: `on, daily summary at ${at}` } : { short: p.short, text: p.short.toLowerCase() };
+}
+function notificationsPage() {
+  const at = h('input', { class: 'time-input', type: 'time', value: store.setting('notifyAt', '10:00').padStart(5, '0'), 'aria-label': 'Daily summary time', dataset: { fk: 'notifyAt' } });
+  at.addEventListener('change', () => { if (at.value) { store.setSetting('notifyAt', `${+at.value.slice(0, 2)}:${at.value.slice(3, 5)}`); syncSharePush(); } });
+  const out = [
+    card(infoRow('Daily summary', '', at)),
+    foot('One notification with what is due today or overdue, at this time (the same on your devices that sync). A task with a deadline time also reminds you 15 minutes before it and at the time.'),
+  ];
+  if (ui.local) {
+    out.push(card(infoRow('Notifications', 'On this computer')), foot('Shown by your computer while Saqme runs (it starts when you log in).'));
+    return out;
+  }
+  const p = pushState();
+  if (p.state === 'on' || p.state === 'off') {
+    out.push(card(
+      switchRow('Notifications', p.state === 'on', async (on) => { if (on) await enablePush(); else { await disablePush(); render(); } }, { help: p.help, fk: 'push' }),
+      p.state === 'on' ? actionRow('Send a test notification', testPush) : null));
+  } else out.push(card(infoRow('Notifications', p.short)));
+  out.push(foot(p.help));
+  return out;
+}
+
+/** How sync stands, in a few words: the value of a row ('' when this device has no sync of its own). */
+function syncShort() {
+  if (ui.local) {
+    const c = ui.local.cloud;
+    if (!c) return ui.cloudSetup?.running ? 'Setting up…' : '';
+    return { synced: c.lastSync ? `Synced ${ago(c.lastSync)}` : 'Synced', syncing: 'Syncing…', offline: 'Offline' }[c.state] ?? 'Sync error';
+  }
+  if (!store.meta.token) return '';
+  const st = store.status.state;
+  if (st === 'idle') return store.meta.lastSync ? `Synced ${ago(store.meta.lastSync)}` : 'Synced';
+  if (st === 'offline') { const n = store.pendingCount(); return n ? `Offline, ${n} waiting` : 'Offline'; }
+  return { syncing: 'Syncing…', error: 'Sync error' }[st] ?? '';
+}
+/** The Sync & sharing row: own sync, conflicts, shared lists, paused deletes. text says all of it; short is what needs a look first. */
+function syncSummary() {
+  const n = store.conflicts().length + allNotices().length;
+  const nc = n === 1 ? '1 conflict' : `${n} conflicts`;
+  const sh = (ui.local ? ui.local.shares ?? [] : store.shares()).length;
+  const ns = sh === 1 ? '1 shared list' : `${sh} shared lists`;
+  const guarded = !!ui.local?.guarded;
+  const own = syncShort();
+  return {
+    text: [own || 'sync is off', n ? nc : '', sh ? ns : '', guarded ? 'deletions paused' : ''].filter(Boolean).join(', '),
+    short: n ? nc : guarded ? 'Deletions paused' : own || (sh ? ns : 'Off'),
+    dot: !!(n || guarded),
+  };
+}
+function syncPage() {
+  return [
+    ...(ui.local ? localSyncSettings() : phoneSyncSettings()),
+    ...sharedListSettings(),
+    ...(ui.local?.guarded ? guardedSettings() : []),
+    ...advancedSettings(),
+  ];
+}
+/** The row to Conflicts, when there are some (also what a shared list's server did not take). */
+function conflictsRow() {
+  const n = store.conflicts().length + allNotices().length;
+  return n ? linkRow('Conflicts', String(n), 'conflicts', { dot: true, help:'Changed on two devices at once, or not saved in a shared list: pick what to keep' }) : null;
+}
+/** The phone app's own sync: pair it (a code or a link), or how it stands. */
+function phoneSyncSettings() {
+  const out = [head('Sync')];
+  if (!store.meta.token) {
+    out.push(card(infoRow('This device', 'Not paired'), pairingRow(), conflictsRow()));
+    out.push(foot('Sync is set up from a computer: in the Saqme app there, Settings › Sync & sharing › Set up sync. Then type the code its Pair phone shows here, paste its pairing link, or scan its QR code with the camera.'));
+    return out;
+  }
+  const st = store.status;
+  out.push(card(
+    infoRow('Status', syncShort(), null, { title: statusText() }),
+    actionRow('Sync now', () => store.sync({ force: true })),
+    actionRow('Pair a phone', showPairing, { help: 'A one-time code and the QR code, for the app on another phone or on this phone\'s Home Screen' }),
+    conflictsRow(),
+  ));
+  if (st.state === 'error') out.push(foot(`Sync error: ${st.message}`, { alert: true }));
+  out.push(foot(`Your sync service: ${hostOf(store.meta.server || location.origin)}${store.meta.serverVersion ? `, version ${store.meta.serverVersion}` : ''}. This device: ${store.meta.deviceId}.`));
+  return out;
+}
+/** Sync & sharing > Advanced: turning sync off (a row that opens the rest of its card). */
+function advancedSettings() {
+  if (!(ui.local ? ui.local.cloud : store.meta.token)) return [];
+  const open = ui.advancedOpen;
+  const what = ui.local ? 'Turn off sync' : 'Unpair this device';
+  const help = ui.local ? turnOffHelp('computer') : `${turnOffHelp('device')} Changes not yet synced stay queued until you pair again.`;
+  return [
+    card(
+      h('button', {
+        class: 'g-row link', 'aria-expanded': String(open), 'aria-description': what, dataset: { fk: 'advanced' },
+        onclick: () => { ui.advancedOpen = !open; render(); },
+      }, rowParts('Advanced', { trailing: chevron() })),
+      open ? actionRow(what, ui.local ? confirmTurnOff : confirmUnpair, { danger: true, help }) : null),
+    open ? foot(help) : null,
+  ];
+}
+function confirmTurnOff() {
+  sheet('Turn off sync?', [h('p', {}, turnOffHelp('computer')), h('div', { class: 'btn-row' },
+    h('button', { class: 'btn', onclick: closeSheet }, 'Cancel'),
+    h('button', { class: 'btn primary', onclick: async () => { closeSheet(); try { await api('local/disconnect', {}); ui.advancedOpen = false; await loadLocalInfo(); render(); } catch (e) { toast(e.message); } } }, 'Turn off'))]);
+}
+
+function listsSummary() {
+  const n = store.projects().length;
+  const nl = n === 1 ? '1 list' : `${n} lists`;
+  return store.saveError ? { short: 'Not saved', text: `${nl}, changes not saved`, dot: true } : { short: nl, text: nl };
+}
+function listsPage() {
+  const l = ui.local;
+  return [
+    store.saveError ? saveWarning() : null,
+    card(
+      l ? actionRow('Copy the lists folder path', () => copyText(l.lists, 'Folder path copied'), { help: l.lists }) : null,
+      actionRow('Export lists', exportLists, { help: 'Markdown files in a zip, the same format as the desktop app' }),
+      actionRow('Import lists', importLists, { help: 'Markdown files or a zip of them. Tasks already here are skipped.' }),
+      linkRow('Recently deleted', '', 'trash', { help: 'Restore deleted tasks and lists' }),
+    ),
+    foot(l ? `Plain markdown files, one per list, in ${l.lists}: this window, AI assistants and any editor can change them. Export saves them in a zip; Import adds lists from such files (tasks already here are skipped).`
+      : 'Export saves your lists as markdown files in a zip, the same format as the desktop app. Import takes such files or a zip of them; tasks already here are skipped.'),
+  ];
+}
+
+function aboutPage() {
+  const v = appVersion();
+  const badge = updateBadge();
+  const where = ui.local ? 'Your lists are the markdown files in the lists folder (Your lists): this window, AI assistants and any editor can change them.'
+    : store.meta.token ? 'Your lists live in your own Cloudflare account; this device keeps a full offline copy and syncs in the background.'
+      : 'Your lists are stored on this device only. Export them now and then (Your lists), or pair with your own sync to keep a copy elsewhere.';
+  return [
+    card(
+      v ? infoRow('Version', v) : null,
+      badge ? linkRow('Updates', badge.short, 'updates', { dot: badge.dot, help: badge.text }) : null,
+    ),
+    foot(ui.local ? (ui.local.update?.supported ? 'It updates itself, and your sync service with it (Updates).' : 'This copy runs from a source folder and does not update itself.')
+      : v ? 'It updates by itself with your sync service (the computer that set it up updates it).' : 'This copy updates with the site that serves it.'),
+    note(`${where} Saqme To Do is free and open source (MIT license).`),
+  ];
+}
+
+/** Sync & sharing > Shared lists: join one (paste its invite link), and the lists shared with this device, each with Leave. */
+function sharedListSettings() {
+  const input = rowInput('join-input', 'Paste an invite link to join', 'Invite link', { help: 'From the person who shares the list with you' });
+  const submit = () => {
+    const inv = parseInviteLink(input.value);
+    if (!inv) { input.classList.add('bad'); toast('That is not an invite link (it looks like https://…/join#code=…).'); return; }
+    confirmJoin(input.value.trim(), inv);
+  };
+  input.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); submit(); } });
+  input.addEventListener('input', () => input.classList.remove('bad'));
+  // (on an iPhone the clipboard is read only on a tap like this one)
+  const paste = navigator.clipboard?.readText ? textButton('Paste', async () => {
+    try { input.value = (await navigator.clipboard.readText()).trim(); input.classList.remove('bad'); input.focus(); } catch { toast('Paste it into the box instead.'); }
+  }, { name: 'Paste the invite link', fk: 'join-paste' }) : null;
+  const rows = [inputRow(input, paste, textButton('Join', submit, { name: 'Join the shared list', fk: 'join-go' }))];
+  const here = ui.local ? 'computer' : 'device';
+  for (const s of ui.local ? (ui.local.shares ?? []) : store.shares()) {
+    const p = store.get('project', s.projectId);
+    const name = p && !ui.local ? listName(p) : (p?.fields.name.v ?? s.name);
+    const st = store.shareStatus.get(s.id) ?? s.status;
+    const trouble = st?.state === 'offline' || st?.state === 'error' || st?.state === 'paused';
+    const access = ACCESS[s.access]?.name ?? s.access;
+    const about = `From ${hostOf(s.server)}, ${access.toLowerCase()}${inBrowser(s) ? ', in this browser' : ''}${trouble ? `, not synced: ${st.message || st.state}` : ''}`;
+    // a list used here in the browser can also move to one's Saqme app: its own small menu
+    const end = inBrowser(s)
+      ? textButton('Options', () => sharedListMenu(s, name), { name: `Options for ${name}`, help: `${about}. Move it to your Saqme app, or leave it.`, fk: `share-opts:${s.id}` })
+      : textButton('Leave', () => confirmLeave(s.projectId, s), { danger: true, name: `Leave ${name}`, help: `${about}. It goes from this ${here}; nothing changes in the owner's list.`, fk: `leave:${s.id}` });
+    rows.push(infoRow(name, trouble ? 'Not synced' : access, end, { dot: trouble, title: about }));
+  }
+  return [
+    head('Shared lists'),
+    card(rows),
+    foot(ui.local ? 'Someone shared a list with you? Paste the invite link they sent (or run saqme join LINK); it works without cloud sync too. To share one of your own lists, right-click its tab and choose Share.'
+      : store.meta.token ? 'Someone shared a list with you? Paste the invite link they sent: your sync service keeps the list for this app and your other phones. To share one of your own lists, long-press its tab and choose Share.'
+        : 'Someone shared a list with you? No sync of your own needed: open the invite link itself, and its page opens the list in this browser.'),
+  ];
+}
+function sharedListMenu(s, name) {
+  sheet(name, [
+    h('p', { class: 'sheet-note' }, `Shared with you from ${hostOf(s.server)} · ${ACCESS[s.access]?.name}. You use it here in this browser.`),
+    menuItem('share', 'Move to my Saqme app', () => moveToAppSheet(s), { keepOpen: true }),
+    h('div', { class: 'menu-sep' }),
+    menuItem('leave', 'Leave this list', () => confirmLeave(s.projectId, s), { danger: true }),
+  ]);
 }
 
 // ---------------------------------------------------------------- the Linux/macOS app (local server)
@@ -1368,116 +1732,152 @@ function setupOutput(lines) {
   return pre;
 }
 
-/** Settings > Sync > Set up sync: the local server runs the cloud setup; follow it until it ends. */
+/** Settings > Sync & sharing > Set up sync: the local server runs the cloud setup; follow it until it ends. */
 async function startCloudSetup() {
   try { ui.cloudSetup = await api('local/cloud-setup', {}); } catch (e) { toast(e.message); return; }
   render();
   while (ui.cloudSetup?.running) {
     await new Promise((r) => setTimeout(r, 1000));
     try { ui.cloudSetup = await api('local/cloud-setup'); } catch { break; }
-    if (ui.view === 'settings' && !ui.editing) render();
+    if (ui.view !== 'list' && !ui.editing) render();
   }
   if (ui.cloudSetup?.result?.ok) {
     announce('Sync is set up.');
     await loadLocalInfo();
     render();
     showPairing();   // what comes next: the phone
-  } else render();
+  } else {
+    if (ui.cloudSetup?.result && !ui.cloudSetup.result.ok) announce(`Sync was not set up. ${ui.cloudSetup.result.message}`);
+    render();
+  }
 }
 
+/** The Linux/macOS window's cloud sync: set it up (or connect with a pairing link), or how it stands. */
 function localSyncSettings() {
-  const l = ui.local;
-  const out = [setting('Lists folder', l.lists, h('button', { class: 'btn', onclick: () => copyText(l.lists, 'Folder path copied') }, 'Copy path'))];
-  const c = l.cloud;
+  const c = ui.local.cloud;
   const run = ui.cloudSetup;
+  const out = [head('Sync')];
   if (!c && run?.running) {
-    out.push(h('div', { class: 'callout', role: 'status' },
-      h('div', {}, h('b', {}, 'Setting up sync. '), 'Sign in to Cloudflare in the browser (or create a free account) and click Allow. No browser opened? Use the sign-in link below.'),
-      setupOutput(run.lines),
-      h('div', { class: 'btn-row' }, h('button', { class: 'btn', onclick: async () => { ui.cloudSetup = await api('local/cloud-setup/cancel', {}).catch(() => ui.cloudSetup); render(); } }, 'Cancel'))));
+    out.push(
+      card(infoRow('Sync with your phone', 'Setting up…'),
+        actionRow('Cancel', async () => { ui.cloudSetup = await api('local/cloud-setup/cancel', {}).catch(() => ui.cloudSetup); render(); }, { name: 'Cancel setting up sync' })),
+      foot('Sign in to Cloudflare in the browser (or create a free account) and click Allow. No browser opened? Use the sign-in link below.'),
+      setupOutput(run.lines));
     return out;
   }
   if (!c) {
-    out.push(setting('Sync with your phone', `Off for now. ${SETUP_HELP}`,
-      h('button', { class: 'btn primary', title: SETUP_HELP, onclick: startCloudSetup }, 'Set up sync')));
+    out.push(card(infoRow('Sync with your phone', 'Off'), actionRow('Set up sync', startCloudSetup, { help: SETUP_HELP }), conflictsRow()), foot(SETUP_HELP));
     if (run?.result && !run.result.ok) {
-      out.push(h('div', { class: 'callout', role: 'alert' }, h('div', {}, h('b', {}, 'Sync was not set up. '), `${run.result.message} ${run.result.next || ''} Nothing changed on this computer.`), run.lines.length ? setupOutput(run.lines) : null));
+      out.push(foot(`Sync was not set up. ${run.result.message} ${run.result.next || ''} Nothing changed on this computer.`.replace(/ {2,}/g, ' '), { alert: true }));
+      if (run.lines.length) out.push(setupOutput(run.lines));
     }
-  } else {
-    const cloudText = c.state === 'synced' ? `On, with ${c.label}${c.lastSync ? ` · synced ${ago(c.lastSync)}` : ''}${c.conflicts ? ` · ${c.conflicts} conflicts to look at on your phone` : ''}`
-      : `${c.label}: ${c.message || c.state}`;
-    out.push(setting('Cloud sync', cloudText, null));
-  }
-  if (!c) {
     // like the Windows app: a pairing link from a device that already syncs connects this computer too
-    out.push(setting('Already syncing elsewhere?', 'Paste the pairing link from a device that already syncs (its Settings, Sync, Pair phone).', null));
-    const input = h('input', { class: 'field', placeholder: 'Paste a pairing link to sync', autocapitalize: 'off', autocomplete: 'off', spellcheck: false });
-    const go = () => {
+    const input = rowInput('connect-input', 'Paste its pairing link', 'Pairing link', { help: 'From a device that already syncs: Settings › Sync & sharing › Pair a phone, Copy link' });
+    const submit = () => {
       const p = parsePairingLink(input.value);
       if (!p?.server) { input.classList.add('bad'); toast('That is not a pairing link (https://saqme.<name>.workers.dev/#pair=...).'); return; }
+      const link = input.value.trim();
       confirmSyncWith(p.server, async () => {
-        try { await api('local/connect', { link: input.value.trim() }); toast('Connected. Syncing starts in a few seconds.'); setTimeout(loadLocalInfo, 2500); }
-        catch (e) { input.classList.add('bad'); toast(e.message); }
+        // (the page may have been rebuilt meanwhile: its box now is the one with the same key)
+        const box = () => document.querySelector('[data-fk="connect-input"]');
+        try { await api('local/connect', { link }); if (box()) box().value = ''; toast('Connected. Syncing starts in a few seconds.'); setTimeout(loadLocalInfo, 2500); }
+        catch (e) { box()?.classList.add('bad'); toast(e.message); }
       });
     };
-    input.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); go(); } });
-    out.push(h('div', { class: 'field-row' }, input, h('button', { class: 'btn primary', onclick: go }, 'Connect')));
+    input.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); submit(); } });
+    input.addEventListener('input', () => input.classList.remove('bad'));
+    out.push(head('Already syncing on another device?'),
+      card(inputRow(input, textButton('Connect', submit, { name: 'Connect with this pairing link', fk: 'connect-go' }))),
+      foot('There: Settings › Sync & sharing › Pair a phone › Copy link. It looks like https://saqme.<name>.workers.dev/#pair=…'));
+    return out;
   }
-  if (c) {
-    out.push(setting('Pair phone', 'The QR code and a one-time code that connect your phone to the same lists', h('button', { class: 'btn', onclick: showPairing }, 'Show')));
-    out.push(setting('Turn off sync', turnOffHelp('computer'), h('button', { class: 'btn danger', title: turnOffHelp('computer'), onclick: () => {
-      sheet('Turn off sync?', [h('p', {}, turnOffHelp('computer')), h('div', { class: 'btn-row' },
-        h('button', { class: 'btn', onclick: closeSheet }, 'Cancel'),
-        h('button', { class: 'btn primary', onclick: async () => { closeSheet(); try { await api('local/disconnect', {}); await loadLocalInfo(); render(); } catch (e) { toast(e.message); } } }, 'Turn off'))]);
-    } }, 'Turn off')));
-  }
-  if (l.guarded) {
-    out.push(h('div', { class: 'callout' },
-      `${l.guarded} tasks disappeared from the lists folder at once, so deleting them everywhere is paused. If you removed them on purpose, confirm it.`,
-      h('div', { class: 'btn-row' }, h('button', { class: 'btn danger', onclick: async () => {
-        try { await api('local/allow-deletes', {}); toast('Confirmed. They will be deleted everywhere.'); } catch (e) { toast(`Could not confirm: ${e.message}`); }
-      } }, 'Delete them'))));
-  }
+  const short = syncShort();
+  out.push(card(
+    infoRow('Status', short, null, { title: c.message || short }),
+    actionRow('Pair a phone', showPairing, { help: 'The QR code and a one-time code that connect your phone to the same lists' }),
+    conflictsRow(),
+  ));
+  if (c.message && c.state !== 'synced' && c.state !== 'syncing') out.push(foot(c.message, { alert: c.state === 'error' }));
+  out.push(foot(`Your sync service: ${c.label}${c.workerVersion ? `, version ${c.workerVersion}` : ''}.${c.conflicts ? ` ${c.conflicts} ${c.conflicts === 1 ? 'conflict' : 'conflicts'} to look at on your phone.` : ''}`));
   return out;
 }
+/** Tasks that vanished from the lists folder at once: deleting them everywhere waits for a yes (shown while it does). */
+function guardedSettings() {
+  const g = ui.local.guarded;
+  const msg = `${g} tasks disappeared from the lists folder at once, so deleting them everywhere is paused in case that was an accident. Restore the file, or, if you removed them on purpose, confirm it.`;
+  return [
+    head('Deletions paused'),
+    card(
+      infoRow('Waiting for you', `${g} tasks`, null, { dot: true, title: msg }),
+      actionRow('Delete them', async () => {
+        try { await api('local/allow-deletes', {}); toast('Confirmed. They will be deleted everywhere.'); } catch (e) { toast(`Could not confirm: ${e.message}`); }
+      }, { danger: true, help: 'Confirms the paused deletions: the tasks are deleted everywhere' })),
+    foot(msg),
+  ];
+}
 
+/** When an update needs a look (the version line's news, the Updates row's value), else null. dot: something to do. */
+function updateBadge() {
+  const u = ui.local?.update;
+  if (!u?.supported) return null;
+  if (u.running) return { text: `Updating to ${u.running.version}…`, short: 'Updating…', dot: false };
+  if (u.worker?.pending && u.worker.needsLogin) return { text: 'Sign in to Cloudflare to finish the update', short: 'Sign in needed', dot: true };
+  if (u.available) return { text: `Update available: ${u.latest}`, short: `${u.latest} available`, dot: true };
+  if (u.result && !u.result.ok) return { text: u.result.version ? `The update to ${u.result.version} is waiting` : 'The last update did not install', short: 'Waiting', dot: true };
+  return null;
+}
+/** The Updates row when there is no news: in words (text) and as the row's value (short). */
+function updateSummary() {
+  const u = ui.local?.update;
+  if (!u?.supported) return { text: 'this copy does not update itself', short: 'Off' };
+  if (u.checking) return { text: 'checking for updates', short: 'Checking…' };
+  if (u.error) return { text: 'could not check for updates', short: 'Couldn\'t check' };
+  if (u.checkedAt) return { text: 'up to date', short: 'Up to date' };
+  return u.auto ? { text: 'checked once a day, installed by itself', short: 'Automatic' } : { text: 'checked once a day', short: 'Manual' };
+}
+const AUTO_HELP = 'When the app has not been used for a while, with your sync service. Off: only with Update now.';
 /**
  * Settings > Updates in the Linux/macOS window (local/updater.mjs): this version, the newest one with Update now,
  * what an update is doing, how the last one ended, the Cloudflare sign-in that finishes a Worker update, and
  * "Install updates automatically". The window refreshes it with the rest of ui.local while Settings are open.
  */
-function localUpdateSettings() {
+function updatesPage() {
   const u = ui.local?.update;
-  const out = [label('Updates')];
-  if (!u?.supported) {
-    out.push(setting(`Version ${ui.local?.version ?? ''}`.trim(), 'This copy runs from a source folder: update it with git pull, then run scripts/setup.sh.', null));
-    return out;
-  }
+  const version = infoRow('Version', u?.current ?? appVersion() ?? '');
+  if (!u?.supported) return [card(version), foot('This copy runs from a source folder, so it does not update itself: update it with git pull, then run scripts/setup.sh.')];
+  const out = [];
   const run = u.running;
-  const steps = { downloading: 'Downloading it and checking it against the release.', installing: 'Installing. The app restarts by itself in a moment; your lists are not touched.', worker: 'Updating your sync service.', restarting: 'Restarting the app.' };
-  if (run) out.push(setting(`Updating to ${run.version}…`, steps[run.state] ?? 'Working on it.', null));
-  else if (u.available) {
-    out.push(setting(`Update available: ${u.latest}`, `You have ${u.current}. It installs in the background, your sync service too, and the app restarts; your lists are not touched.`,
-      h('button', { class: 'btn primary', onclick: () => updateAction('now') }, 'Update now')));
+  if (run) {
+    const what = { checking: 'Checking…', downloading: `Downloading ${run.version}…`, installing: `Installing ${run.version}…`, worker: 'Updating your sync service…', restarting: 'Restarting…' }[run.state] ?? `Updating to ${run.version}…`;
+    out.push(card(version, infoRow('Status', what, null, { long: true, title: what })),
+      foot('The app restarts by itself when it is done; your lists are not touched.'));
+  } else if (u.available) {
+    out.push(card(version, infoRow('Available', u.latest, null, { dot: true }),
+      actionRow('Update now', () => updateAction('now'), { name: `Update now to ${u.latest}`, help: 'The app restarts by itself; your lists are not touched' })),
+    foot(`You have ${u.current}. It installs in the background, your sync service too, and the app restarts; your lists are not touched.`));
   } else {
-    out.push(setting(`Version ${u.current}`, u.checking ? 'Checking for updates…' : u.error ? `Could not check for updates: ${u.error}` : `Up to date${u.checkedAt ? ` · checked ${ago(u.checkedAt)}` : ''}`,
-      h('button', { class: 'btn', onclick: () => updateAction('check') }, 'Check now')));
+    out.push(card(version, infoRow('Status', u.checking ? 'Checking…' : u.error ? 'Couldn\'t check' : u.checkedAt ? 'Up to date' : 'Not checked yet'),
+      actionRow('Check now', () => updateAction('check'), { help: 'Looks for a new version now' })),
+    u.error ? foot(`Could not check for updates: ${u.error}`, { alert: true })
+      : foot(u.checkedAt ? `Checked ${ago(u.checkedAt)}, then again about once a day.` : 'Checked shortly after the app starts, then about once a day.'));
   }
-  const signIn = () => h('button', { class: 'btn primary', onclick: () => updateAction('login') }, 'Sign in');
+  // how the last one ended, when there is something to do about it
+  const signIn = () => actionRow('Sign in to Cloudflare', () => updateAction('login'), { help: 'Opens the browser; the update finishes by itself afterwards' });
   if (u.login?.running) {
-    out.push(h('div', { class: 'callout', role: 'status' }, h('b', {}, 'Signing in to Cloudflare. '), 'Sign in in the browser and click Allow.',
-      u.login.url ? h('div', {}, 'No browser opened? ', h('a', { href: u.login.url, target: '_blank', rel: 'noopener noreferrer' }, 'Open the sign-in page')) : null));
+    out.push(card(infoRow('Signing in to Cloudflare…')), foot(['Sign in in the browser and click Allow; the update finishes by itself afterwards.',
+      u.login.url ? [' No browser opened? ', h('a', { href: u.login.url, target: '_blank', rel: 'noopener noreferrer' }, 'Open the sign-in page')] : null]));
   } else if (u.worker?.pending) {
-    out.push(setting(u.worker.needsLogin ? 'Sign in to Cloudflare to finish the update' : 'Your sync service is not updated yet', u.worker.message,
-      u.worker.needsLogin ? signIn() : h('button', { class: 'btn', onclick: () => updateAction('worker') }, 'Try again')));
+    out.push(card(u.worker.needsLogin ? signIn()
+      : [infoRow('Your sync service', 'Not updated yet'), actionRow('Try again', () => updateAction('worker'), { help: 'Updates your sync service again' })]),
+    foot(u.worker.message));
   }
-  if (u.login?.message && !u.login.running) out.push(h('div', { class: 'callout', role: 'alert' }, u.login.message));
+  if (u.login?.message && !u.login.running) out.push(foot(u.login.message, { alert: true }));
   if (u.result && !u.result.ok && !run) {
-    out.push(h('div', { class: 'callout', role: 'alert' }, h('div', {}, h('b', {}, `${u.result.message} `), u.result.next ?? ''),
-      h('div', { class: 'btn-row' }, u.result.needsLogin ? signIn() : h('button', { class: 'btn', onclick: () => updateAction('now') }, 'Try again'))));
+    out.push(card(infoRow(u.result.version ? `Update to ${u.result.version}` : 'The last update', u.result.held ? 'Waiting' : 'Didn\'t install', null, { dot: true }),
+      u.result.needsLogin ? signIn() : actionRow('Try again', () => updateAction('now'), { help: 'Tries the update again' })),
+    foot([u.result.message, u.result.next].filter(Boolean).join(' '), { alert: true }));
   }
-  out.push(setting('Install updates automatically', 'When the app has not been used for a while, with your sync service. Off: only with Update now.',
-    segmented([['on', 'On'], ['off', 'Off']], u.auto ? 'on' : 'off', (v) => updateAction('auto', { on: v === 'on' }), 'Install updates automatically')));
+  out.push(card(switchRow('Install updates automatically', !!u.auto, (on) => updateAction('auto', { on }), { help: AUTO_HELP })), foot(AUTO_HELP));
   return out;
 }
 async function updateAction(kind, body = {}) {
@@ -1527,7 +1927,7 @@ async function showHomeScreenStep() {
       h('li', {}, 'Tap ', h('b', {}, 'Share'), ', then ', h('b', {}, 'Add to Home Screen'), '.'),
       h('li', {}, 'Open Saqme from the Home Screen and ', code ? 'type this code:' : 'paste the pairing link (Copy link below).')),
     code ? codeBlock(code) : null,
-    h('p', {}, code ? 'Expired? Settings › Sync › Pair a phone, here or on your computer, shows a new one.' : 'The link is the key to your lists: keep it private.'),
+    h('p', {}, code ? 'Expired? Settings › Sync & sharing › Pair a phone, here or on your computer, shows a new one.' : 'The link is the key to your lists: keep it private.'),
     h('div', { class: 'btn-row' },
       h('button', { class: 'btn', onclick: () => copyText(link, 'Link copied') }, 'Copy link'),
       h('button', { class: 'btn primary', onclick: closeSheet }, 'Done')),
@@ -1541,7 +1941,7 @@ async function loadLocalInfo() {
     const was = JSON.stringify(ui.local);
     const sharesWere = JSON.stringify([ui.local?.shares, ui.local?.sharedByMe, ui.local?.notices]);
     ui.local = cfg.local ?? null;
-    if (JSON.stringify(ui.local) !== was && ui.view === 'settings' && !ui.editing) requestRender();
+    if (JSON.stringify(ui.local) !== was && ui.view !== 'list' && !ui.editing) requestRender();
     // lists shared with this computer (and by it) change tabs, badges and what can be edited: everywhere
     else if (JSON.stringify([ui.local?.shares, ui.local?.sharedByMe, ui.local?.notices]) !== sharesWere) requestRender();
     for (const ended of ui.local?.ended ?? []) {
@@ -1660,9 +2060,10 @@ async function claimCode(code, input) {
   pair(data.token);
 }
 
-function pairingField() {
-  const input = h('input', { class: 'field', placeholder: 'Pairing code or link', 'aria-label': 'Pairing code or link', autocapitalize: 'characters', autocomplete: 'off', spellcheck: false });
-  const go = () => {
+/** The pairing code (or link) box and what pairs with it: on the welcome screen, and in Settings > Sync & sharing. */
+function pairingControls(cls) {
+  const input = h('input', { class: cls, placeholder: 'Pairing code or link', 'aria-label': 'Pairing code or link', autocapitalize: 'characters', autocomplete: 'off', spellcheck: false, enterKeyHint: 'go', dataset: { fk: 'pair-input' } });
+  const submit = () => {
     const code = normalizePairingCode(input.value);
     if (code) {
       if (localCounts().tasks) confirmSyncWith(location.origin, () => claimCode(code, input)); else claimCode(code, input);
@@ -1674,42 +2075,43 @@ function pairingField() {
     if (!p.server && !localCounts().tasks) { pair(p.key); return; }   // this app's own server, nothing to upload yet
     confirmSyncWith(p.server || location.origin, () => pair(p.key, p.server));
   };
-  input.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); go(); } });
-  return h('div', { class: 'field-row' }, input, h('button', { class: 'btn primary', onclick: go }, 'Pair'));
+  input.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); submit(); } });
+  input.addEventListener('input', () => input.classList.remove('bad'));
+  return { input, submit };
+}
+function pairingField() {
+  const { input, submit } = pairingControls('field');
+  return h('div', { class: 'field-row' }, input, h('button', { class: 'btn primary', onclick: submit }, 'Pair'));
+}
+/** The same, as a row of a card. */
+function pairingRow() {
+  const { input, submit } = pairingControls('g-input');
+  return inputRow(input, textButton('Pair', submit, { name: 'Pair this device', fk: 'pair-go' }));
 }
 
 // ---------------------------------------------------------------- notifications (Web Push)
 const pushSupported = () => 'serviceWorker' in navigator && 'PushManager' in window && 'Notification' in window;
 
-function notificationSettings() {
-  const out = [];
-  if (ui.local) {
-    out.push(setting('Notifications', 'Shown by your computer while Saqme runs (it starts when you log in)', null));
-    return out;
-  }
+/**
+ * Where this device stands with notifications, for Settings > Notifications: state (unsupported, install, unpaired,
+ * blocked, on, off), short (the row's value) and help (the footnote: what to do, or what it means).
+ */
+function pushState() {
   if (!pushSupported()) {
-    out.push(setting('Notifications', isIOS() && !isStandalone()
-      ? 'On iPhone, notifications work only in the installed app (iOS 16.4 or later): Share → Add to Home Screen, then open Saqme from the Home Screen.'
-      : 'This browser does not support web push notifications.', null));
-    return out;
+    return { state: 'unsupported', short: 'Not available', help: isIOS() && !isStandalone()
+      ? 'On iPhone, notifications work only in the installed app (iOS 16.4 or later): Share › Add to Home Screen, then open Saqme from the Home Screen.'
+      : 'This browser does not support web push notifications.' };
   }
-  const perm = Notification.permission;
-  const on = perm === 'granted' && ls.get('push') === '1';
   const browserOnly = !store.meta.token && browserShares().length > 0;   // reminders from the lists' owner's server
-  if (!store.meta.token && !browserOnly) {
-    out.push(setting('Notifications', 'Pair this device first.', null));
-  } else if (perm === 'denied') {
-    out.push(setting('Notifications', 'Blocked. Allow them in iPhone Settings → Notifications → Saqme.', null));
-  } else if (on) {
-    out.push(setting('Notifications', browserOnly ? 'On for the lists shared with you here' : 'On for this device', h('button', { class: 'btn', onclick: testPush }, 'Send test')));
-    out.push(setting('', '', h('button', { class: 'btn danger', onclick: async () => { await disablePush(); render(); } }, 'Turn off')));
-  } else {
-    out.push(setting('Notifications', isIOS() && !isStandalone() ? 'Install the app to the Home Screen first (Share → Add to Home Screen).'
-      : browserOnly ? 'Reminders for the lists shared with you here: 15 minutes before timed deadlines, and a daily summary at your time. Their owner\'s sync service sends them; it learns this browser\'s push address and time zone.'
-        : 'Reminders 15 minutes before timed deadlines, and a daily summary.',
-    h('button', { class: 'btn primary', onclick: enablePush }, 'Enable')));
+  if (!store.meta.token && !browserOnly) return { state: 'unpaired', short: 'Off', help: 'Pair this device first (Sync & sharing): your sync service sends them.' };
+  if (Notification.permission === 'denied') return { state: 'blocked', short: 'Blocked', help: 'Allow them in iPhone Settings › Notifications › Saqme.' };
+  if (Notification.permission === 'granted' && ls.get('push') === '1') {
+    return { state: 'on', short: 'On', help: browserOnly ? 'On for the lists shared with you here; their owner\'s sync service sends them.' : 'On for this device.' };
   }
-  return out;
+  if (isIOS() && !isStandalone()) return { state: 'install', short: 'Off', help: 'Install the app to the Home Screen first (Share › Add to Home Screen).' };
+  return { state: 'off', short: 'Off', help: browserOnly
+    ? 'Reminders for the lists shared with you here: 15 minutes before timed deadlines, and a daily summary at your time. Their owner\'s sync service sends them; it learns this browser\'s push address and time zone.'
+    : 'Reminders 15 minutes before timed deadlines and at the time, and the daily summary.' };
 }
 
 /** The lists used here in the browser from their owner's address (no sync of one's own). */
@@ -1819,22 +2221,30 @@ function syncTimeZone() {
 }
 
 // ---------------------------------------------------------------- trash + conflicts
-function renderTrash() {
-  const out = [viewHeader('Recently deleted', 'settings')];
+/** Recently deleted: lists first, then the tasks under the name of the list they were in; each row with Restore. */
+function trashPage() {
   const items = store.trash();
-  if (!items.length) out.push(h('div', { class: 'empty-state' }, 'Nothing deleted.'));
-  for (const r of items) {
-    const isProject = r.kind === 'project';
-    const proj = isProject ? null : store.get('project', r.fields.place.v.project);
-    out.push(h('div', { class: 'trash-item' },
-      h('div', { class: 'what' }, isProject ? `Project “${r.fields.name.v}”` : (r.fields.text.v || 'Untitled')),
-      h('div', { class: 'sub' }, `${isProject ? 'Project' : `in ${proj?.fields.name.v ?? '?'}`} · deleted ${ago(r.fields.deleted.ts)}`),
-      h('div', { class: 'btn-row' }, h('button', { class: 'btn', onclick: () => {
-        if (isProject) store.restoreProject(r.id); else store.restoreTask(r.id);
-        toast('Restored');
-      } }, icon('restore'), 'Restore'))));
+  if (!items.length) return [note('Nothing deleted.')];
+  const row = (r, label) => {
+    const project = r.kind === 'project';
+    const when = ago(r.fields.deleted.ts);
+    const from = project ? 'A list' : `From ${store.get('project', r.fields.place.v.project)?.fields.name.v ?? 'a list that is gone'}`;
+    const restore = textButton('Restore', () => { if (project) store.restoreProject(r.id); else store.restoreTask(r.id); toast('Restored'); },
+      { name: `Restore ${label}`, help: `${from}, deleted ${when}`, fk: `restore:${r.id}` });
+    return infoRow(label, when, restore, { title: `${label}. ${from}, deleted ${when}` });
+  };
+  const out = [];
+  const lists = items.filter((r) => r.kind === 'project');
+  if (lists.length) out.push(head('Lists'), card(lists.map((r) => row(r, r.fields.name.v))));
+  const byList = new Map();
+  for (const r of items.filter((x) => x.kind !== 'project')) {
+    const pid = r.fields.place.v.project;
+    if (!byList.has(pid)) byList.set(pid, []);
+    byList.get(pid).push(r);
   }
-  els.list.replaceChildren(...out);
+  for (const [pid, tasks] of byList) out.push(head(store.get('project', pid)?.fields.name.v ?? 'Other lists'), card(tasks.map((r) => row(r, r.fields.text.v || 'Untitled'))));
+  out.push(foot('Newest first. Right after a delete, Undo in its message brings it back too.'));
+  return out;
 }
 
 function describe(field, v) {
@@ -1847,46 +2257,46 @@ function describe(field, v) {
 /** Changes a shared list's server did not take (the list became view-only, or its owner deleted it). */
 function allNotices() { return [...store.notices(), ...(ui.local?.notices ?? [])]; }
 
-function renderNotices(out) {
-  for (const n of allNotices()) {
+/** A version of a task in Conflicts: your own words, so it wraps instead of being cut (a phone has no tooltips). */
+const versionRow = (label, value) => h('div', { class: 'g-row version' }, h('span', { class: 'g-lead' }, label), h('span', { class: 'g-text' }, value));
+
+/**
+ * Conflicts: one card per task, under its text. What a shared list's server did not take (your version, Copy, Dismiss),
+ * then what was changed on two devices at once (now, the other version, Keep now / Use other).
+ */
+function conflictsPage() {
+  const list = store.conflicts();
+  const notices = allNotices();
+  if (!list.length && !notices.length) return [note('No conflicts. When the same thing is changed on two devices before they sync, the newest change wins and the other one is kept here for you to pick.')];
+  const out = [];
+  for (const n of notices) {
     const p = store.get('project', n.projectId);
     const what = { text: 'Text', status: 'Status', due: 'Deadline', notes: 'Notes', deleted: 'Delete', new: 'New task' }[n.field] ?? n.field;
     const value = n.field === 'deleted' ? 'Deleted' : describe(n.field, n.value);
-    out.push(h('div', { class: 'conflict-item' },
-      h('div', { class: 'what' }, n.text || 'Untitled'),
-      h('div', { class: 'sub' }, `Not saved · ${what} · in “${p?.fields.name.v ?? n.list ?? 'a shared list'}” · ${ago(n.at)}`),
-      h('div', { class: 'choice' }, h('div', { class: 'who' }, 'Your version, not saved'), value),
-      h('p', { class: 'sheet-note' }, n.reason === 'this shared list is view-only' ? 'The list is view-only for you, so the owner\'s version stays.' : `The owner's server did not take it: ${n.reason}.`),
-      h('div', { class: 'btn-row' },
-        h('button', { class: 'btn', onclick: () => copyText(String(n.field === 'deleted' ? n.text : value), 'Copied') }, 'Copy'),
-        h('button', { class: 'btn primary', onclick: async () => {
-          if (n.local) { try { await api('local/notices/dismiss', { id: n.id }); await loadLocalInfo(); } catch (e) { toast(e.message); } } else store.dismissNotice(n.id);
-          render();
-        } }, 'Dismiss'))));
+    const why = n.reason === 'this shared list is view-only' ? 'The list is view-only for you, so the owner\'s version stays.' : `The owner's server did not take it: ${n.reason}.`;
+    out.push(head(n.text || 'Untitled'), card(
+      versionRow('Your version', value),
+      actionRow('Copy', () => copyText(String(n.field === 'deleted' ? n.text : value), 'Copied'), { name: 'Copy your version', fk: `copy:${n.id}` }),
+      actionRow('Dismiss', async () => {
+        if (n.local) { try { await api('local/notices/dismiss', { id: n.id }); await loadLocalInfo(); } catch (e) { toast(e.message); } } else store.dismissNotice(n.id);
+        render();
+      }, { name: 'Dismiss: keep the owner\'s version', fk: `dismiss:${n.id}` })),
+    foot(`Not saved: ${what.toLowerCase()} in “${p?.fields.name.v ?? n.list ?? 'a shared list'}”, ${ago(n.at)}. ${why}`));
   }
-}
-
-function renderConflicts() {
-  const out = [viewHeader('Conflicts', 'settings')];
-  const list = store.conflicts();
-  const notices = allNotices();
-  if (!list.length && !notices.length) out.push(h('div', { class: 'empty-state' }, 'No conflicts. Edits made on two devices at the same time show up here.'));
-  else if (list.length) out.push(h('div', { class: 'callout' }, 'The same thing was changed on two devices before they synced. The newest change won; the other one is kept here so you can pick it instead.'));
-  renderNotices(out);
   for (const c of list) {
     const t = store.get('task', c.task);
     const cur = c.field === 'deleted' ? t.fields.deleted.v : t.fields[c.field]?.v;
-    const what = { text: 'Text', status: 'Status', due: 'Deadline', notes: 'Notes', deleted: 'Deleted vs. edited' }[c.field] ?? c.field;
-    out.push(h('div', { class: 'conflict-item' },
-      h('div', { class: 'what' }, t.fields.text.v || 'Untitled'),
-      h('div', { class: 'sub' }, `${what} · ${ago(c.at)}`),
-      h('div', { class: 'choice' }, h('div', { class: 'who' }, 'Now'), describe(c.field, cur)),
-      h('div', { class: 'choice' }, h('div', { class: 'who' }, 'Other version'), describe(c.field, c.value)),
-      h('div', { class: 'btn-row' },
-        h('button', { class: 'btn', onclick: () => store.resolveConflict(c.id, false) }, 'Keep now'),
-        h('button', { class: 'btn primary', onclick: () => store.resolveConflict(c.id, true) }, c.field === 'deleted' ? (c.value ? 'Delete it' : 'Restore it') : 'Use other'))));
+    const what = { text: 'Text', status: 'Status', due: 'Deadline', notes: 'Notes' }[c.field] ?? c.field;
+    const use = c.field === 'deleted' ? (c.value ? 'Delete it' : 'Restore it') : 'Use other';
+    out.push(head(t.fields.text.v || 'Untitled'), card(
+      versionRow('Now', describe(c.field, cur)),
+      versionRow('Other version', describe(c.field, c.value)),
+      actionRow('Keep now', () => store.resolveConflict(c.id, false), { help: 'Keeps the version you have now', fk: `keep:${c.id}` }),
+      actionRow(use, () => store.resolveConflict(c.id, true), { help: c.field === 'deleted' ? '' : 'Uses the other version instead', fk: `use:${c.id}` })),
+    foot(c.field === 'deleted' ? `Deleted on one device and edited on another, ${ago(c.at)}.`
+      : `${what} changed on two devices at once, ${ago(c.at)}. The newest change won: it is the one you have now.`));
   }
-  els.list.replaceChildren(...out);
+  return out;
 }
 
 // ---------------------------------------------------------------- welcome / pairing
@@ -1907,7 +2317,7 @@ function renderWelcome() {
     h('p', {}, 'To-do lists in plain markdown. Start on this device right away; sync with your computer through your own Cloudflare account now or later.'),
     h('button', { class: 'btn primary', onclick: () => { ui.welcomeSkipped = true; ls.set('localOnly', '1'); store.addProject('General'); render(); } }, 'Use it on this device'),
     h('ol', { class: 'steps' },
-      h('li', {}, 'Already syncing on your computer? Open ', h('b', {}, 'Pair phone'), ' in its settings (Settings › Sync).'),
+      h('li', {}, 'Already syncing on your computer? Open ', h('b', {}, 'Pair phone'), ' in its settings (Settings › Sync & sharing).'),
       // (in the installed app the camera would open the link in the browser, not here)
       h('li', {}, isStandalone() ? 'Type the code it shows below.' : 'Type the code it shows below, or scan its QR code with the camera.'),
       isIOS() && !isStandalone() ? h('li', {}, 'On iPhone, add Saqme to the Home Screen first (', h('b', {}, 'Share'), ' › ', h('b', {}, 'Add to Home Screen'), '), open it from there and type the code in it.') : null),
@@ -1954,23 +2364,21 @@ function readPairingLink() {
 }
 
 // ---------------------------------------------------------------- boot
-els.logo.addEventListener('click', () => {
-  commitAll(); ui.view = ui.view === 'list' ? 'settings' : 'list'; render(); els.list.scrollTop = 0;
-  if (ui.view === 'settings') loadLocalInfo();
-});
+// the logo opens Settings, and from any Settings view goes back to the list
+els.logo.addEventListener('click', () => go(ui.view === 'list' ? 'settings' : 'list'));
 els.sync.addEventListener('click', () => {
   commitAll();
   if (store.meta.token && store.status.state !== 'syncing') store.sync({ force: true });
   toast(statusText());
 });
-els.conflicts.addEventListener('click', () => { commitAll(); ui.view = 'conflicts'; render(); });
+els.conflicts.addEventListener('click', () => go('conflicts'));
 store.addEventListener('change', requestRender);
 store.addEventListener('rejected', (e) => {
   const r = e.detail[0];
   const t = r.kind === 'task' ? store.get('task', r.id) : null;
   toast(`Not saved${t ? ` (“${t.fields.text.v.slice(0, 40)}”)` : ''}: ${r.reason}`);
 });
-store.addEventListener('status', () => { renderStatus(); if (ui.view === 'settings' && !ui.editing) requestRender(); });
+store.addEventListener('status', () => { renderStatus(); if (ui.view !== 'list' && !ui.editing) requestRender(); });
 store.addEventListener('readonly', () => toast('This list is view-only: only its owner can change it.'));
 store.addEventListener('shareended', (e) => {
   const { name, kept, elsewhere, gone } = e.detail;
@@ -2020,6 +2428,7 @@ async function watchVersion() {
   if (!v) return;
   if (bootVersion === null) {
     bootVersion = v;
+    if (ui.view !== 'list') requestRender();   // (the version line under Settings)
     const was = ls.get('appVersion');
     ls.set('appVersion', v);
     if (was && was !== v) toast(`Saqme was updated to ${v}`);
@@ -2046,10 +2455,10 @@ if (!store.meta.token && !store.projects().length) {
 render();
 loadLocalInfo();
 checkClipboardForInvite();
-// the local app's sync status, while its settings are on screen (a Worker's answer never changes: no polling there)
-setInterval(() => { if (ui.local && document.visibilityState === 'visible' && ui.view === 'settings') loadLocalInfo(); }, 5000);
+// the local app's sync status, while Settings are on screen (a Worker's answer never changes: no polling there)
+setInterval(() => { if (ui.local && document.visibilityState === 'visible' && ui.view !== 'list') loadLocalInfo(); }, 5000);
 // (and its shared lists, less often, anywhere: access can change, a share can end, an invite link can come in)
-setInterval(() => { if (ui.local && document.visibilityState === 'visible' && ui.view !== 'settings') loadLocalInfo(); }, 3000);
+setInterval(() => { if (ui.local && document.visibilityState === 'visible' && ui.view === 'list') loadLocalInfo(); }, 3000);
 store.startAuto();
 syncTimeZone();
 syncSharePush();

@@ -65,7 +65,13 @@ for (const scheme of ['dark', 'light']) {
   await page.click('.row .pill >> nth=0'); await page.waitForTimeout(200); await axe(page, `${scheme} deadline sheet`);
   await page.keyboard.press('Escape');
   await page.click('#logo'); await page.waitForTimeout(200); await axe(page, `${scheme} settings`);
-  await page.click('text=Recently deleted'); await page.waitForTimeout(200); await axe(page, `${scheme} recently deleted`);
+  // every page of Settings (Sync & sharing with Advanced open too), and the views they open
+  for (const p of ['general', 'notifications', 'sync', 'lists', 'about']) {
+    await page.click(`[data-fk="open:${p}"]`); await page.waitForTimeout(150); await axe(page, `${scheme} settings ${p}`);
+    if (p === 'sync') { await page.click('[data-fk="advanced"]'); await page.waitForTimeout(150); await axe(page, `${scheme} settings sync, advanced`); }
+    if (p === 'lists') { await page.click('[data-fk="open:trash"]'); await page.waitForTimeout(150); await axe(page, `${scheme} recently deleted`); await page.click('.view-header .back'); }
+    await page.click('.view-header .back');
+  }
   await page.click('#logo'); await page.waitForSelector('.row');
   await page.dispatchEvent('.tab.active', 'contextmenu');
   await page.click('#sheet .menu-item:has-text("Share")');
@@ -108,6 +114,8 @@ check(serious.length === 0, `no serious or critical axe findings${serious.length
 console.log('2. keyboard, focus and announcements');
 {
   const ctx = await phone('dark', { isMobile: false, hasTouch: false, viewport: { width: 900, height: 900 } });
+  // headless Chromium reports notifications as blocked; on a device that has not asked yet, Notifications is a switch
+  await ctx.addInitScript(() => { if (window.Notification) Object.defineProperty(Notification, 'permission', { get: () => 'default' }); });
   const page = await open(ctx, projects.Work);
   const focused = () => page.evaluate(() => { const a = document.activeElement; return { fk: a?.dataset?.fk ?? '', inSheet: !!a?.closest('#sheet'), label: a?.getAttribute('aria-label') ?? a?.textContent ?? '' }; });
 
@@ -149,8 +157,35 @@ console.log('2. keyboard, focus and announcements');
   await page.waitForTimeout(200);
   check(await page.isVisible('.view-header h1:has-text("Settings")'), 'Enter on a focused button activates it (Settings opened, no task edited)');
 
+  // Settings: a view opens with focus on its Back button; Esc goes back one level, to the row that opened it
+  check((await focused()).fk === 'back', `opening Settings puts focus on its Back button (${(await focused()).fk})`);
+  const sync = await page.$eval('[data-fk="open:sync"]', (el) => `${el.textContent} | ${el.getAttribute('aria-description')}`);
+  check(/^Sync & sharingSynced .+ \| Synced .+\. Pairing/.test(sync), `a page's row says how it stands, and what is on the page ("${sync}")`);
+  await page.focus('[data-fk="open:sync"]');
+  await page.keyboard.press('Enter');
+  await page.waitForTimeout(200);
+  check(await page.isVisible('.view-header h1:has-text("Sync & sharing")') && (await focused()).fk === 'back', 'a page opens with focus on its Back button');
+  const adv = () => page.getAttribute('[data-fk="advanced"]', 'aria-expanded');
+  const before2 = await adv();
+  await page.focus('[data-fk="advanced"]');
+  await page.keyboard.press('Enter');
+  await page.waitForTimeout(150);
+  check(before2 === 'false' && (await adv()) === 'true' && (await focused()).fk === 'advanced' && await page.isVisible('.g-row.danger:has-text("Unpair this device")'),
+    'Advanced is a disclosure: it reports expanded, keeps focus, and shows Unpair under it');
+  await page.keyboard.press('Escape');
+  await page.waitForTimeout(200);
+  check(await page.isVisible('.view-header h1:has-text("Settings")') && (await focused()).fk === 'open:sync', `Esc goes back to Settings, focus on the page's row (${(await focused()).fk})`);
+  await page.click('[data-fk="open:notifications"]');
+  await page.waitForTimeout(150);
+  const sw = await page.$eval('[role="switch"]', (el) => ({ checked: el.getAttribute('aria-checked'), name: el.textContent })).catch(() => null);
+  check(sw?.checked === 'false' && /Notifications/.test(sw.name), `Notifications on / off is a switch with its state (${JSON.stringify(sw)})`);
+  await page.keyboard.press('Escape');
+  await page.waitForTimeout(150);
+  await page.keyboard.press('Escape');
+  await page.waitForTimeout(200);
+  check(await page.isVisible('.row') && (await focused()).fk.startsWith('row:'), `Esc from Settings goes back to the list, focus on the selected task (${(await focused()).fk})`);
+
   // toasts reach screen readers through a live region that is always in the page
-  await page.click('.view-header .back');
   await page.click('.row .more >> nth=0');
   await page.click('.menu-item.danger');
   await page.waitForTimeout(200);
@@ -179,8 +214,11 @@ for (const [w, label] of [[195, '200% zoom on a 390 px phone'], [320, '320 px wi
   check(over.page <= 0 && over.list <= 0 && over.clipped === 0, `${label}: no sideways scrolling or cut text (${JSON.stringify(over)})`);
   await page.screenshot({ path: join(process.env.SAQME_SHOTS || '/tmp', `a11y-reflow-${w}.png`) });
   await page.click('#logo');
-  const overSettings = await page.evaluate(() => document.documentElement.scrollWidth - window.innerWidth);
-  check(overSettings <= 0, `${label}: settings fit too (${overSettings})`);
+  const fits = () => page.evaluate(() => Math.max(document.documentElement.scrollWidth - window.innerWidth, document.getElementById('list').scrollWidth - document.getElementById('list').clientWidth));
+  const overSettings = await fits();
+  await page.click('[data-fk="open:sync"]');
+  const overSync = await fits();
+  check(overSettings <= 0 && overSync <= 0, `${label}: settings fit too (${overSettings}, Sync & sharing ${overSync})`);
   await ctx.close();
 }
 await browser.close();

@@ -23,7 +23,7 @@ if (!inv) {
   $('openBrowser').href = `${inv.server}/#join=${inv.code}`;
   $('ways').hidden = false;
   $('copy').addEventListener('click', async () => {
-    try { await navigator.clipboard.writeText(invite); $('status').textContent = 'Invite copied. Paste it in Saqme: Settings › Sync › Join a shared list.'; } catch { $('status').textContent = invite; }
+    try { await navigator.clipboard.writeText(invite); $('status').textContent = 'Invite copied. Paste it in Saqme: Settings › Sync & sharing › Shared lists.'; } catch { $('status').textContent = invite; }
   });
   const ua = navigator.userAgent;
   const desktop = /Windows NT|Macintosh|Linux x86_64|X11/.test(ua) && !/Android|Mobile|iPad|iPhone/.test(ua) && !(navigator.maxTouchPoints > 1 && /Macintosh/.test(ua));

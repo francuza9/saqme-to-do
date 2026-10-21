@@ -39,12 +39,19 @@ try {
   await page.goto(`${app.url}/#claim=${code}`);
   await page.waitForSelector('.tab');
   await page.click('#logo');
+  // the window's own pages: Updates, and the lists folder under Your lists
+  await page.waitForSelector('[data-fk="open:updates"]');
+  check(await page.isVisible('[data-fk="open:updates"]') && /Saqme To Do \d+\.\d+\.\d+/.test(await page.textContent('#list .version-line')), 'Settings has Updates (the window updates itself) and the version line');
+  await page.click('[data-fk="open:lists"]');
+  check((await page.textContent('#list')).includes(join(dir, 'lists')), 'Your lists says where the lists folder is');
+  await page.keyboard.press('Escape');
+  await page.click('[data-fk="open:sync"]');
   await page.waitForSelector('button:has-text("Set up sync")');
-  const row = await page.textContent('.setting:has(button:has-text("Set up sync"))');
-  check(/your own free sync service in your Cloudflare account/.test(row) && /nothing is deleted/.test(row) && /one sign-in in the browser/.test(row), 'Set up sync explains itself in plain words');
+  const text = await page.textContent('#list');
+  check(/your own free sync service in your Cloudflare account/.test(text) && /nothing is deleted/.test(text) && /one sign-in in the browser/.test(text), 'Set up sync explains itself in plain words (the footnote under it)');
   check((await page.getAttribute('button:has-text("Set up sync")', 'title'))?.includes('nothing is deleted'), '... also as a tooltip');
   await page.click('button:has-text("Set up sync")');
-  await page.waitForSelector('.callout:has-text("Setting up sync")');
+  await page.waitForSelector('.g-row:has-text("Setting up…")');
   await page.waitForSelector('.setup-log a[href^="https://dash.cloudflare.com/oauth2/auth"]');
   check(true, 'progress shows, with the sign-in link clickable');
   await page.screenshot({ path: join(tmpdir(), 'saqme-window-setup-running.png') });
@@ -52,9 +59,13 @@ try {
   check(await page.isVisible('#sheet img.qr'), 'when it is done, the QR code for the phone');
   await page.screenshot({ path: join(tmpdir(), 'saqme-window-setup-done.png') });
   await page.keyboard.press('Escape');
-  await page.waitForSelector('button:has-text("Turn off")');
-  const off = await page.textContent('.setting:has(button:has-text("Turn off"))');
-  check(/stops syncing/.test(off) && /lists stay on this computer/.test(off) && /kept until you delete it there/.test(off), 'Turn off sync says what stays');
+  check(await page.isVisible('.view-header h1:has-text("Sync & sharing")'), 'Esc closes the sheet only (the page stays)');
+  // Turn off sync is under Advanced, at the bottom of the page
+  check(!(await page.isVisible('button:has-text("Turn off sync")')), 'Turn off sync is not among the everyday rows');
+  await page.click('[data-fk="advanced"]');
+  await page.waitForSelector('button:has-text("Turn off sync")');
+  const off = await page.textContent('#list');
+  check(/stops syncing/.test(off) && /lists stay on this computer/.test(off) && /kept until you delete it there/.test(off), 'Turn off sync (under Advanced) says what stays');
   check(errors.length === 0, `no page errors (${errors.join('; ')})`);
 } finally {
   await browser.close();

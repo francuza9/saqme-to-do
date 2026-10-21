@@ -58,9 +58,10 @@ check((await texts(page)).join('|') === 'Water the plants|Call Anna', 'tasks add
 const scope = await page.evaluate(() => navigator.serviceWorker.ready.then((r) => r.scope));
 check(scope === site, `service worker scoped to the sub-folder (${scope})`);
 
-// ---- 2. export -> zip in the desktop format
+// ---- 2. export -> zip in the desktop format (Settings > Your lists)
 await page.click('#logo');
-const [download] = await Promise.all([page.waitForEvent('download'), page.click('.setting:has-text("Export lists") .btn')]);
+await page.click('[data-fk="open:lists"]');
+const [download] = await Promise.all([page.waitForEvent('download'), page.click('[data-fk="do:Export lists"]')]);
 const zipPath = join(mkdtempSync(join(tmpdir(), 'saqme-static-')), download.suggestedFilename());
 await download.saveAs(zipPath);
 const entries = await readZip(new Uint8Array(readFileSync(zipPath)));
@@ -89,7 +90,10 @@ watch(page);
 await page.goto(site);
 await page.click('text=Use it on this device');
 await page.click('#logo');
-const [chooser] = await Promise.all([page.waitForEvent('filechooser'), page.click('.setting:has-text("Import lists") .btn')]);
+// (a static host has no version to tell: the line under Settings says the app's name only)
+check((await page.textContent('#list .version-line')) === 'Saqme To Do', `static host: the version line without a version (${await page.textContent('#list .version-line')})`);
+await page.click('[data-fk="open:lists"]');
+const [chooser] = await Promise.all([page.waitForEvent('filechooser'), page.click('[data-fk="do:Import lists"]')]);
 const extra = join(dirname(zipPath), 'Errands.md');
 writeFileSync(extra, '- [ ] Post office\n  - [x] Stamps\n');
 await chooser.setFiles([zipPath, extra]);
@@ -97,7 +101,7 @@ await page.waitForSelector('.toast:has-text("Imported")');
 check(/Imported 4 tasks and 1 new list/.test(await page.textContent('.toast')), `import message (${await page.textContent('.toast')})`);
 await page.click('#logo');
 check((await texts(page)).join('|') === 'Water the plants|Call Anna', 'imported list shows its tasks');
-const [again] = await Promise.all([page.waitForEvent('filechooser'), (async () => { await page.click('#logo'); await page.click('.setting:has-text("Import lists") .btn'); })()]);
+const [again] = await Promise.all([page.waitForEvent('filechooser'), (async () => { await page.click('#logo'); await page.click('[data-fk="open:lists"]'); await page.click('[data-fk="do:Import lists"]'); })()]);
 await again.setFiles([zipPath]);
 await page.waitForSelector('.toast:has-text("already here")');
 check(/Imported 0 tasks \(2 already here\)/.test(await page.textContent('.toast')), 'importing again adds nothing');
@@ -111,16 +115,18 @@ else {
   const projects = (await (await fetch(`${worker}/api/sync`, { method: 'POST', headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' }, body: JSON.stringify({ deviceId: 'static-check', cursor: 0, changes: [{ kind: 'project', id: 'staticp1', fields: { name: { v: 'Static check', ts: Date.now(), base: -1 }, pos: { v: 'z0', ts: Date.now(), base: -1 } } }] }) })).json());
   check(!!projects.cursor, 'a list on the Worker to share');
   const inv = await (await fetch(`${worker}/api/shares/invite`, { method: 'POST', headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' }, body: JSON.stringify({ projectId: 'staticp1', alias: 'Static', access: 'view' }) })).json();
-  await page.click('.setting:has-text("Join a shared list") .btn');
-  await page.fill('#sheet input.field', inv.link);
-  await page.click('#sheet .btn.primary:has-text("Join")');
+  await page.click('#logo');   // (Your lists -> the list -> Settings > Sync & sharing)
+  await page.click('#logo');
+  await page.click('[data-fk="open:sync"]');
+  await page.fill('[data-fk="join-input"]', inv.link);
+  await page.click('[data-fk="join-go"]');
   await page.waitForSelector('#sheet:has-text("Open the invite link instead")');
   check(await page.isVisible(`#sheet a[href="${inv.link}"]`), 'not paired: a list from another address opens from its invite page');
   await page.click('#sheet .btn:has-text("Not now")');
   const claim = await fetch(`${worker}/api/shares/claim`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ code: inv.code }) });
   check(claim.ok, 'and the invite was not used up');
-  await page.fill('.field-row input', `${worker}/#pair=${token}`);
-  await page.click('.field-row .btn.primary');
+  await page.fill('[data-fk="pair-input"]', `${worker}/#pair=${token}`);
+  await page.click('[data-fk="pair-go"]');
   await page.waitForSelector('#sheet:has-text("Sync with")');
   check((await page.textContent('#sheet')).includes(new URL(worker).host), 'pairing with another server says which one first');
   await page.click('#sheet .btn.primary');

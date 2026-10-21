@@ -29,7 +29,7 @@
 <body>
   <div id="app" class="card">
     <header class="strip" id="strip">
-      <button class="logo" id="logo" aria-label="Settings"><img src="icons/glyph.png" alt="" width="22" height="22"></button>
+      <button class="logo" id="logo" aria-label="Settings" data-fk="logo"><img src="icons/glyph.png" alt="" width="22" height="22"></button>
       <nav class="tabs" id="tabs" aria-label="Projects"></nav>
       <button class="tab-add" id="tabAdd" aria-label="New project" title="New project"></button>
       <button class="conflicts-badge" id="conflictsBadge" hidden aria-label="Conflicts"></button>
@@ -37,8 +37,10 @@
     </header>
     <main class="list" id="list" tabindex="-1"></main>
     <footer class="add" id="addBar">
-      <span class="add-plus" aria-hidden="true"></span>
-      <input id="addInput" type="text" maxlength="10000" placeholder="Add a task" autocomplete="off" autocapitalize="sentences" enterkeyhint="done" aria-label="Add a task">
+      <div class="add-card">
+        <span class="add-plus" aria-hidden="true"></span>
+        <input id="addInput" type="text" maxlength="10000" placeholder="Add a task" autocomplete="off" autocapitalize="sentences" enterkeyhint="done" aria-label="Add a task">
+      </div>
     </footer>
   </div>
   <div class="sheet-wrap" id="sheetWrap" hidden>

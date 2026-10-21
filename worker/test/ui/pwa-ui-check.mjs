@@ -33,7 +33,7 @@ check(await page.isVisible('text=Use it on this device'), 'welcome screen when n
 check(!(await page.isVisible('#tabAdd')) && !(await page.isVisible('#syncBtn')), 'welcome: no "+" or sync button yet');
 await page.click('#logo');
 await page.waitForSelector('.view-header');
-check(await page.isVisible('text=Theme'), 'welcome: the logo opens Settings');
+check(await page.isVisible('.view-header h1:has-text("Settings")') && await page.isVisible('[data-fk="open:general"]'), 'welcome: the logo opens Settings');
 await page.click('#logo');
 await page.waitForSelector('.welcome');
 await page.click('text=Use it on this device');
@@ -80,7 +80,20 @@ check(await page.isVisible('.completed-toggle'), 'done task folds into Completed
 await page.tap('.row:has-text("Inserted after") .chip-btn');
 await page.tap('.menu-item:has-text("Postponed")');
 await page.waitForTimeout(100);
-check(await page.isVisible('.section-label:has-text("Postponed")'), 'postponed section appears');
+check(await page.isVisible('.g-head:has-text("Postponed") + .tasks .row:has-text("Inserted after")'), 'postponed task goes to the card under the Postponed heading');
+// the grouped list: each section a card, subtasks indented inside it, their hairlines starting at their text
+const layout = await page.evaluate(() => {
+  const text = (t) => [...document.querySelectorAll('.row .text')].find((e) => e.textContent === t);
+  const x = (t) => text(t).getBoundingClientRect().left;
+  const item = text('Find sources').closest('.task-item');
+  return {
+    cards: document.querySelectorAll('#list > .tasks.group').length,
+    sub: x('Find sources') - x('Write the report'),
+    subLine: item.getBoundingClientRect().left + parseFloat(getComputedStyle(item, '::before').left) - x('Find sources'),
+    add: getComputedStyle(document.querySelector('.add-card')).borderRadius,
+  };
+});
+check(layout.cards === 2 && layout.sub === 20 && Math.abs(layout.subLine) <= 1 && layout.add === '12px', `cards, indented subtasks and their hairlines, the add line a card (${JSON.stringify(layout)})`);
 
 // deadline via free text
 await page.tap('.row:has-text("Write the report") .more');
@@ -94,7 +107,7 @@ check((await page.textContent('.row:has-text("Write the report") .pill')).trim()
 await page.tap('.row:has-text("Buy milk") .more');
 await page.tap('.menu-item:has-text("Notes")');
 await page.fill('.notes textarea', 'oat milk https://example.com/shop');
-await page.tap('.notes .btn');
+await page.tap('.notes .notes-done');
 await page.waitForTimeout(100);
 check(await page.isVisible('.notes a[href="https://example.com/shop"]'), 'notes render links');
 
@@ -136,15 +149,18 @@ await page.waitForTimeout(150);
 const order = (await rows()).filter((t) => ['Last one', 'Write the report'].includes(t));
 check(order.join('|') === 'Last one|Write the report', `drag moved the task above (${(await rows()).join('|')})`);
 
-// pair now -> everything uploads
+// pair now -> everything uploads (Settings > Sync & sharing)
 await page.tap('#logo');
+check(await page.textContent('[data-fk="open:sync"]') === 'Sync & sharingOff', `Settings: Sync & sharing says it is off (${await page.textContent('[data-fk="open:sync"]')})`);
+await page.tap('[data-fk="open:sync"]');
+await page.waitForSelector('.view-header h1:has-text("Sync & sharing")');
 // a link whose address hides another server behind a user name is refused
-await page.fill('.setting + .field-row input, .field-row input', `${base.replace('//', '//saqme.example.workers.dev@')}/#pair=${token}`);
-await page.tap('.field-row .btn.primary');
-check(await page.$eval('.field-row input', (el) => el.classList.contains('bad')) && await page.isHidden('#sheetWrap'), 'a link with a user name in the address is refused');
+await page.fill('[data-fk="pair-input"]', `${base.replace('//', '//saqme.example.workers.dev@')}/#pair=${token}`);
+await page.tap('[data-fk="pair-go"]');
+check(await page.$eval('[data-fk="pair-input"]', (el) => el.classList.contains('bad')) && await page.isHidden('#sheetWrap'), 'a link with a user name in the address is refused');
 // the real one: asks first, saying where the lists go and how many
-await page.fill('.setting + .field-row input, .field-row input', `${base}/#pair=${token}`);
-await page.tap('.field-row .btn.primary');
+await page.fill('[data-fk="pair-input"]', `${base}/#pair=${token}`);
+await page.tap('[data-fk="pair-go"]');
 await page.waitForSelector('#sheet:has-text("Sync with")');
 const ask = await page.textContent('#sheet');
 check(ask.includes(new URL(base).host) && /This uploads your \d+ lists \(\d+ tasks\)/.test(ask), `pairing asks first, naming the server and what goes there (${ask.slice(0, 120)})`);
@@ -162,8 +178,9 @@ check(/Add to Home Screen/.test(step) && CODE.test(await codeIn(page)), `Safari,
 await page.tap('#sheet .btn.primary');
 await page.screenshot({ path: '/tmp/saqme-qa/ui-settings-paired.png' });
 
-// Settings > Sync > Pair a phone: the QR code and a fresh one-time code
-await page.tap('.setting:has-text("Pair a phone") button');
+// Settings > Sync & sharing > Pair a phone: the QR code and a fresh one-time code
+check(await page.isVisible('.g-row:has-text("Status") .g-value:has-text("Synced")'), 'Sync & sharing: paired, it says how sync stands');
+await page.tap('.g-row:has-text("Pair a phone")');
 await page.waitForSelector('#sheet img.qr');
 const shown = await codeIn(page);
 check(CODE.test(shown), `Pair a phone shows the QR code and a code (${shown})`);
@@ -209,14 +226,17 @@ await page.tap('#sheet .btn.primary');
   await page.waitForSelector('#sheet .menu-item:has-text("Share")');
   await page.tap('#sheet .menu-item:has-text("Share")');
   await page.waitForSelector('#sheet:has-text("Shared with")');
-  await page.fill('#sheet input.field', 'Nuca');
+  await page.fill('#sheet input.g-input', 'Nuca');
   await page.tap('#sheet [data-fk="access:view"]');
-  await page.tap('#sheet .btn.primary:has-text("Create invite link")');
+  await page.tap('#sheet [data-fk="share-create"]');
   await page.waitForSelector('#sheet .invite input');
   const link = await page.inputValue('#sheet .invite input');
   check(/\/join#code=[A-Za-z0-9_-]{22}$/.test(link), `Share: a one-time invite link (${link})`);
-  await page.waitForSelector('#sheet .person:has-text("not joined yet")');
+  await page.waitForSelector('#sheet .person:has-text("Invited")');
   check(await page.isVisible('#sheet .person:has-text("Nuca")'), 'Share: the person is listed, invited');
+  await page.tap('#sheet .person:has-text("Nuca")');
+  check(await page.isVisible('#sheet .g-row:has-text("not joined yet")') && await page.isVisible('#sheet .g-row.action:has-text("Cancel invite")')
+    && (await page.getAttribute('#sheet .person:has-text("Nuca")', 'aria-expanded')) === 'true', 'Share: a person\'s row opens their state, access and Cancel invite');
   await page.tap('#sheet .btn:has-text("Done")');
   await page.waitForTimeout(1500);   // (a sync brings the "shared" badge)
   check(await page.isVisible('.tab:has-text("Errands") .shared-badge'), 'the shared list has a badge on its tab');
@@ -234,7 +254,7 @@ await page.tap('#sheet .btn.primary');
   await gp.tap('#sheet .btn.primary:has-text("Join")');
   await gp.waitForSelector('.tab:has-text("Errands")');
   await gp.waitForSelector('.row', { timeout: 8000 }).catch(() => {});
-  check(await gp.isVisible('.callout.shared-note:has-text("View only")') && await gp.isHidden('#addBar'), 'a view-only list: says so, and no add bar');
+  check(await gp.isVisible('.shared-note:has-text("View only")') && await gp.isHidden('#addBar'), 'a view-only list: says so, and no add bar');
   check(await gp.isVisible('.tab:has-text("Errands") .shared-badge'), 'the person sees the badge too');
   await gp.dispatchEvent('.tab:has-text("Errands")', 'contextmenu');
   await gp.waitForSelector('#sheet .menu-item:has-text("Leave this list")');
@@ -247,8 +267,8 @@ await page.tap('#sheet .btn.primary');
 
   await page.dispatchEvent('.tab:has-text("Errands")', 'contextmenu');
   await page.tap('#sheet .menu-item:has-text("Share")');
-  await page.waitForSelector('#sheet .person:has-text("joined")');
-  check(true, 'the owner sees them as joined');
+  await page.waitForSelector('#sheet .person:has-text("Can view")');
+  check(true, 'the owner sees them as joined (their access instead of "Invited")');
   await page.tap('#sheet .btn:has-text("Done")');
 
   await gp.dispatchEvent('.tab:has-text("Errands")', 'contextmenu');
@@ -261,14 +281,24 @@ await page.tap('#sheet .btn.primary');
   await page.waitForSelector('.view-header');
 }
 
-// theme switch
+// theme switch (Settings > General)
+await page.tap('[data-fk="open:general"]');
 await page.tap('.segmented button:has-text("Light")');
 check((await page.getAttribute('html', 'data-theme')) === 'light', 'theme switch');
 await page.tap('.segmented button:has-text("Auto")');
+await page.tap('.view-header .back');
 
-// trash view
-await page.tap('text=Recently deleted');
-check(await page.isVisible('.view-header:has-text("Recently deleted")'), 'trash view opens');
+// Settings: a short list of pages, each with how it stands; the version under every view
+const pages = await page.$$eval('#list .group .g-row.link .g-label', (els) => els.map((e) => e.textContent));
+check(pages.join() === 'General,Notifications,Sync & sharing,Your lists,About', `Settings: the pages, in two cards (${pages.join()})`);
+check(/Saqme To Do \d+\.\d+\.\d+/.test(await page.textContent('#list .version-line')), `the version under Settings (${await page.textContent('#list .version-line')})`);
+
+// trash view (Settings > Your lists > Recently deleted), and back one level at a time
+await page.tap('[data-fk="open:lists"]');
+await page.tap('[data-fk="open:trash"]');
+check(await page.isVisible('.view-header:has-text("Recently deleted")') && await page.isVisible('#list .version-line'), 'trash view opens, with the version line');
+await page.tap('.view-header .back');
+check(await page.isVisible('.view-header h1:has-text("Your lists")'), 'Back goes one level up (Recently deleted to Your lists)');
 
 // offline reload still works (service worker)
 await page.goto(base + '/');

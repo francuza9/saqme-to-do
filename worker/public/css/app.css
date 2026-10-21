@@ -19,7 +19,11 @@ svg { display: block; }
 .tnum, .count, .meta, .pill, .time-input { font-variant-numeric: tabular-nums; }
 :focus-visible { outline: 2px solid var(--violet); outline-offset: 2px; border-radius: var(--r-control); }
 .tab:focus-visible { outline-offset: -2px; border-radius: var(--r-tab) var(--r-tab) 0 0; }
-.row:focus-visible { outline-offset: -2px; border-radius: 0; }
+.row:focus-visible, .g-row:focus-visible { outline-offset: -2px; border-radius: 0; }
+.group :focus-visible { outline-offset: -2px; }   /* (a card clips what is drawn outside it) */
+/* inside a card, where a task's chip and its text start (edge 2 + grip 14 + chevron 24 + 4, then the chip and 8):
+   the list's headings line up with the chips; hairlines, notes and the add line's text with the text */
+:root { --head-x: 44px; --text-x: 70px; }
 
 /* ------------------------------------------------------------------ frame */
 .card {
@@ -77,23 +81,50 @@ svg { display: block; }
 .conflicts-badge svg { width: 15px; height: 15px; }
 @keyframes pulse { 50% { opacity: .35; } }
 
-/* ------------------------------------------------------------------ the list: lines, not cards */
+/* ------------------------------------------------------------------ the list: lines in grouped cards */
 .list {
   flex: 1; overflow-y: auto; overflow-x: hidden; -webkit-overflow-scrolling: touch; outline: none; overscroll-behavior: contain;
-  padding: var(--space-3) calc(env(safe-area-inset-right) + var(--space-3)) var(--space-7) calc(env(safe-area-inset-left) + var(--space-2));
+  padding: var(--space-3) calc(env(safe-area-inset-right) + var(--card-inset)) var(--space-7) calc(env(safe-area-inset-left) + var(--card-inset));
 }
+/* no add line under it (Settings, a view-only list): the list runs to the bottom edge, over the home indicator */
+.card.no-add .list { padding-bottom: calc(env(safe-area-inset-bottom) + var(--space-7)); }
 .list::-webkit-scrollbar { width: 6px; }
 .list::-webkit-scrollbar-thumb { background: var(--thumb); border-radius: 3px; }
 
+/* A card of a grouped list (docs/design.md, "Grouped lists"): a shade lighter than the window, rounded, its rows
+   one line each with a hairline between two rows from where the lower row's text starts. A list's tasks are one
+   card; every view of Settings is cards of rows, a heading above and a footnote below. */
+.group { margin-top: var(--card-gap); background: var(--card); border-radius: var(--r-card); overflow: hidden; }
+.group > * { position: relative; }
+.group > * + *::before {
+  content: ''; position: absolute; z-index: 1; top: 0; right: 0; left: var(--line-x, var(--card-padding)); height: 1px;
+  background: var(--separator); pointer-events: none;
+}
+.g-head {
+  margin: var(--card-gap) var(--card-padding) 6px; color: var(--smoke); overflow: hidden; white-space: nowrap; text-overflow: ellipsis;
+  font-size: var(--t-small-size); line-height: var(--t-small-line); font-weight: var(--t-small-weight);
+}
+.g-head + .group, .g-head + .tasks { margin-top: 0; }
+.g-foot, .g-note { margin: 6px var(--card-padding) 0; color: var(--smoke); font-size: var(--t-meta-size); line-height: var(--t-meta-line); overflow-wrap: anywhere; }
+.g-note { margin-top: var(--card-gap); }
+.g-foot.alert { color: var(--alert); }
+.g-foot a, .g-note a { color: var(--violet); }
+/* the first block of a view sits close under its header (or the top of the list) */
+.view-header + *, .list > h1.sr-only:first-child + .group, .list > :first-child { margin-top: var(--space-2); }
+
+.tasks { --line-x: calc(var(--text-x) + var(--depth, 0) * var(--row-indent)); }
+.task-item { --line-x: calc(var(--text-x) + var(--depth) * var(--row-indent)); }
+.list-head { margin-left: var(--head-x); }
 .row {
   --depth: 0;
   position: relative; display: grid; grid-template-columns: 14px 24px 26px minmax(0, 1fr) 40px; align-items: start;
-  margin-left: calc(var(--depth) * var(--row-indent)); min-height: var(--row-min-touch); padding: 9px 0 9px 0;
+  min-height: var(--row-min-touch); padding: 9px 0 9px calc(var(--depth) * var(--row-indent));
   border-left: 2px solid transparent; user-select: none; -webkit-user-select: none; -webkit-touch-callout: none;
 }
-@media (pointer: fine) { .row { min-height: 40px; padding: 6px 0; } }
-.row.sel { background: var(--selected); border-left-color: var(--violet); }
-@media (hover: hover) { .row:hover { background: var(--hover); } .row.sel:hover { background: var(--selected); } .row:hover .grip { opacity: .8; } }
+@media (pointer: fine) { .row { min-height: var(--row-min-pointer); padding-top: 6px; padding-bottom: 6px; } }
+.row.with-notes { padding-bottom: 3px; }   /* its notes follow right under the text */
+.row.sel { background: var(--card-selected); border-left-color: var(--violet); }
+@media (hover: hover) { .row:hover { background: var(--card-hover); } .row.sel:hover { background: var(--card-selected); } .row:hover .grip { opacity: .8; } }
 .row.dragging { opacity: .45; }
 .grip { display: grid; place-items: center; height: 30px; opacity: .3; touch-action: none; cursor: grab; }
 .grip svg { width: 7px; height: 12px; color: var(--smoke); }
@@ -114,21 +145,31 @@ svg { display: block; }
 .chip.s-rej { border-color: var(--status-rej); background: var(--status-rej); color: var(--status-rej-glyph); }
 .chip.s-aband { border-color: var(--status-aband); background: var(--status-aband); color: var(--status-aband-glyph); }
 
-.main { min-width: 0; padding: 4px 0 4px calc(var(--row-chip-gap) - 8px); }
+.main { display: flex; flex-direction: column; min-width: 0; padding: 4px 0 4px calc(var(--row-chip-gap) - 8px); }
 .text { display: block; width: 100%; text-align: left; color: var(--ink); overflow-wrap: break-word; hyphens: auto; white-space: pre-wrap; cursor: text; }
 .text.empty { color: var(--smoke); font-style: italic; }
 .t-post { color: var(--smoke); font-style: italic; }
 .t-done, .t-rej { color: var(--closed); text-decoration: line-through; text-decoration-thickness: 1px; }
 .t-aband { color: var(--closed); text-decoration: line-through; text-decoration-thickness: 1px; font-style: italic; }
+/* (on the selected row's tint closed grey falls under 4.5 : 1; smoke stays above it, the strike-through says closed) */
+.row.sel .t-done, .row.sel .t-rej, .row.sel .t-aband { color: var(--smoke); }
 .editor {
   display: block; width: 100%; margin: 0; padding: 0 0 2px; resize: none; overflow: hidden; border: 0; border-radius: 0;
   border-bottom: 1.5px solid var(--violet); background: transparent; outline: none; caret-color: var(--violet);
   font-size: var(--t-body-size); line-height: var(--t-body-line);
 }
-@media (pointer: coarse) { .editor, .add input, .field, .notes textarea { font-size: 16px; } }   /* no iOS zoom on focus */
+@media (pointer: coarse) { .editor, .add input, .field, .g-input, .time-input, .notes textarea { font-size: 16px; } }   /* no iOS zoom on focus */
+/* a task's deadline, subtask count and notes mark: under its text on a phone held upright, on the right of its first
+   line from 440 px on (as the value of a row; the deadline rightmost), where the text still keeps a wide column */
 .meta {
   display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-1) var(--space-4); margin-top: var(--row-meta-gap);
   color: var(--smoke); font-size: var(--t-meta-size); line-height: var(--t-meta-line);
+}
+@media (min-width: 440px) {
+  .main { flex-direction: row; align-items: flex-start; gap: var(--space-4); }
+  .main > .text, .main > .editor { flex: 1 1 0; min-width: 0; }
+  .meta { flex: none; flex-wrap: nowrap; height: var(--t-body-line); margin-top: 0; gap: var(--space-4); }
+  .meta .m-notes { order: 1; } .meta .m-progress { order: 2; } .meta .m-due { order: 3; }
 }
 .meta .item { display: inline-flex; align-items: center; gap: var(--space-2); }
 .meta svg { width: 13px; height: 13px; }
@@ -136,10 +177,9 @@ svg { display: block; }
 .pill { display: inline-flex; align-items: center; height: 24px; padding: 0 var(--space-3); border-radius: var(--r-control); font-weight: 500; white-space: nowrap; }
 /* very narrow (200% zoom on a phone): no drag handle column, half the indent, so the text keeps its width */
 @media (max-width: 280px) {
-  :root { --row-indent: 10px; }
+  :root { --row-indent: 10px; --head-x: 30px; --text-x: 56px; }
   .row { grid-template-columns: 0 24px 26px minmax(0, 1fr) 32px; }
   .grip { visibility: hidden; overflow: hidden; }
-  .notes { margin-left: calc(var(--depth) * var(--row-indent) + 52px); }
 }
 .pill.over { background: var(--alert-wash); color: var(--alert); }
 .pill.soon { background: var(--amber-wash); color: var(--amber); }
@@ -148,44 +188,56 @@ svg { display: block; }
 @media (pointer: coarse) { .more { opacity: .5; } }
 @media (hover: hover) { .more { opacity: 0; } .row:hover .more, .row.sel .more, .more:focus-visible { opacity: .8; } }
 
+/* an open task's notes: quiet text under its text, in the same card (no box of its own, no hairline above) */
 .notes {
   --depth: 0;
-  margin: 0 var(--space-3) var(--space-3) calc(var(--depth) * var(--row-indent) + 66px); padding: var(--space-3) var(--space-4);
-  border-radius: var(--r-control); background: var(--note-bg); border-left: 2px solid var(--violet);
+  padding: 0 var(--space-5) 10px calc(var(--text-x) + var(--depth) * var(--row-indent));
   color: var(--note-ink); font-size: var(--t-meta-size); line-height: 20px; white-space: pre-wrap; overflow-wrap: anywhere; cursor: text;
 }
 .notes a { color: var(--violet); text-decoration: underline; text-decoration-thickness: 1px; text-underline-offset: 2px; }
 .notes textarea {
-  display: block; width: 100%; min-height: 44px; padding: 0; border: 0; background: transparent; resize: none; outline: none;
-  color: var(--ink); caret-color: var(--violet); font-size: var(--t-meta-size); line-height: 20px;
+  display: block; width: 100%; min-height: 40px; padding: 0 0 2px; border: 0; border-bottom: 1.5px solid var(--violet); border-radius: 0;
+  background: transparent; resize: none; outline: none; color: var(--ink); caret-color: var(--violet); font-size: var(--t-meta-size); line-height: 20px;
 }
-.notes .notes-actions { display: flex; justify-content: flex-end; gap: var(--space-3); margin-top: var(--space-3); }
+.notes textarea::placeholder { color: var(--smoke); }
+.notes .notes-actions { display: flex; justify-content: flex-end; margin-top: var(--space-2); }
 
-/* section breaks: a sentence-case label with a hairline to the right edge */
-.section-label, .completed-toggle {
-  display: flex; align-items: center; gap: var(--space-3); width: 100%; margin: var(--space-6) 0 var(--space-2);
-  padding: var(--space-2) var(--space-2) var(--space-2) 44px; color: var(--smoke); text-align: left;
+/* Postponed, Completed: the headings of their cards, in line with the status chips */
+h2.completed-heading { margin: var(--card-gap) 0 0; font: inherit; }
+.completed-toggle {
+  display: flex; align-items: flex-end; gap: var(--space-2); width: 100%; min-height: 44px; margin-top: -20px;
+  padding: 0 var(--card-padding) 6px var(--head-x); border-radius: var(--r-control); color: var(--smoke); text-align: left;
   font-size: var(--t-small-size); line-height: var(--t-small-line); font-weight: var(--t-small-weight);
 }
-.section-label::after, .completed-toggle::after { content: ''; flex: 1; height: 1px; background: var(--line); }
-.section-label.flush { padding-left: var(--space-4); }
-h2.completed-heading { margin: 0; font: inherit; }
-.completed-toggle { padding-left: 28px; min-height: 44px; margin-top: var(--space-5); }
-.completed-toggle svg { width: 10px; height: 10px; transition: transform .15s; }
+.completed-toggle .count { font-weight: 400; }
+.completed-toggle svg { width: 10px; height: 10px; margin: 0 0 3px auto; transition: transform .15s; }
 .completed-toggle.open svg { transform: rotate(90deg); }
-.completed-toggle .count { color: var(--smoke); font-weight: 400; }
 @media (hover: hover) { .completed-toggle:hover { color: var(--ink); } }
-.empty-state { margin: var(--space-7) var(--space-4); color: var(--smoke); }
-.drop-line { height: 2px; background: var(--violet); border-radius: 1px; margin: 0 var(--space-3) 0 calc(var(--depth, 0) * var(--row-indent) + 18px); pointer-events: none; }
-.spacer { height: var(--space-2); }
+.completed-heading + .tasks { margin-top: 0; }
+.empty-state { margin: var(--space-6) var(--card-padding) 0 var(--head-x); color: var(--smoke); }
+.view-header ~ .empty-state { margin-left: var(--card-padding); }
+/* where a dragged task would go: 2 px of violet over the hairline, taking no room */
+.drop-line {
+  position: relative; z-index: 2; height: 2px; margin: -1px var(--space-3) -1px calc(var(--text-x) + var(--depth, 0) * var(--row-indent));
+  background: var(--violet); border-radius: 1px; pointer-events: none;
+}
+/* a list someone shares with this device: where it comes from (and that it is view-only), above its cards */
+.shared-note { margin: 0 var(--card-padding) var(--space-2) var(--head-x); color: var(--smoke); font-size: var(--t-meta-size); line-height: var(--t-meta-line); }
+.shared-note b { color: var(--ink); font-weight: 600; }
+.shared-note.trouble { color: var(--ink); }
 
-/* ------------------------------------------------------------------ add bar */
+/* ------------------------------------------------------------------ add line: a card of its own under the list */
 /* the "+" sits in the chip column and the text in the task text column, like the next line of the list */
 .add {
-  flex: none; display: flex; align-items: center; gap: var(--space-3); min-height: 56px;
-  padding: var(--space-3) calc(env(safe-area-inset-right) + var(--space-5)) calc(env(safe-area-inset-bottom) + var(--space-3)) calc(env(safe-area-inset-left) + 48px);
-  border-top: 1px solid var(--line); background: var(--surface);
+  flex: none;
+  padding: var(--space-3) calc(env(safe-area-inset-right) + var(--card-inset)) calc(env(safe-area-inset-bottom) + var(--card-inset)) calc(env(safe-area-inset-left) + var(--card-inset));
+  background: var(--surface);
 }
+.add-card {
+  display: flex; align-items: center; gap: var(--space-3); min-height: var(--row-min-touch);
+  padding: 0 var(--card-padding) 0 var(--head-x); border-radius: var(--r-card); background: var(--card);
+}
+@media (pointer: fine) { .add-card { min-height: var(--row-min-pointer); } }
 .add-plus { display: grid; place-items: center; width: 18px; height: 18px; color: var(--violet); flex: none; }
 .add-plus svg { width: 15px; height: 15px; }
 .add input { flex: 1; min-width: 0; padding: var(--space-3) 0; border: 0; background: transparent; outline: none; caret-color: var(--violet); }
@@ -238,42 +290,106 @@ h2.completed-heading { margin: 0; font: inherit; }
 .btn-row { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: var(--space-3); padding: var(--space-3) var(--space-2) var(--space-1); }
 .sheet p { margin: var(--space-2) var(--space-4) var(--space-4); color: var(--smoke); }
 
-/* ------------------------------------------------------------------ settings / secondary views */
-.view-header { display: flex; align-items: center; gap: var(--space-2); width: 100%; min-height: 48px; padding: var(--space-2) var(--space-3) var(--space-4) 0; cursor: pointer; }
+/* ------------------------------------------------------------------ Settings and the views it opens */
+/* a view's header: Back (to where the view was opened from) and its title */
+.view-header { display: flex; align-items: center; gap: var(--space-2); width: 100%; min-height: 48px; padding: var(--space-2) var(--space-3) var(--space-2) 0; cursor: pointer; }
 .view-header .back { display: grid; place-items: center; width: 44px; height: 44px; border-radius: var(--r-control); }
 .view-header svg { width: 13px; height: 13px; color: var(--smoke); }
-.view-header h1 { margin: 0; font-size: var(--t-title-size); line-height: var(--t-title-line); font-weight: var(--t-title-weight); }
-.setting { display: flex; align-items: center; gap: var(--space-4); min-height: 56px; padding: var(--space-3) var(--space-4); }
-.setting .label { flex: 1; min-width: 0; }
-.setting .label div:first-child { font-size: var(--t-body-size); line-height: var(--t-body-line); }
-.setting .label .sub { margin-top: var(--space-1); color: var(--smoke); font-size: var(--t-meta-size); line-height: var(--t-meta-line); overflow-wrap: anywhere; }
-.setting.link { width: 100%; text-align: left; border-radius: var(--r-control); }
-.setting.link:active { background: var(--hover); }
-@media (hover: hover) { .setting.link:hover { background: var(--hover); } }
-.setting.link > svg { width: 11px; height: 11px; color: var(--smoke); }
-.segmented { display: flex; flex: none; padding: 2px; border-radius: var(--r-control); background: var(--button-bg); }
-.segmented button { min-height: 36px; padding: var(--space-2) var(--space-4); border-radius: 5px; color: var(--smoke); font-size: var(--t-label-size); font-weight: 500; }
+.view-header h1 { margin: 0; min-width: 0; overflow-wrap: anywhere; font-size: var(--t-title-size); line-height: var(--t-title-line); font-weight: var(--t-title-weight); }
+
+/* A row of a card, all on one line: [icon] label ...... [dot] value [chevron | switch | text button]. The label gives
+   way first (it ends in "..."; a long value is the one cut instead: .long); what a second line used to say is in the
+   footnote under the card, the row's tooltip and what a screen reader reads. */
+.g-row {
+  display: flex; align-items: center; gap: var(--space-4); width: 100%; min-height: var(--card-row-min);
+  padding: 6px var(--card-padding); background: var(--card); color: var(--ink); text-align: left;
+  font-size: var(--t-body-size); line-height: var(--t-body-line);
+}
+.g-row.icon { --line-x: calc(var(--card-padding) + 28px); }
+button.g-row:disabled { cursor: default; opacity: .55; }
+button.g-row:not(:disabled):active { background: var(--card-pressed); }
+@media (hover: hover) { button.g-row:not(:disabled):hover { background: var(--card-hover); } button.g-row:not(:disabled):active { background: var(--card-pressed); } }
+.g-icon { display: grid; place-items: center; flex: none; width: 16px; color: var(--smoke); }
+.g-icon svg { width: 16px; height: 16px; }
+.g-label { flex: 1 1 0; min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+.g-value { display: flex; align-items: center; flex: 0 1 auto; min-width: 0; color: var(--smoke); font-variant-numeric: tabular-nums; }
+.g-vtext { min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+.g-row.long .g-label { flex: none; max-width: 60%; }
+.g-row.long .g-value { flex: 1 1 0; justify-content: flex-end; }
+.g-chev { display: grid; place-items: center; flex: none; color: var(--smoke); }
+.g-chev svg { width: 11px; height: 11px; transition: transform .15s; }
+.g-row[aria-expanded="true"] .g-chev svg { transform: rotate(90deg); }
+/* the "needs a look" mark: a violet dot, always before words that say what it is about */
+.dot { flex: none; width: 7px; height: 7px; margin-right: var(--space-3); border-radius: 50%; background: var(--violet); }
+/* actions are rows: their label violet, red when risky */
+.g-row.action .g-label { color: var(--violet); }
+.g-row.action.danger .g-label { color: var(--alert); }
+/* a small button at the end of a row (Join, Leave, Restore): text only */
+.g-btn {
+  flex: none; min-height: 32px; margin: -4px -8px -4px 0; padding: 0 var(--space-3); border-radius: var(--r-control);
+  color: var(--violet); font-weight: 500; white-space: nowrap;
+}
+.g-btn.danger { color: var(--alert); }
+.g-btn + .g-btn { margin-left: 0; }
+.g-btn:active { background: var(--card-pressed); }
+@media (hover: hover) { .g-btn:hover { background: var(--card-pressed); } }
+@media (pointer: coarse) { .g-btn { min-height: 40px; } }
+/* a switch row: the whole row is the switch. Off: a smoke track (visible on the light card, unlike a hairline grey) */
+.switch { position: relative; flex: none; width: 36px; height: 20px; border-radius: 10px; background: var(--smoke); }
+.switch .knob { position: absolute; top: 3px; left: 3px; width: 14px; height: 14px; border-radius: 50%; background: var(--card); transition: transform .15s; }
+.switch.on { background: var(--violet); }
+.switch.on .knob { transform: translateX(16px); background: var(--on-violet); }
+/* a text box that is a row (a link to paste), its buttons at the end; a red line under it when it is not taken */
+.g-row.input { padding-top: 0; padding-bottom: 0; }
+.g-row.input:focus-within { outline: 2px solid var(--violet); outline-offset: -2px; }
+.g-input {
+  flex: 1 1 auto; min-width: 0; height: var(--card-row-min); padding: 0; border: 0; border-radius: 0; background: transparent;
+  color: var(--ink); caret-color: var(--violet); outline: none; font-size: var(--t-body-size);
+}
+.g-input::placeholder { color: var(--smoke); }
+.g-input[readonly] { color: var(--smoke); }
+.g-input.bad { box-shadow: inset 0 -1.5px 0 var(--alert); }
+/* a choice of a few, on a quiet track; the current one violet */
+.segmented { display: flex; flex: none; padding: 2px; border-radius: var(--r-control); background: var(--card-pressed); }
+.segmented button { min-height: 32px; padding: var(--space-1) var(--space-4); border-radius: 5px; color: var(--smoke); font-size: var(--t-label-size); font-weight: 500; }
 .segmented button.on { background: var(--violet); color: var(--on-violet); font-weight: 600; }
-.time-input { width: 96px; padding: var(--space-3); border: 1px solid var(--line); border-radius: var(--r-control); background: var(--surface); color: var(--ink); text-align: center; }
+@media (pointer: coarse) { .segmented button { min-height: 36px; } }
+.time-input { flex: none; min-width: 84px; padding: var(--space-1) var(--space-3); border: 0; border-radius: var(--r-control); background: var(--card-pressed); color: var(--ink); text-align: center; }
+/* a version of a task in Conflicts: your own words, so it wraps (the label in a column before it) */
+.g-row.version { align-items: flex-start; padding-top: 11px; padding-bottom: 11px; }
+.g-row.version .g-lead { flex: none; width: 7.5em; color: var(--smoke); }
+.g-row.version .g-text { flex: 1 1 0; min-width: 0; white-space: pre-wrap; overflow-wrap: anywhere; }
+/* Keyboard shortcuts: the keys as small caps on the right */
+.keys { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: var(--space-2); flex: none; max-width: 55%; }
+kbd { padding: 1px 6px 2px; border-radius: var(--r-chip); background: var(--card-pressed); color: var(--ink); font: inherit; font-size: var(--t-small-size); line-height: var(--t-small-line); white-space: nowrap; }
+/* a long row's text at 200 % zoom: it wraps instead of being cut (nothing is lost when the screen is this narrow) */
+@media (max-width: 359px) {
+  .g-label, .g-vtext { white-space: normal; overflow-wrap: anywhere; }
+  .g-label { min-width: 5em; }
+  .g-row.long .g-label { max-width: 50%; }
+}
+/* the quiet line at the bottom of every Settings view: the version, and (Linux, macOS) an update waiting */
+.version-line {
+  display: flex; flex-wrap: wrap; align-items: center; gap: 0 var(--space-4); margin: var(--card-gap) var(--card-padding) 0;
+  color: var(--smoke); font-size: var(--t-meta-size); line-height: var(--t-meta-line); font-variant-numeric: tabular-nums; text-align: left;
+}
+button.version-line { margin-left: calc(var(--card-padding) - 6px); padding: 3px 6px; border-radius: var(--r-control); }
+@media (hover: hover) { button.version-line:hover { background: var(--hover); } }
+.version-line .upd { display: inline-flex; align-items: center; color: var(--violet); }
+.version-line .dot { margin-right: 6px; }
 .callout {
-  margin: var(--space-2) var(--space-3) var(--space-4); padding: var(--space-4) var(--space-4); border-radius: var(--r-control);
-  background: var(--note-bg); border-left: 2px solid var(--violet); color: var(--note-ink); font-size: var(--t-meta-size); line-height: 20px;
+  margin: var(--space-2) 0 0; padding: var(--space-4) var(--card-padding); border-radius: var(--r-card);
+  background: var(--card); color: var(--note-ink); font-size: var(--t-meta-size); line-height: 20px;
 }
 .callout b { color: var(--ink); font-weight: 600; }
-.callout.install .btn-row { padding: var(--space-3) 0 0; }
-.callout .btn-row { padding: var(--space-3) 0 0; }
-/* the cloud setup's output while it runs (Settings > Sync > Set up sync, Linux and macOS) */
+.callout .btn-row { padding: var(--space-2) 0 0; }
+/* the cloud setup's output while it runs (Settings > Sync & sharing > Set up sync, Linux and macOS) */
 .setup-log {
-  margin: var(--space-3) 0 0; padding: var(--space-3) var(--space-4); max-height: 16em; overflow: auto; border-radius: var(--r-control);
-  background: var(--surface); color: var(--ink); font-family: ui-monospace, Menlo, Consolas, monospace; font-size: var(--t-small-size);
+  margin: var(--space-3) 0 0; padding: var(--space-3) var(--card-padding); max-height: 16em; overflow: auto; border-radius: var(--r-card);
+  background: var(--card); color: var(--ink); font-family: ui-monospace, Menlo, Consolas, monospace; font-size: var(--t-small-size);
   line-height: 1.5; white-space: pre-wrap; overflow-wrap: anywhere;
 }
 .setup-log a { color: var(--violet); }
-.trash-item, .conflict-item { margin: 0 var(--space-2); padding: var(--space-4) var(--space-3); border-bottom: 1px solid var(--line); }
-.trash-item .what, .conflict-item .what { overflow-wrap: anywhere; font-weight: 500; }
-.trash-item .sub, .conflict-item .sub { margin-top: var(--space-1); color: var(--smoke); font-size: var(--t-meta-size); line-height: var(--t-meta-line); }
-.conflict-item .choice { margin-top: var(--space-3); padding: var(--space-3) var(--space-4); border-radius: var(--r-control); background: var(--note-bg); overflow-wrap: anywhere; white-space: pre-wrap; }
-.conflict-item .choice .who { margin-bottom: var(--space-1); color: var(--smoke); font-size: var(--t-small-size); line-height: var(--t-small-line); font-weight: 500; }
 
 /* welcome / pairing */
 .welcome { display: flex; flex-direction: column; align-items: center; gap: var(--space-3); padding: 40px var(--space-5) var(--space-6); text-align: center; }
@@ -298,15 +414,20 @@ h2.completed-heading { margin: 0; font: inherit; }
 .tab.active .shared-badge { color: var(--violet); }
 .menu-item:disabled { opacity: .55; }
 .sheet p.sheet-note { margin: var(--space-1) var(--space-4) var(--space-3); font-size: var(--t-meta-size); line-height: var(--t-meta-line); }
-.sheet .sheet-label { margin: var(--space-5) var(--space-4) var(--space-2); color: var(--smoke); font-size: var(--t-small-size); line-height: var(--t-small-line); font-weight: 600; text-transform: uppercase; letter-spacing: .04em; }
-.sheet .share-access { margin: 0 auto 0 0; }
-.invite { margin: var(--space-3) var(--space-2) 0; padding: var(--space-2) 0; border-radius: var(--r-control); background: var(--note-bg); }
-.person { margin: 0 var(--space-2); padding: var(--space-3) var(--space-2); border-bottom: 1px solid var(--line); }
-.person .who { padding: 0 var(--space-2); }
-.person .what { overflow-wrap: anywhere; font-weight: 500; }
-.person .sub { margin-top: var(--space-1); color: var(--smoke); font-size: var(--t-meta-size); line-height: var(--t-meta-line); }
-.person .btn-row { align-items: center; }
-.segmented.small button { min-height: 32px; padding: var(--space-1) var(--space-3); font-size: var(--t-meta-size); }
+/* the Share sheet: grouped like Settings (cards on the sheet's frame colour; its sections are h3 under the sheet's title) */
+.sheet .group { margin-left: var(--space-1); margin-right: var(--space-1); }
+.sheet .g-head { margin: var(--card-gap) var(--space-1) 6px; padding: 0 var(--card-padding); }
+.sheet .g-head + .group { margin-top: 0; }
+.sheet h2 + .g-head { margin-top: var(--space-2); }
+.sheet p.g-foot { margin: 6px var(--space-1) 0; padding: 0 var(--card-padding); font-size: var(--t-meta-size); line-height: var(--t-meta-line); }
+.sheet p.g-note { margin: var(--space-2) var(--space-1) 0; padding: 0 var(--card-padding); font-size: var(--t-meta-size); line-height: var(--t-meta-line); }
+.sheet p.g-foot.alert { color: var(--alert); }
+.sheet img.qr.in-group { margin-top: var(--card-gap); }
+/* a person's rows, open under them: their state, the access choices, revoke */
+.g-row.sub { padding-left: calc(var(--card-padding) + 28px); --line-x: calc(var(--card-padding) + 28px); }
+.g-row.sub.info { color: var(--smoke); }
+.g-row .check { display: grid; place-items: center; flex: none; width: 16px; color: var(--violet); }
+.g-row .check svg { width: 14px; height: 14px; }
 .linkish { color: var(--violet); font-weight: 600; text-decoration: underline; text-underline-offset: 2px; }
 /* join.html: the page an invite link opens */
 .join-page { overflow-y: auto; }

@@ -40,6 +40,20 @@ describe('design tokens', () => {
       expect(p.card, 'card colour').not.toBe(p.surface);
       expect(contrast(p.separator, p.card), 'hairline').toBeGreaterThan(1.1);
     });
+    it(`${name}: the phone app's grouped look keeps text at AA and its controls at 3:1 (worker/public/css/app.css)`, () => {
+      // a switch: off, a smoke track with a knob of the card's colour (a hairline-grey track would vanish on the light
+      // card); on, a violet track with an on-violet knob
+      expect(contrast(p.smoke, p.card), 'an off switch\'s track on a card').toBeGreaterThanOrEqual(3);
+      expect(contrast(p.card, p.smoke), 'an off switch\'s knob').toBeGreaterThanOrEqual(3);
+      expect(contrast(p.onViolet, p.violet), 'an on switch\'s knob').toBeGreaterThanOrEqual(3);
+      expect(contrast(p.ink, p.cardPressed), 'a key cap (Keyboard shortcuts)').toBeGreaterThanOrEqual(4.5);
+      // a selected closed task is drawn in smoke: closed grey is under 4.5:1 on the selected row's tint
+      expect(contrast(p.smoke, p.cardSelected), 'a closed task on the selected row').toBeGreaterThanOrEqual(4.5);
+      expect(contrast(p.violet, p.cardSelected), 'a link in a selected row').toBeGreaterThanOrEqual(4.5);
+      // the Share sheet's footnotes sit on the sheet (frame); the version line is a link on the list's surface
+      for (const k of ['smoke', 'alert']) expect(contrast(p[k], p.frame), `${k} footnote in a sheet`).toBeGreaterThanOrEqual(4.5);
+      expect(contrast(p.violet, p.hover), 'the version line as a link, hovered').toBeGreaterThanOrEqual(4.5);
+    });
     it(`${name}: status chips and their glyphs meet WCAG 1.4.11 (3:1), also on hovered and selected rows`, () => {
       const p = palette(theme);
       for (const k of ['Todo', 'Prog', 'Done', 'Post', 'Block', 'Rej', 'Aband']) {
