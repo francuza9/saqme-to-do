@@ -1,6 +1,6 @@
 # Changes
 
-## Unreleased
+## 1.2.2
 
 **Use Saqme with your AI.** Your lists are markdown files, so an AI assistant with file access (Claude Desktop or
 Claude Code, the ChatGPT desktop app, Cursor, Codex, an MCP filesystem server) can read and manage them. Until now
