@@ -20,3 +20,8 @@ migrations_dir = "migrations"
 # reminder pushes: every 5 minutes (288 runs a day, far inside the free plan)
 [triggers]
 crons = ["*/5 * * * *"]
+
+# where the Worker is, for updating itself (worker/src/selfupdate.js; it does so only with a token you give it)
+[vars]
+SAQME_ACCOUNT_ID = "__ACCOUNT_ID__"
+SAQME_WORKER_NAME = "__WORKER_NAME__"

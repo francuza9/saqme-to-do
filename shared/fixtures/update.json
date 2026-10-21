@@ -11,7 +11,11 @@
     "  (none: no sync of their own; ok: updated, or already that version; needs-login; failed), workerApi the",
     "  API of the Worker that runs now (null: unknown, taken as 1), minWorkerApi what the new release needs.",
     "  out: apply (all done) | apply-pending (the apps update, the Worker is tried again later) | hold (nothing",
-    "  changes: the new apps would not work with that Worker)."
+    "  changes: the new apps would not work with that Worker).",
+    "selfUpdate: the Worker updating itself (worker/src/selfupdate.js selfUpdateDecision; JavaScript only):",
+    "  { release: { version, api } or null (none published), bundle (the release has the Worker's bundle), running:",
+    "  { version, api } (the Worker that decides), skip (a version that went back by itself), manual (Update now),",
+    "  out }: out is update, or why not: none | current (not newer) | no-bundle | api (it would offer less) | skipped."
   ],
   "compareVersions": [
     ["1.2.0", "1.10.0", -1],
@@ -62,5 +66,17 @@
     { "deploy": "failed", "workerApi": null, "minWorkerApi": 1, "out": "apply-pending" },
     { "deploy": "failed", "workerApi": null, "minWorkerApi": 2, "out": "hold" },
     { "deploy": "failed", "workerApi": 2, "minWorkerApi": 3, "out": "hold" }
+  ],
+  "selfUpdate": [
+    { "release": { "version": "1.2.0", "api": 4 }, "bundle": true, "running": { "version": "1.1.9", "api": 4 }, "skip": "", "manual": false, "out": "update" },
+    { "release": { "version": "1.10.0", "api": 5 }, "bundle": true, "running": { "version": "1.9.0", "api": 4 }, "skip": "", "manual": false, "out": "update" },
+    { "release": null, "bundle": false, "running": { "version": "1.2.0", "api": 4 }, "skip": "", "manual": true, "out": "none" },
+    { "release": { "version": "1.2.0", "api": 4 }, "bundle": true, "running": { "version": "1.2.0", "api": 4 }, "skip": "", "manual": true, "out": "current" },
+    { "release": { "version": "1.1.0", "api": 3 }, "bundle": true, "running": { "version": "1.2.0", "api": 4 }, "skip": "", "manual": true, "out": "current" },
+    { "release": { "version": "1.3.0", "api": 5 }, "bundle": false, "running": { "version": "1.2.0", "api": 4 }, "skip": "", "manual": false, "out": "no-bundle" },
+    { "release": { "version": "1.3.0", "api": 3 }, "bundle": true, "running": { "version": "1.2.0", "api": 4 }, "skip": "", "manual": true, "out": "api" },
+    { "release": { "version": "1.3.0", "api": 4 }, "bundle": true, "running": { "version": "1.2.0", "api": 4 }, "skip": "1.3.0", "manual": false, "out": "skipped" },
+    { "release": { "version": "1.3.0", "api": 4 }, "bundle": true, "running": { "version": "1.2.0", "api": 4 }, "skip": "1.3.0", "manual": true, "out": "update" },
+    { "release": { "version": "1.3.1", "api": 4 }, "bundle": true, "running": { "version": "1.2.0", "api": 4 }, "skip": "1.3.0", "manual": false, "out": "update" }
   ]
 }

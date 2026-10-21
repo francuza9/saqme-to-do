@@ -82,7 +82,10 @@ describe('the release', () => {
     const m = checkManifest(r.manifest);
     expect(m).toMatchObject({ version: '9.9.9', tag: 'v9.9.9', asset: 'saqme-9.9.9.zip', size: r.bytes.length });
     expect(m.sha256).toBe(createHash('sha256').update(r.bytes).digest('hex'));
-    expect(readFileSync(join(dir, 'dist-9.9.9', 'SHA256SUMS'), 'utf8')).toBe(`${m.sha256}  saqme-9.9.9.zip\n`);
+    const bundleSum = createHash('sha256').update(readFileSync(r.bundle)).digest('hex');
+    expect(readFileSync(join(dir, 'dist-9.9.9', 'SHA256SUMS'), 'utf8')).toBe(`${m.sha256}  saqme-9.9.9.zip\n${bundleSum}  saqme-worker-9.9.9.bundle\n`);
+    // the Worker's bundle (worker/test/node/self-update.test.js has the rest); the apps' updaters leave it alone
+    expect(r.manifest.worker).toMatchObject({ asset: 'saqme-worker-9.9.9.bundle', size: readFileSync(r.bundle).length, sha256: bundleSum });
     expect(release('9.9.9').manifest.asset.sha256).toBe(m.sha256);   // the same files, the same zip
   });
 
