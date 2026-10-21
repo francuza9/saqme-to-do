@@ -10,7 +10,8 @@
     "list was not usable, or one is briefly missing) when given. State before the diff: \"missing\" (project id -> seconds its",
     "list has been missing), \"planned\" (task id -> {age: seconds since the plan, added?, addedTs?, fields: {field: [value",
     "before the plan, its ts]}}), \"guard\" (keys held back last time) and \"allow\" (the user confirmed them); \"guardAfter\":",
-    "the keys held back afterwards."
+    "the keys held back afterwards. restore (\"Restore them\" under Deletions paused): with base S, the folder and \"guard\" (the",
+    "keys held back), build the restore plan and apply it; \"count\" = tasks put back, after / filesAfter as for plan."
   ],
   "plan": [
     {
@@ -568,6 +569,99 @@
       ],
       "planned": { "aaaaaaaa": { "age": 1900, "fields": { "status": [" ", 50] } } },
       "changes": [["task", "aaaaaaaa", "status", " ", { "base": 100 }]]
+    }
+  ],
+  "restore": [
+    {
+      "name": "an emptied list gets its held-back tasks back: subtasks under their parents, deadlines with a time, notes, statuses, ids",
+      "lists": { "Work.md": "" },
+      "files": { "pwork001": "Work" },
+      "S": [
+        { "p": "pwork001", "name": "Work", "pos": "a0" },
+        { "t": "aaaaaaaa", "in": "pwork001", "pos": "a0", "text": "A", "due": { "date": "2026-10-25", "time": "14:00" } },
+        { "t": "aaaaaaa1", "in": "pwork001", "pos": "a0", "text": "A1", "parent": "aaaaaaaa", "notes": "see https://x.example\nsecond line" },
+        { "t": "aaaaaaa2", "in": "pwork001", "pos": "a1", "text": "A2", "parent": "aaaaaaaa", "status": "x" },
+        { "t": "aaaaaa21", "in": "pwork001", "pos": "a0", "text": "A2 sub", "parent": "aaaaaaa2", "due": { "date": "2026-11-01", "time": null } },
+        { "t": "bbbbbbbb", "in": "pwork001", "pos": "a1", "text": "B", "status": "/" }
+      ],
+      "guard": ["task:aaaaaaaa", "task:aaaaaaa1", "task:aaaaaaa2", "task:aaaaaa21", "task:bbbbbbbb"],
+      "count": 5,
+      "after": {
+        "Work.md": "- [ ] A due:2026-10-25T14:00 ^aaaaaaaa\n  - [ ] A1 ^aaaaaaa1\n    > see https://x.example\n    > second line\n  - [x] A2 ^aaaaaaa2\n    - [ ] A2 sub due:2026-11-01 ^aaaaaa21\n- [/] B ^bbbbbbbb\n"
+      }
+    },
+    {
+      "name": "tasks added since stay (also new lines without an id); the held-back ones go back among the rest by position",
+      "lists": { "Work.md": "# Work\n- [ ] B ^bbbbbbbb\n- [ ] Smoke task ^smoke001\n  - [ ] Smoke subtask ^smoke002\n- [ ] No id yet\n" },
+      "files": { "pwork001": "Work" },
+      "S": [
+        { "p": "pwork001", "name": "Work", "pos": "a0" },
+        { "t": "aaaaaaaa", "in": "pwork001", "pos": "a0", "text": "A" },
+        { "t": "bbbbbbbb", "in": "pwork001", "pos": "a1", "text": "B" },
+        { "t": "bbbbbbb1", "in": "pwork001", "pos": "a0", "text": "B1", "parent": "bbbbbbbb" },
+        { "t": "cccccccc", "in": "pwork001", "pos": "a2", "text": "C" },
+        { "t": "dddddddd", "in": "pwork001", "pos": "a3", "text": "D" },
+        { "t": "smoke001", "in": "pwork001", "pos": "a4", "text": "Smoke task" }
+      ],
+      "guard": ["task:aaaaaaaa", "task:bbbbbbb1", "task:cccccccc", "task:dddddddd"],
+      "count": 4,
+      "after": {
+        "Work.md": "# Work\n- [ ] A ^aaaaaaaa\n- [ ] B ^bbbbbbbb\n  - [ ] B1 ^bbbbbbb1\n- [ ] C ^cccccccc\n- [ ] D ^dddddddd\n- [ ] Smoke task ^smoke001\n  - [ ] Smoke subtask ^smoke002\n- [ ] No id yet\n"
+      }
+    },
+    {
+      "name": "a list whose file is gone is written again, under its name and at the end of the list order",
+      "lists": { "Work.md": "- [ ] W ^wwwwwwww\n", ".order": "Work\n" },
+      "files": { "pwork001": "Work", "pold0001": "Old" },
+      "S": [
+        { "p": "pwork001", "name": "Work", "pos": "a0" },
+        { "p": "pold0001", "name": "Old", "pos": "a1" },
+        { "t": "wwwwwwww", "in": "pwork001", "pos": "a0", "text": "W" },
+        { "t": "oooooo00", "in": "pold0001", "pos": "a0", "text": "O0" },
+        { "t": "oooooo01", "in": "pold0001", "pos": "a0", "text": "O0 sub", "parent": "oooooo00", "notes": "a note" },
+        { "t": "oooooo02", "in": "pold0001", "pos": "a1", "text": "O2", "status": "x" },
+        { "t": "oooooo03", "in": "pold0001", "pos": "a2", "text": "O3" },
+        { "t": "oooooo04", "in": "pold0001", "pos": "a3", "text": "O4", "due": { "date": "2026-12-24", "time": "18:30" } },
+        { "t": "oooooo05", "in": "pold0001", "pos": "a4", "text": "O5" },
+        { "t": "oooooo06", "in": "pold0001", "pos": "a5", "text": "Deleted before", "deleted": true }
+      ],
+      "guard": ["project:pold0001"],
+      "count": 6,
+      "after": {
+        "Work.md": "- [ ] W ^wwwwwwww\n",
+        "Old.md": "- [ ] O0 ^oooooo00\n  - [ ] O0 sub ^oooooo01\n    > a note\n- [x] O2 ^oooooo02\n- [ ] O3 ^oooooo03\n- [ ] O4 due:2026-12-24T18:30 ^oooooo04\n- [ ] O5 ^oooooo05\n",
+        ".order": "Work\nOld\n"
+      },
+      "filesAfter": { "pwork001": "Work", "pold0001": "Old" }
+    },
+    {
+      "name": "held-back tasks whose list file vanished since come back in that file",
+      "lists": { "Work.md": "- [ ] W ^wwwwwwww\n" },
+      "files": { "pwork001": "Work", "phome001": "Home" },
+      "S": [
+        { "p": "pwork001", "name": "Work", "pos": "a0" },
+        { "p": "phome001", "name": "Home", "pos": "a1" },
+        { "t": "wwwwwwww", "in": "pwork001", "pos": "a0", "text": "W" },
+        { "t": "hhhhhhh1", "in": "phome001", "pos": "a0", "text": "H1" },
+        { "t": "hhhhhhh2", "in": "phome001", "pos": "a1", "text": "H2" }
+      ],
+      "guard": ["task:hhhhhhh1", "task:hhhhhhh2"],
+      "count": 2,
+      "after": { "Work.md": "- [ ] W ^wwwwwwww\n", "Home.md": "- [ ] H1 ^hhhhhhh1\n- [ ] H2 ^hhhhhhh2\n", ".order": "Work\nHome\n" },
+      "filesAfter": { "pwork001": "Work", "phome001": "Home" }
+    },
+    {
+      "name": "tasks already put back by hand: nothing to write",
+      "lists": { "Work.md": "- [ ] A ^aaaaaaaa\n- [ ] B ^bbbbbbbb\n" },
+      "files": { "pwork001": "Work" },
+      "S": [
+        { "p": "pwork001", "name": "Work", "pos": "a0" },
+        { "t": "aaaaaaaa", "in": "pwork001", "pos": "a0", "text": "A" },
+        { "t": "bbbbbbbb", "in": "pwork001", "pos": "a1", "text": "B" }
+      ],
+      "guard": ["task:aaaaaaaa", "task:bbbbbbbb"],
+      "count": 0,
+      "after": { "Work.md": "- [ ] A ^aaaaaaaa\n- [ ] B ^bbbbbbbb\n" }
     }
   ]
 }

@@ -24,6 +24,27 @@ $script:Json.RecursionLimit = 64
 $script:ValidMarks = @(' ', '/', 'x', '>', '!', '-', '~')
 
 # ================================================================ files
+# Where the widget keeps its data: -DataDir, else SAQME_DATA_DIR, else the app's folder when a "lists" folder is next
+# to it (portable), else %APPDATA%\SaqmeToDo. The self-check (-SmokeTest) adds tasks and settings, and syncs with any
+# sync set up where it runs, so it never runs on someone's lists: without -DataDir it gets a new temp folder (the
+# other three are real data), and a -DataDir that is one of those three is refused.
+# -> @{ Dir; Temp ($true: a temp folder made up for the self-check); Refused (why it may not run there, or '') }
+function Resolve-WidgetDataDir([string]$DataDir, [switch]$SmokeTest, [string]$AppDir, [string]$EnvDir, [string]$AppData, [string]$TempDir) {
+  $real = @($EnvDir, $AppDir, $(if ($AppData) { Join-Path $AppData 'SaqmeToDo' })) | Where-Object { $_ }
+  if (-not $SmokeTest) {
+    $d = $(if ($DataDir) { $DataDir } elseif ($EnvDir) { $EnvDir } elseif ($AppDir -and (Test-Path -LiteralPath (Join-Path $AppDir 'lists'))) { $AppDir } else { Join-Path $AppData 'SaqmeToDo' })
+    return @{ Dir = $d; Temp = $false; Refused = '' }
+  }
+  if (-not $DataDir) { return @{ Dir = (Join-Path $TempDir ('saqme-smoke-' + [guid]::NewGuid().ToString('N').Substring(0, 8))); Temp = $true; Refused = '' } }
+  $norm = { param([string]$p) try { [IO.Path]::GetFullPath($p).TrimEnd('\', '/') } catch { $p } }
+  foreach ($r in $real) {
+    if ((& $norm $DataDir) -ieq (& $norm $r)) {
+      return @{ Dir = $DataDir; Temp = $false; Refused = "the self-check adds tasks to the lists in $DataDir and syncs them, and that folder holds the app's real lists. Give it an empty scratch folder with -DataDir, or leave -DataDir out for a temp one." }
+    }
+  }
+  return @{ Dir = $DataDir; Temp = $false; Refused = '' }
+}
+
 # File bytes -> text (byte order marks dropped): UTF-8, or UTF-16 with its byte order mark. A file that is
 # not valid UTF-8 was saved in the system's legacy code page (Windows PowerShell's Set-Content does that)
 # and is read that way, instead of turning its accents into U+FFFD for good on the next write.
@@ -1447,6 +1468,80 @@ function New-ListFromRows($st, [string]$projId, $depth) {
   return ConvertTo-MarkdownText $items
 }
 
+# "Restore them" (Deletions paused): the deletes the guard holds back ($st.Guard) are undone in the files instead.
+# Each held-back task goes back into its list as the last synced copy (S) has it (text, status, deadline, notes, id),
+# under its parent and among its siblings by position, merged into what the file holds now (tasks added since stay);
+# a list whose file is gone is written again. -> @{ Plan; Count } (Plan $null while some list is not usable right now:
+# try again), or $null when nothing is held back. The plan goes through ApplyPlan like any other. (engine.mjs restorePlan)
+function Get-RestorePlan($st, $local, [string]$listsDir) {
+  if (-not $st.Guard -or -not @($st.Guard['ids']).Count) { return $null }
+  if (-not $local.Ok) { return @{ Plan = $null; Count = 0 } }
+  # (a list with lines still waiting for their ids is fine: they stay as they are, the next cycle gives them ids)
+  foreach ($name in $local.Names) { if (@('ok', 'unstamped') -notcontains $local.Files[$name].Status) { return @{ Plan = $null; Count = 0 } } }
+  $base = $st.S
+  $want = [ordered]@{}   # project id -> its rows to put back
+  foreach ($key in @($st.Guard['ids'])) {
+    $i = $key.IndexOf(':'); $kind = $key.Substring(0, $i); $id = $key.Substring($i + 1)
+    if ($kind -eq 'project') {
+      if (-not $want.Contains($id)) { $want[$id] = New-Object System.Collections.ArrayList }
+      foreach ($tid in (Get-LiveTaskIds $base $id)) { [void]$want[$id].Add($base["task:$tid"]) }
+      continue
+    }
+    $r = $base[$key]
+    if (-not $r -or (Get-Field $r 'deleted')['v']) { continue }
+    $pl = Get-PlaceOf $r
+    if (-not $pl) { continue }
+    if (-not $want.Contains($pl['project'])) { $want[$pl['project']] = New-Object System.Collections.ArrayList }
+    [void]$want[$pl['project']].Add($r)
+  }
+  # depth and order keys as of the last sync
+  $posOf = @{}
+  foreach ($key in @($base.Keys)) { $r = $base[$key]; if ($r['kind'] -eq 'task') { $pl = Get-PlaceOf $r; if ($pl) { $posOf[$r['id']] = [string]$pl['pos'] } } }
+  $depth = @{}
+  foreach ($rows in $want.Values) {
+    foreach ($r in $rows) {
+      $d = 0; $p = (Get-PlaceOf $r)['parent']; $guard = 0
+      while ($p -and $guard -lt 200) { $pr = $base["task:$p"]; if (-not $pr) { break }; $d++; $p = (Get-PlaceOf $pr)['parent']; $guard++ }
+      $depth[$r['id']] = $d
+    }
+  }
+  $plan = @{ Ops = (New-Object System.Collections.ArrayList); Files = @{}; Setting = $null }
+  $reserved = @{}; foreach ($n in $(if ($local.All) { $local.All } else { $local.Names })) { $reserved[$n] = $true }
+  $creates = New-Object System.Collections.ArrayList; $writes = New-Object System.Collections.ArrayList
+  $count = 0
+  foreach ($projId in @($want.Keys)) {
+    $file = $st.Files[$projId]
+    $exists = $file -and $local.Files.ContainsKey($file)
+    $items = $(if ($exists) { Read-Items $local.Files[$file].Text } else { New-Object System.Collections.ArrayList })
+    $present = @{}; foreach ($it in $items) { if ($it.Kind -eq 'task' -and $it.Id) { $present[$it.Id] = $true } }
+    $missing = @($want[$projId] | Where-Object { -not $present.ContainsKey($_['id']) })
+    if ($exists -and -not $missing.Count) { continue }
+    if (-not $exists) { $p = $base["project:$projId"]; if (-not $p -or (Get-Field $p 'deleted')['v']) { continue } }
+    foreach ($r in (Sort-Ordinal $missing { param($x) '{0:D4} {1} {2}' -f [int]$depth[$x['id']], (Get-PlaceOf $x)['pos'], $x['id'] })) {
+      $pl = Get-PlaceOf $r
+      Add-BlockByPosition $items @(New-ItemFromRow $r 0) $pl['parent'] ([string]$pl['pos']) $posOf ([string]$r['id'])
+    }
+    $count += $missing.Count
+    if ($exists) {
+      $f = $local.Files[$file]
+      [void]$writes.Add(@{ type = 'write'; path = $f.Path; expected = $f.Text; text = (ConvertTo-MarkdownText $items 0 (Get-TextEol $f.Text)) })
+    } else {
+      $n = Get-UniqueFileName $listsDir $(if ($file) { [string]$file } else { [string](Get-Field $base["project:$projId"] 'name')['v'] }) $reserved
+      [void]$creates.Add(@{ type = 'create'; path = (Join-Path $listsDir "$n.md"); text = (ConvertTo-MarkdownText $items) })
+      $plan.Files[$projId] = $n
+    }
+  }
+  foreach ($o in $creates) { [void]$plan.Ops.Add($o) }
+  foreach ($o in $writes) { [void]$plan.Ops.Add($o) }
+  if ($creates.Count) {
+    $names = New-Object System.Collections.ArrayList
+    foreach ($n in $(if ($local.All) { $local.All } else { $local.Names })) { [void]$names.Add($n) }
+    foreach ($o in $creates) { [void]$names.Add([IO.Path]::GetFileNameWithoutExtension($o.path)) }
+    [void]$plan.Ops.Add(@{ type = 'order'; path = (Join-Path $listsDir '.order'); names = @($names) })
+  }
+  return @{ Plan = $plan; Count = $count }
+}
+
 # $self: the list being renamed, which may hold the name already (a case-only rename: "work" -> "Work" is
 # the same file on Windows and macOS, and must not become "Work (2)")
 # $from: for a list shared with this PC, its server's short name (Get-ServerLabel): a name another list has becomes
@@ -1739,9 +1834,11 @@ function Get-TextWithNewIds([string]$text) {
 # $ctx = @{ State; StatePath; ListsDir; Url; Token; DeviceId; NotifyAt; AllowMassDelete;
 #           ApplyPlan = { param($plan) -> $true when the whole plan was applied };  Log = { param($msg) }
 #           Clock = { -> ms } (tests); Transport = { param($body) -> @{ Status; Data } } (tests; else HTTP to Url)
-#           View (Read-LocalLists); Scope = @{ Project; File; ReadOnly } (a shared list's engine); Expected }
+#           View (Read-LocalLists); Scope = @{ Project; File; ReadOnly } (a shared list's engine); Expected
+#           Restore = $true: put the held-back deletes back into the files (Get-RestorePlan) instead of syncing }
 # Returns @{ Status = 'synced'|'offline'|'error'|'auth'; Message; Conflicts; Guarded; Retry; Access;
-#            Api, WorkerVersion (the own Worker's, once it answered: worker/src/version.js) }
+#            Api, WorkerVersion (the own Worker's, once it answered: worker/src/version.js);
+#            Restored (tasks put back); RestorePending (a restore is still to do: a list was busy) }
 function Invoke-SyncCycle($ctx) {
   $st = $ctx.State
   $clock = $(if ($ctx.Clock) { [long](& $ctx.Clock) } else { [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds() })
@@ -1751,6 +1848,19 @@ function Invoke-SyncCycle($ctx) {
   $local = Read-LocalLists $ctx.ListsDir $settle $ctx.View
   if ($scope) { $st.Files[$scope.Project] = $scope.File }
   $firstSync = ($st.S.Count -eq 0)   # nothing reconciled yet: pull everything first (resumes after interruptions)
+  if ($ctx.Restore -and -not $firstSync) {
+    # "Restore them": the held-back tasks go back into the files, the guard is cleared, and the next cycle finds
+    # nothing gone. A list being edited right now refuses the plan: the guard stays and the request is kept
+    $rp = Get-RestorePlan $st $local $ctx.ListsDir
+    if ($rp -and $rp.Plan -and ($rp.Plan.Ops.Count -eq 0 -or (& $ctx.ApplyPlan $rp.Plan))) {
+      foreach ($k in @($rp.Plan.Files.Keys)) { $st.Files[$k] = $rp.Plan.Files[$k] }
+      $st.Guard = $null
+      Save-SyncState $st $ctx.StatePath
+      $res.Restored = $rp.Count; $res.Retry = $true
+      return $res
+    }
+    if ($rp) { $res.RestorePending = $true }
+  }
   $diff = $null
   if (-not $firstSync) {
     $diff = Add-LocalDiff $st $local $ctx.NotifyAt -AllowMassDelete:$ctx.AllowMassDelete -Clock $clock -Scope $scope -Expected $ctx.Expected

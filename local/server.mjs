@@ -12,6 +12,7 @@
 //                                  POST /api/local/cloud-setup/cancel stops it)
 //   POST /api/local/disconnect    Settings > Sync & sharing > Advanced > Turn off sync (the lists stay)
 //   POST /api/local/allow-deletes confirm a paused mass delete in the lists folder
+//   POST /api/local/restore-deletes put the tasks of a paused mass delete back into their lists instead
 //   POST /api/local/stop          shut down (used by setup when updating)
 // Updates (local/updater.mjs), for Settings > Updates and `saqme update`:
 //   GET  /api/local/update        what it knows: this version, the newest one, what an update is doing, how it ended
@@ -91,7 +92,7 @@ function readBody(req) {
 
 /**
  * opts = { port, token, d1, publicDir, info() -> object for `local`, onSync() (a client sent changes),
- *          onAllowDeletes(), onStop(), version }
+ *          onAllowDeletes(), onRestoreDeletes(), onStop(), version }
  * Resolves to { server, port, url, close() } once listening.
  */
 export function startServer(opts) {
@@ -141,6 +142,7 @@ export function startServer(opts) {
         try { return json(res, 200, { url: opts.connect(link) }); } catch (e) { return json(res, 400, { error: e.message }); }
       }
       case 'POST /api/local/allow-deletes': opts.onAllowDeletes?.(); return json(res, 200, { ok: true });
+      case 'POST /api/local/restore-deletes': opts.onRestoreDeletes?.(); return json(res, 200, { ok: true });
       case 'GET /api/local/cloud-setup': return json(res, 200, opts.cloudSetup.status());
       case 'POST /api/local/cloud-setup':
         try { return json(res, 200, opts.cloudSetup.start()); } catch (e) { return json(res, 400, { error: e.message }); }

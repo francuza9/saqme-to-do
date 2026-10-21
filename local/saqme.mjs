@@ -6,6 +6,7 @@
 //   saqme status           where the lists are, whether it runs, cloud sync state
 //   saqme stop             stop the running app
 //   saqme allow-deletes    confirm a paused mass delete in the lists folder
+//   saqme restore-deletes  undo it instead: the vanished tasks go back into their lists
 //   saqme pair-phone       the QR code and link that connect your phone (once cloud sync is set up)
 //   saqme connect LINK     sync with the cloud using a pairing link from a device that already syncs
 //   saqme join LINK        join a list someone shares with you, from their invite link (.../join#code=...)
@@ -92,6 +93,7 @@ export class EngineLoop {
     this.status = { state: 'off', message: '', lastSync: 0, guarded: 0, conflicts: 0, pending: 0, label: '' };
     this.state = null;
     this.allowMassDelete = false;
+    this.restoreHeld = false;   // "Restore them": put the held-back deletes back into the files
     this.expected = null;
     this.stopped = false;
     this.wakeTimer = null;
@@ -114,11 +116,12 @@ export class EngineLoop {
     this.status.label = tgt.label ?? '';
     this.state ??= readState(this.statePath);
     const allow = this.allowMassDelete;
+    const restore = this.restoreHeld;
     const expected = this.expected && this.expected.until > Date.now() ? this.expected.keys : null;
     const scope = this.scope();
     const res = await syncCycle({
       state: this.state, statePath: this.statePath, listsDir: this.listsDir, transport: tgt.transport, deviceId: tgt.deviceId,
-      notifyAt: scope ? '' : this.notifyAt(), allowMassDelete: allow, settleMs: this.settleMs, view: this.view(), scope, expected,
+      notifyAt: scope ? '' : this.notifyAt(), allowMassDelete: allow, restore, settleMs: this.settleMs, view: this.view(), scope, expected,
       applyPlan: (plan) => {
         const ok = applyPlanToFolder(plan, this.listsDir);
         if (ok) this.afterPlan(plan);
@@ -128,6 +131,8 @@ export class EngineLoop {
       },
     });
     if (allow) this.allowMassDelete = false;
+    if (restore && !res.restorePending) this.restoreHeld = false;
+    if (res.restored) this.log(`${this.name}: put ${res.restored} held-back tasks back into their lists`);
     if (res.api) { this.status.workerApi = res.api; this.status.workerVersion = res.workerVersion; }   // (the server it syncs with: older or newer than this app)
     this.status.guarded = res.guarded;
     this.status.conflicts = openConflicts(this.state).length;
@@ -153,7 +158,7 @@ export class EngineLoop {
             failures = 0;
             this.status.lastSync = Date.now();
             if (res.refused.length) this.log(`${this.name}: refused by the server: ${res.refused.join('; ')}`);
-            if (res.guarded) this.setStatus('error', `${res.guarded} tasks disappeared from the lists folder at once. Deleting them everywhere is paused until you confirm.`);
+            if (res.guarded) this.setStatus('error', `${res.guarded} tasks disappeared from the lists folder at once. Deleting them everywhere is paused: restore them, or delete them (Settings > Sync & sharing).`);
             else if (res.refused.length && !this.quiet) this.setStatus('error', `The server refused a change (${res.refused[0]}).`);
             else this.setStatus('synced', '');
             // a cycle that asks to run again (first contact, ids written, a list mid-edit) waits for edits to
@@ -498,7 +503,10 @@ export async function startApp({ dataDir = defaultDataDir(), port, interval = 10
     port: port ?? portSetting(p), token, d1, publicDir: appPaths.public, version: VERSION, info, updates: updateRoutes, workerUpdate,
     onSync: () => { files.wake(); updater?.touch(); },
     onAllowDeletes: () => {
-      for (const l of [files, cloud, ...[...shareLoops.values()].map((s) => s.loop)]) { l.allowMassDelete = true; l.wake(); }
+      for (const l of [files, cloud, ...[...shareLoops.values()].map((s) => s.loop)]) { l.allowMassDelete = true; l.restoreHeld = false; l.wake(); }
+    },
+    onRestoreDeletes: () => {
+      for (const l of [files, cloud, ...[...shareLoops.values()].map((s) => s.loop)]) { l.restoreHeld = true; l.allowMassDelete = false; l.wake(); }
     },
     connect: (link) => { const url = connectCloud(p.cloudConfig, link); cloud.wake(); log(`cloud: connected to ${url}`); return url; },
     cloudSetup: cloudSetupRunner(p, { log, onDone: () => cloud.wake() }),
@@ -632,7 +640,7 @@ async function cmdStatus(opts) {
   for (const s of i.shares ?? []) {
     console.log(`Shared with you: ${s.file} from ${new URL(s.server).host} (${s.access === 'edit' ? 'can edit' : 'view only'}): ${s.status?.state ?? 'starting'}${s.status?.message ? ` - ${s.status.message}` : ''}`);
   }
-  if (i.guarded) console.log(`${i.guarded} tasks vanished from the lists folder at once; deleting them is paused. Confirm with: saqme allow-deletes`);
+  if (i.guarded) console.log(`${i.guarded} tasks vanished from the lists folder at once; deleting them is paused. Put them back with: saqme restore-deletes, or delete them everywhere with: saqme allow-deletes`);
 }
 
 async function cmdPairPhone(opts) {
@@ -774,6 +782,7 @@ if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
     status: () => cmdStatus(opts),
     stop: () => cmdSimple(opts, '/api/local/stop', 'Stopped.'),
     'allow-deletes': () => cmdSimple(opts, '/api/local/allow-deletes', 'Confirmed: the vanished tasks will be deleted everywhere.'),
+    'restore-deletes': () => cmdSimple(opts, '/api/local/restore-deletes', 'The vanished tasks will be put back into their lists.'),
     'pair-phone': () => cmdPairPhone(opts),
     connect: () => cmdConnect(opts),
     join: () => cmdJoin(opts),
@@ -784,7 +793,7 @@ if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
   };
   const run = commands[opts.cmd];
   if (!run) {
-    console.log(readFileSync(fileURLToPath(import.meta.url), 'utf8').split('\n').slice(1, 15).map((l) => l.replace(/^\/\/ ?/, '')).join('\n'));
+    console.log(readFileSync(fileURLToPath(import.meta.url), 'utf8').split('\n').slice(1, 16).map((l) => l.replace(/^\/\/ ?/, '')).join('\n'));
     process.exit(opts.cmd === 'help' || opts.cmd === '--help' ? 0 : 2);
   }
   run().catch((e) => { console.error(e?.message ?? e); process.exit(1); });

@@ -2040,11 +2040,14 @@ function localSyncSettings() {
 /** Tasks that vanished from the lists folder at once: deleting them everywhere waits for a yes (shown while it does). */
 function guardedSettings() {
   const g = ui.local.guarded;
-  const msg = `${g} tasks disappeared from the lists folder at once, so deleting them everywhere is paused in case that was an accident. Restore the file, or, if you removed them on purpose, confirm it.`;
+  const msg = `${g} tasks disappeared from the lists folder at once, so deleting them everywhere is paused in case that was an accident. Restore them puts them back into their lists, as they were when they last synced. Delete them deletes them on your other devices too.`;
   return [
     head('Deletions paused'),
     card(
       infoRow('Waiting for you', `${g} tasks`, null, { dot: true, title: msg }),
+      actionRow('Restore them', async () => {
+        try { await api('local/restore-deletes', {}); toast('They go back into their lists.'); } catch (e) { toast(`Could not restore them: ${e.message}`); }
+      }, { help: 'Puts the tasks back into their lists, as they were when they last synced' }),
       actionRow('Delete them', async () => {
         try { await api('local/allow-deletes', {}); toast('Confirmed. They will be deleted everywhere.'); } catch (e) { toast(`Could not confirm: ${e.message}`); }
       }, { danger: true, help: 'Confirms the paused deletions: the tasks are deleted everywhere' })),

@@ -135,8 +135,16 @@ One cycle:
    it has been gone for two cycles and 10 seconds. Deletes are never decided while any list was unusable
    (the line may just have moved there), and are **held back** when a large share vanishes at once: 5+
    tasks and more than half of one list (a gone list counts with all its tasks), or 25+ tasks and more than
-   half of all. Settings → Sync shows it; confirming deletes exactly what was held back, and whatever
-   vanished since is weighed again.
+   half of all. Settings → Sync & sharing → *Deletions paused* shows it, with two ways out. **Delete them**
+   confirms: exactly what was held back is deleted, and whatever vanished since is weighed again.
+   **Restore them** (`saqme restore-deletes` on Linux/macOS) undoes it instead, as the first thing the next
+   cycle does (`restorePlan` / `Get-RestorePlan`): each held-back task goes back into its list as S has it
+   (text, status, deadline with its time, notes, id), under its parent and among its siblings by position,
+   merged into what the file holds now (tasks added since stay where they are); a list whose file is gone
+   is written again under its name, at the end of `.order`. That plan goes through the same apply path as
+   remote plans (all or nothing, refused while the list is being edited or changed since it was read: the
+   request then stays and the next cycle tries again). Once it is applied the guard is cleared, and the
+   next diff finds nothing gone. Tested by `shared/fixtures/engine.json` ("restore") on both engines.
 3. Fold the changes into S and the outbox, save, send, store the returned rows in R.
 4. If every list was usable in step 1 and none changed since, build a **plan** that makes the files match
    R where R differs from S (a cycle that had to leave a list out never plans: that list's newest edits

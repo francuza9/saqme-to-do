@@ -179,6 +179,63 @@ describe('lists folder <-> local store (local/engine.mjs)', () => {
     expect(p.liveTexts('Big')).toEqual(['Task 0']);
   });
 
+  it('Restore them: a list overwritten by another program gets its held-back tasks back, merged with what it holds now', async () => {
+    const f = folder();
+    const s = store();
+    const many = Array.from({ length: 22 }, (_, i) => `- [ ] Task ${i}`).join('\n');
+    f.write('General', `- [/] Plan due:2026-10-25T14:00\n  - [x] Step one\n    > see https://example.com\n${many}\n`);
+    const e = engine(f, s);
+    await e.cycle(3);
+    const before = f.read('General');
+    const p = phone(s);
+    await p.sync();
+    expect(p.liveTexts('General')).toHaveLength(24);
+    // what the self-check did to a real data folder (1.2.0): the list replaced by its own tasks, two of them synced
+    f.write('General', '- [ ] smoke task one\n  - [ ] smoke subtask\n');
+    await e.cycle();                    // ids for the new lines
+    expect((await e.cycle()).guarded).toBe(24);
+    const smoke = f.read('General');
+    // a list being edited refuses the plan: nothing changes, the guard and the request stay
+    const busy = await e.cycle(1, { restore: true, applyPlan: () => false });
+    expect(busy.restorePending).toBe(true);
+    expect(busy.guarded).toBe(24);
+    expect(f.read('General')).toBe(smoke);
+    const r = await e.cycle(1, { restore: true });
+    expect(r.restored).toBe(24);
+    expect(r.restorePending).toBeFalsy();
+    expect(e.state.Guard).toBeNull();
+    const after = f.read('General');
+    for (const line of before.split('\n').filter(Boolean)) expect(after).toContain(line);   // every line as it was, ids too
+    for (const line of smoke.split('\n').filter(Boolean)) expect(after).toContain(line);    // and the new tasks stay
+    // (the smoke task took key a0 like Plan: which of the two comes first is up to their random ids)
+    expect(after).toMatch(/^- \[\/\] Plan due:2026-10-25T14:00 \^[0-9a-z]{8}\n {2}- \[x\] Step one \^[0-9a-z]{8}\n {4}> see https:\/\/example.com\n/m);
+    const quiet = await e.cycle(2);
+    expect(quiet.guarded).toBe(0);
+    await p.sync();
+    expect(p.liveTexts('General')).toHaveLength(26);   // nothing deleted anywhere; the two new tasks arrived
+    expect(f.read('General')).toBe(after);
+  });
+
+  it('Restore them: a list file gone for good comes back with its tasks, and its project is not deleted', async () => {
+    const f = folder();
+    const s = store();
+    f.write('Work', '- [ ] W\n');
+    f.write('Old', `${Array.from({ length: 6 }, (_, i) => `- [ ] Old ${i}`).join('\n')}\n`);
+    const e = engine(f, s);
+    await e.cycle(3);
+    const old = f.read('Old');
+    unlinkSync(f.path('Old'));
+    await e.cycle(1);
+    expect((await e.cycle(1, { clock: () => Date.now() + 11_000 })).guarded).toBe(6);
+    expect((await e.cycle(1, { restore: true })).restored).toBe(6);
+    expect(f.read('Old')).toBe(old);
+    expect((await e.cycle(2, { clock: () => Date.now() + 22_000 })).guarded).toBe(0);
+    const p = phone(s);
+    await p.sync();
+    expect(p.project('Old').fields.deleted.v).toBe(false);
+    expect(p.liveTexts('Old')).toHaveLength(6);
+  });
+
   it('a list being written right now is left alone, and no deletes are decided meanwhile', async () => {
     const f = folder();
     const s = store();

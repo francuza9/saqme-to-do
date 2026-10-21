@@ -104,7 +104,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File desktop\tests\sync-core.test
 powershell -NoProfile -ExecutionPolicy Bypass -File desktop\tests\shared-fixtures.tests.ps1  # shared/fixtures (Vitest runs them too)
 powershell -NoProfile -ExecutionPolicy Bypass -File scripts\dev\test-setup.ps1          # installer, in a sandbox
 powershell -NoProfile -ExecutionPolicy Bypass -STA -File desktop\widget.ps1 -DataDir C:\temp\saqme-dev            # run the app on scratch data
-powershell -NoProfile -ExecutionPolicy Bypass -STA -File desktop\widget.ps1 -DataDir C:\temp\saqme-x -SmokeTest   # headless self-check
+powershell -NoProfile -ExecutionPolicy Bypass -STA -File desktop\widget.ps1 -DataDir C:\temp\saqme-x -SmokeTest   # headless self-check (no -DataDir: a temp folder; never the real data folder)
 powershell -NoProfile -ExecutionPolicy Bypass -File scripts\dev\widget-shots.ps1 -Out C:\temp\shots              # renders the views to PNG
 powershell -NoProfile -ExecutionPolicy Bypass -File scripts\dev\render-widget.ps1 -Out C:\temp\shots             # the README shots (sample lists)
 powershell -NoProfile -ExecutionPolicy Bypass -File scripts\dev\uia-check.ps1                                    # what screen readers see (UI Automation)

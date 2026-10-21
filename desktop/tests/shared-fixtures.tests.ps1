@@ -239,6 +239,25 @@ foreach ($c in $engine['plan']) {
     } finally { Remove-Item -LiteralPath (Split-Path $lists) -Recurse -Force -ErrorAction SilentlyContinue }
   }
 }
+foreach ($c in $engine['restore']) {
+  Test-Case "restore: $($c['name'])" {
+    $lists = New-FixtureFolder $c
+    try {
+      $st = New-FixtureState $c $c['S'] 100
+      $st.Guard = @{ ids = @($c['guard']) }
+      $rp = Get-RestorePlan $st (Read-LocalLists $lists) $lists
+      Assert-True ($null -ne $rp.Plan) 'a plan'
+      Assert-Eq $rp.Count ([int]$c['count']) 'tasks put back'
+      Assert-Eq (Invoke-PlanOps $rp.Plan.Ops $lists) $rp.Plan.Ops.Count 'ops done'
+      Assert-Eq (ConvertTo-Canon (Get-FolderFiles $lists)) (ConvertTo-Canon $c['after']) 'files afterwards'
+      if ($c.ContainsKey('filesAfter')) {
+        $files = @{}; foreach ($k in $st.Files.Keys) { $files[$k] = $st.Files[$k] }
+        foreach ($k in @($rp.Plan.Files.Keys)) { $files[$k] = $rp.Plan.Files[$k] }
+        Assert-Eq (ConvertTo-Canon $files) (ConvertTo-Canon $c['filesAfter']) 'project files'
+      }
+    } finally { Remove-Item -LiteralPath (Split-Path $lists) -Recurse -Force -ErrorAction SilentlyContinue }
+  }
+}
 foreach ($c in $engine['diff']) {
   Test-Case "diff: $($c['name'])" {
     $lists = New-FixtureFolder $c

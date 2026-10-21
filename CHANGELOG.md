@@ -1,5 +1,21 @@
 # Changes
 
+## Unreleased
+
+**Deletions paused: Restore them.** When many tasks vanish from the lists folder at once, deleting them
+everywhere is paused, but until now the only way out was *Delete them* or putting the file back by hand.
+
+- **Restore them**, next to *Delete them* (Windows, Linux, macOS; `saqme restore-deletes`): the held-back tasks go
+  back into their lists as they were when they last synced: text, status, deadline and its time, notes, subtasks
+  under their parents, in their order. Tasks added to the list since stay; a list whose file is gone comes back.
+  Then sync carries on, and nothing is deleted anywhere. A list that is being edited is never overwritten: the
+  restore waits for it.
+- The message under *Deletions paused* says what each choice does.
+- **Windows: the self-check no longer touches your lists.** `widget.ps1 -SmokeTest` without `-DataDir` used the real
+  data folder (it added test tasks to General and synced them); it now runs in a new temp folder, and refuses a
+  `-DataDir` that is the app's own data folder (`%APPDATA%\SaqmeToDo`, `SAQME_DATA_DIR`, a portable copy's). The
+  installer and the tests always gave it a folder of its own.
+
 ## 1.2.0
 
 **Your sync service can update itself.** Until now your Worker, and the phone app it serves, got a new version

@@ -16,7 +16,7 @@ import { checkManifest, compareVersions, updateDecision } from '../../../local/u
 import { keyBetween, isValidKey, rekey } from '../../public/js/keys.js';
 import { normalizeText, normalizeNotes, isValidDate as serverValidDate } from '../../src/merge.js';
 import {
-  newState, readLocalLists, addLocalDiff, remotePlan, applyPlanToFolder, rekeyMap, cleanText as engineCleanText,
+  newState, readLocalLists, addLocalDiff, remotePlan, restorePlan, applyPlanToFolder, rekeyMap, cleanText as engineCleanText,
 } from '../../../local/engine.mjs';
 
 const FIXTURES = join(import.meta.dirname, '..', '..', '..', 'shared', 'fixtures');
@@ -228,6 +228,20 @@ describe('engine.json: remotePlan, addLocalDiff (local/engine.mjs)', () => {
       expect(out.guarded).toBe(c.guarded ?? 0);
       expect(out.skipped || Object.values(readLocalLists(lists).files).some((f) => f.status !== 'ok')).toBe(Boolean(c.skipped));
       if (c.guardAfter) expect([...(st.Guard?.ids ?? [])].sort()).toEqual([...c.guardAfter].sort());
+    });
+  }
+  for (const c of fx.restore) {
+    it(`restore: ${c.name}`, () => {
+      const lists = folder(c);
+      const st = newState();
+      st.S = rows(c.S, 100); st.R = rows(c.S, 100); st.Files = { ...c.files }; st.cursor = 5;
+      st.Guard = { ids: c.guard };
+      const r = restorePlan(st, readLocalLists(lists), lists);
+      expect(r.plan).not.toBeNull();
+      expect(r.count).toBe(c.count);
+      expect(applyPlanToFolder(r.plan, lists)).toBe(true);
+      expect(folderFiles(lists)).toEqual(sorted(c.after));
+      if (c.filesAfter) expect(sorted({ ...st.Files, ...r.plan.files })).toEqual(sorted(c.filesAfter));
     });
   }
 });

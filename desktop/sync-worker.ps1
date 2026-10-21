@@ -7,6 +7,7 @@
 #   Plan, PlanTaken, PlanResult, PlanDone, Lock
 #                                    file changes the UI thread applies between edits (see Apply-SyncPlan in widget.ps1)
 #   Conflicts, Guarded, AllowMassDelete, Queue (requests from the UI), NotifyAt
+#   RestoreHeld                      "Restore them": put the held-back deletes back into the files (Get-RestorePlan)
 #   WorkerApi, WorkerVersion         what this PC's own Worker runs, once it answered (an older one: API 1)
 # Lists shared with this PC (docs/sync.md, "Shared lists") each sync with their owner's server, in an engine of their
 # own after this PC's own one (sync-core.ps1 Read-ShareBindings); the own one leaves their files out:
@@ -167,7 +168,7 @@ function Invoke-ShareCycle($b) {
   $script:curShare = @{ Id = $id; Project = $proj }   # for $applySharePlan
   $ctx = @{
     State = $st; StatePath = (Join-Path $sharesDir "$id.json"); ListsDir = $shared.ListsDir; Url = [string]$b['server']; Token = [string]$token
-    DeviceId = (Get-ShareDeviceId); NotifyAt = ''; AllowMassDelete = [bool]$shared.AllowMassDelete; ApplyPlan = $applySharePlan
+    DeviceId = (Get-ShareDeviceId); NotifyAt = ''; AllowMassDelete = [bool]$shared.AllowMassDelete; Restore = [bool]$shared.RestoreHeld; ApplyPlan = $applySharePlan
     View = @{ Only = [string]$b['file'] }; Scope = @{ Project = $proj; File = [string]$b['file']; ReadOnly = ([string]$b['access'] -ne 'edit'); Label = (Get-ServerLabel ([string]$b['server'])) }
   }
   $res = Invoke-SyncCycle $ctx
@@ -249,7 +250,8 @@ while (-not $shared.Stop) {
     if (-not $cfg -and $bindings.Count -eq 0) { Set-SyncStatus 'off' ''; $state = $null; $retryMs = 0; $shared.Shares = @(); $shared.Conflicts = @(); continue }
     if ($shared.Status -ne 'synced' -or $woken) { Set-SyncStatus 'syncing' 'Syncing...' }
     $allow = [bool]$shared.AllowMassDelete
-    $guarded = 0; $retry = $false; $worst = $null
+    $restore = [bool]$shared.RestoreHeld
+    $guarded = 0; $retry = $false; $worst = $null; $restorePending = $false
 
     # ---- this PC's own server (without the lists shared with this PC)
     if ($cfg) {
@@ -257,11 +259,13 @@ while (-not $shared.Stop) {
       Add-QueuedChanges $state @($requests | Where-Object { -not $_.share })
       $ctx = @{
         State = $state; StatePath = $statePath; ListsDir = $shared.ListsDir; Url = [string]$cfg['url']; Token = [string]$cfg['token']
-        DeviceId = [string]$cfg['deviceId']; NotifyAt = [string]$shared.NotifyAt; AllowMassDelete = $allow; ApplyPlan = $applyPlan
+        DeviceId = [string]$cfg['deviceId']; NotifyAt = [string]$shared.NotifyAt; AllowMassDelete = $allow; Restore = $restore; ApplyPlan = $applyPlan
         View = @{ Exclude = (Get-SharedFileSet $shared.ListsDir) }
       }
       $res = Invoke-SyncCycle $ctx
       $guarded += $res.Guarded
+      if ($res.RestorePending) { $restorePending = $true }
+      if ($res.Restored) { Write-SyncLog "put $($res.Restored) held-back tasks back into their lists" }
       $shared.Pending = $state.Outbox.Count
       if ($res.Api) { $shared.WorkerApi = $res.Api; $shared.WorkerVersion = $res.WorkerVersion }   # (Settings, the Share view)
       $worst = $res
@@ -278,6 +282,8 @@ while (-not $shared.Stop) {
         Add-QueuedChanges $st @($requests | Where-Object { $_.share -ceq $id })
         $r2 = Invoke-ShareCycle $b
         $guarded += $r2.Guarded
+        if ($r2.RestorePending) { $restorePending = $true }
+        if ($r2.Restored) { Write-SyncLog "shared list $($b['file']): put $($r2.Restored) held-back tasks back" }
         if ($r2.Retry -or ($r2.Status -eq 'auth' -and -not $r2.Ended)) { $retry = $true }
         if ($r2.Status -eq 'auth') { continue }
         $shareStatus[$id] = @{ State = $r2.Status; Message = [string]$r2.Message }
@@ -291,6 +297,7 @@ while (-not $shared.Stop) {
       }
     }
     if ($allow) { $shared.AllowMassDelete = $false }
+    if ($restore -and -not $restorePending) { $shared.RestoreHeld = $false }
     $bindings = @((Read-ShareBindings $shared.ListsDir) | Where-Object { -not $_['left'] })
     foreach ($k in @($shareStates.Keys)) { if (-not @($bindings | Where-Object { $_['id'] -ceq $k }).Count) { [void]$shareStates.Remove($k) } }
     Publish-Shares $bindings $shareStatus
@@ -301,7 +308,7 @@ while (-not $shared.Stop) {
       'synced' {
         $failures = 0
         $shared.LastSync = Get-Date
-        if ($guarded) { Set-SyncStatus 'error' "$guarded tasks disappeared from the lists folder at once. Deleting them everywhere is paused - Settings > Sync." }
+        if ($guarded) { Set-SyncStatus 'error' "$guarded tasks disappeared from the lists folder at once. Deleting them everywhere is paused: restore them or delete them in Settings > Sync & sharing." }
         elseif ($worst.Refused.Count) { Set-SyncStatus 'error' ("The server refused a change (" + $worst.Refused[0] + '). Details in sync\sync.log.') }
         else { Set-SyncStatus 'synced' 'Synced' }
         $retryMs = $(if ($retry) { 2500 } else { 0 })

@@ -734,6 +734,80 @@ function newListFromRows(st, projId, depth) {
   return formatItems(items);
 }
 
+/**
+ * "Restore them" (Deletions paused): the deletes the guard holds back (st.Guard) are undone in the files instead.
+ * Each held-back task goes back into its list as the last synced copy (S) has it (text, status, deadline, notes,
+ * id), under its parent and among its siblings by position, merged into what the file holds now (tasks added since
+ * stay); a list whose file is gone is written again. -> { plan, count } (plan null while some list is not usable
+ * right now: try again), or null when nothing is held back. The plan goes through applyPlan like any other.
+ */
+export function restorePlan(st, local, listsDir) {
+  if (!st.Guard?.ids?.length) return null;
+  // (a list with lines still waiting for their ids is fine: they stay as they are, the next cycle gives them ids)
+  if (!local.ok || local.names.some((n) => !['ok', 'unstamped'].includes(local.files[n].status))) return { plan: null, count: 0 };
+  const base = st.S;
+  const want = new Map();   // project id -> its rows to put back
+  const add = (pid, r) => { if (!want.has(pid)) want.set(pid, []); if (r) want.get(pid).push(r); };
+  for (const key of st.Guard.ids) {
+    const i = key.indexOf(':');
+    const kind = key.slice(0, i);
+    const id = key.slice(i + 1);
+    if (kind === 'project') { add(id, null); for (const tid of liveTaskIds(base, id)) add(id, base[`task:${tid}`]); continue; }
+    const r = base[key];
+    const pl = placeOf(r);
+    if (r && pl && !getField(r, 'deleted')?.v) add(pl.project, r);
+  }
+  // depth and order keys as of the last sync
+  const posOf = new Map();
+  for (const r of Object.values(base)) if (r.kind === 'task') { const pl = placeOf(r); if (pl) posOf.set(r.id, String(pl.pos)); }
+  const depth = new Map();
+  for (const rows of want.values()) {
+    for (const r of rows) {
+      let d = 0;
+      let p = placeOf(r)?.parent;
+      for (let guard = 0; p && guard < 200; guard++) { const pr = base[`task:${p}`]; if (!pr) break; d++; p = placeOf(pr)?.parent; }
+      depth.set(r.id, d);
+    }
+  }
+  const plan = { ops: [], files: {}, setting: null };
+  const reserved = new Set((local.all ?? local.names).map((n) => n.toLowerCase()));
+  const creates = [];
+  const writes = [];
+  let count = 0;
+  for (const [pid, rows] of want) {
+    const file = st.Files[pid];
+    const exists = file != null && Object.hasOwn(local.files, file);
+    const items = exists ? parseItems(local.files[file].text) : [];
+    const present = new Set(items.filter((it) => it.kind === 'task' && it.id).map((it) => it.id));
+    const missing = rows.filter((r) => !present.has(r.id));
+    if (exists && !missing.length) continue;
+    if (!exists) {
+      const p = base[`project:${pid}`];
+      if (!p || getField(p, 'deleted')?.v) continue;
+    }
+    for (const r of sortOrdinal(missing, placeOrder(depth))) {
+      const pl = placeOf(r);
+      addBlockByPosition(items, [itemFromRow(r, 0)], pl.parent, String(pl.pos), posOf, String(r.id));
+    }
+    count += missing.length;
+    if (exists) {
+      const f = local.files[file];
+      writes.push({ type: 'write', path: f.path, expected: f.text, text: formatItems(items, 0, detectEol(f.text)) });
+    } else {
+      const n = uniqueFileName(listsDir, file ?? String(getField(base[`project:${pid}`], 'name')?.v ?? ''), reserved);
+      creates.push({ type: 'create', path: join(listsDir, `${n}.md`), text: formatItems(items) });
+      plan.files[pid] = n;
+    }
+  }
+  plan.ops.push(...creates, ...writes);
+  if (creates.length) {
+    const names = [...(local.all ?? local.names)];
+    for (const o of creates) names.push(stem(o.path));
+    plan.ops.push({ type: 'order', path: join(listsDir, '.order'), names });
+  }
+  return { plan, count };
+}
+
 // `self`: the list being renamed, which may hold the name already (a case-only rename on macOS). `from`: for a list
 // shared with this computer, its server's short name (pairing.js serverLabel): a name another list has becomes
 // "Groceries (from nuca)" before it gets a number.
@@ -975,11 +1049,13 @@ export function withNewIds(text) {
 }
 
 /**
- * ctx = { state, statePath, listsDir, transport(body) -> { status, data }, deviceId, notifyAt, allowMassDelete,
+ * ctx = { state, statePath, listsDir, transport(body) -> { status, data }, deviceId, notifyAt, allowMassDelete, restore,
  *         settleMs, applyPlan(plan) -> true when the whole plan was applied, clock() -> ms (tests),
  *         view (readLocalLists), scope = { project, file, readOnly } (a shared list's engine), expected (Set) }
+ * restore: put the held-back deletes back into the files (restorePlan) instead of syncing this cycle.
  * Returns { status: 'synced'|'offline'|'error'|'auth', message, guarded, retry, sent, received, refused, access,
- * api, workerVersion } (the last two: of one's own server, not a shared list's).
+ * api, workerVersion, restored (tasks put back), restorePending (a restore is still to do: a list was busy) }
+ * (api and workerVersion: of one's own server, not a shared list's).
  */
 export async function syncCycle(ctx) {
   const st = ctx.state;
@@ -990,6 +1066,19 @@ export async function syncCycle(ctx) {
   if (scope) st.Files[scope.project] = scope.file;
   const firstSync = Object.keys(st.S).length === 0;   // nothing reconciled yet: pull everything first
   const opts = { scope, expected: ctx.expected ?? null };
+  if (ctx.restore && !firstSync) {
+    // "Restore them": the held-back tasks go back into the files, the guard is cleared, and the next cycle finds
+    // nothing gone. A list being edited right now refuses the plan: the guard stays and the request is kept
+    const r = restorePlan(st, local, ctx.listsDir);
+    if (r && r.plan && (!r.plan.ops.length || ctx.applyPlan(r.plan))) {
+      for (const [k, v] of Object.entries(r.plan.files)) st.Files[k] = v;
+      st.Guard = null;
+      saveState(st, ctx.statePath);
+      res.restored = r.count; res.retry = true;
+      return res;
+    }
+    if (r) res.restorePending = true;
+  }
   let diff = null;
   if (!firstSync) {
     diff = addLocalDiff(st, local, ctx.notifyAt, ctx.allowMassDelete, clock(), opts);

@@ -33,11 +33,13 @@ try {
 } catch { $script:toastOk = $false }
 
 $dir = Split-Path -Parent $MyInvocation.MyCommand.Path      # app files (scripts, assets)
-if (-not $DataDir) { $DataDir = $env:SAQME_DATA_DIR }
-if (-not $DataDir) {
-  if (Test-Path -LiteralPath (Join-Path $dir 'lists')) { $DataDir = $dir }   # portable: lists next to the app
-  else { $DataDir = Join-Path ([Environment]::GetFolderPath('ApplicationData')) 'SaqmeToDo' }
-}
+. (Join-Path $dir 'sync-core.ps1')
+# the data folder; the self-check never touches real lists (a temp folder without -DataDir, see Resolve-WidgetDataDir)
+$where = Resolve-WidgetDataDir $DataDir -SmokeTest:$SmokeTest $dir $env:SAQME_DATA_DIR ([Environment]::GetFolderPath('ApplicationData')) ([IO.Path]::GetTempPath())
+if ($where.Refused) { Write-Output "SMOKE FAIL: $($where.Refused)"; exit 2 }
+$DataDir = $where.Dir
+$script:smokeTemp = $where.Temp
+if ($script:smokeTemp) { Write-Output "SMOKE DATA: no -DataDir given, so the self-check runs in a new temp folder, $DataDir (deleted afterwards)" }
 if (-not (Test-Path -LiteralPath $DataDir)) { [void](New-Item -ItemType Directory -Path $DataDir -Force) }
 $listsDir  = Join-Path $DataDir 'lists'
 $orderFile = Join-Path $listsDir '.order'
@@ -50,7 +52,6 @@ $logoFile  = Join-Path $dir 'assets\saqme-glyph.png'
 $iconFile  = Join-Path $dir 'assets\saqme.png'
 $notifFile = Join-Path $listsDir '.notified'
 $CI        = [Globalization.CultureInfo]::InvariantCulture
-. (Join-Path $dir 'sync-core.ps1')
 . (Join-Path $dir 'qr.ps1')
 . (Join-Path $dir 'update-core.ps1')
 # this version (release.json, from worker\package.json) and where it is installed: <install>\versions\<v>\ (setup.ps1);
@@ -2760,11 +2761,13 @@ function Render-SyncPage {
   Render-SharedListSettings
   # a pending decision: shown whenever it is there, below the everyday rows
   if ($script:sync -and $script:sync.Guarded) {
-    $msg = $(if (Read-SyncConfigUi) { "$($script:sync.Guarded) tasks vanished from the lists folder at once. Deleting them on your other devices is paused in case that was an accident: restore the file, or confirm." }
-             else { "$($script:sync.Guarded) tasks vanished from a shared list's file at once. Deleting them for its owner is paused in case that was an accident: restore the file, or confirm." })
+    $g = $script:sync.Guarded
+    $msg = $(if (Read-SyncConfigUi) { "$g tasks vanished from the lists folder at once, so deleting them on your other devices is paused in case that was an accident. Restore them puts them back into their lists, as they were when they last synced. Delete them deletes them on your other devices too." }
+             else { "$g tasks vanished from a shared list's file at once, so deleting them for its owner is paused in case that was an accident. Restore them puts them back into the list, as they were when they last synced. Delete them deletes them for its owner too." })
     Add-Heading 'Deletions paused'
-    Add-CardRow (New-InfoRow 'Waiting for you' "$($script:sync.Guarded) tasks" -Dot -Tip $msg)
-    Add-CardRow (New-ActionRow 'Delete them' { $script:sync.AllowMassDelete = $true; Request-Sync; Render } -Danger -Help 'Confirms the paused deletions: the tasks are deleted on your other devices too')
+    Add-CardRow (New-InfoRow 'Waiting for you' $(if ($script:sync.RestoreHeld) { 'Restoring...' } else { "$g tasks" }) -Dot -Tip $msg)
+    Add-CardRow (New-ActionRow 'Restore them' { $script:sync.AllowMassDelete = $false; $script:sync.RestoreHeld = $true; Request-Sync; Render } -Help 'Puts the tasks back into their lists, as they were when they last synced')
+    Add-CardRow (New-ActionRow 'Delete them' { $script:sync.RestoreHeld = $false; $script:sync.AllowMassDelete = $true; Request-Sync; Render } -Danger -Help 'Confirms the paused deletions: the tasks are deleted on your other devices too')
     Add-Footnote $msg
   }
   Render-SyncAdvanced
@@ -2832,7 +2835,7 @@ function Start-SyncLoop {
   $shared.Lock = New-Object Object
   $shared.Queue = [System.Collections.Queue]::Synchronized((New-Object System.Collections.Queue))
   $shared.Stop = $false; $shared.Status = 'syncing'; $shared.StatusText = 'Starting...'; $shared.Conflicts = @()
-  $shared.Guarded = 0; $shared.AllowMassDelete = $false; $shared.NotifyAt = $script:cfg.notifyAt; $shared.Plan = $null
+  $shared.Guarded = 0; $shared.AllowMassDelete = $false; $shared.RestoreHeld = $false; $shared.NotifyAt = $script:cfg.notifyAt; $shared.Plan = $null
   # shared lists (sync-worker.ps1): what it reports, and what it hands back
   $shared.Shares = @(); $shared.Notices = @(); $shared.SharedByMe = @{}; $shared.ProjectIds = @{}
   $shared.Ended = [System.Collections.Queue]::Synchronized((New-Object System.Collections.Queue))
@@ -4613,6 +4616,7 @@ if ($SmokeTest) {
   Stop-SyncLoop
   try { $tray.Dispose() } catch {}
   if ($script:mutexHeld) { try { $mutex.ReleaseMutex() } catch {} }
+  if ($script:smokeTemp) { Remove-Item -LiteralPath $DataDir -Recurse -Force -ErrorAction SilentlyContinue }
   exit $code
 }
 $timer.Start()

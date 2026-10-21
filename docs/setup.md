@@ -137,7 +137,7 @@ installed; otherwise in your default browser (Safari: **File > Add to Dock** mak
 as a normal tab). Set `SAQME_BROWSER` to the browser command you prefer.
 
 **Commands:** `saqme open` (the window), `saqme status` (where the lists are, sync state), `saqme stop`,
-`saqme serve` (run in the foreground), `saqme allow-deletes` (confirm a paused mass delete),
+`saqme serve` (run in the foreground), `saqme allow-deletes` / `saqme restore-deletes` (confirm a paused mass delete, or put the tasks back),
 `saqme pair-phone` (the QR code for your phone, once sync is set up), `saqme connect '<pairing link>'`
 (sync with a Worker another device already uses), `saqme update` (install the newest release now, the same as
 **Update now** in the window), `saqme version`.
@@ -439,7 +439,7 @@ run from it) does not update itself: `git pull` and run setup.
 | Problem | Fix |
 |---|---|
 | Sync icon shows a red warning | Hover it for the reason. *Token rejected*: run setup's cloud part again (or pair again). *Server error*: wait a minute; it retries on its own. |
-| "N tasks vanished from the lists folder … deletions paused" | A list file was emptied or replaced in one go. Restore it (Recycle Bin, Trash, `lists/.trash`) — or, if it was on purpose, confirm: **Settings > Sync & sharing > Deletions paused > Delete them** (Linux/macOS: or `saqme allow-deletes`). |
+| "N tasks vanished from the lists folder … deletions paused" | A list file was emptied or replaced in one go. **Settings > Sync & sharing > Deletions paused > Restore them** puts the tasks back into their lists as they last synced (tasks added since stay); if it was on purpose, **Delete them** confirms it (Linux/macOS: or `saqme restore-deletes` / `saqme allow-deletes`). |
 | Phone shows the welcome screen after installing | Expected on iPhone: type the pairing code (**Pair phone** on the computer, or the one Safari showed) into the field on that screen. *Wrong or expired*: show a new one; a code works once, for 10 minutes. Pasting the pairing link works too. |
 | Setup stops: "running inside another app's package" | It was started from a shell that belongs to a Store app (for example an AI assistant in a desktop app); Windows would keep what it installs in that app's private copy of `AppData`. Run the command it prints from File Explorer (double-click `setup.cmd`) or Win+R. In the app: quit Saqme from the tray icon, start it from the Start menu, then **Set up sync**. |
 | Linux/macOS window says it is "not connected" | It was opened from a bookmark. Open Saqme from the menu (or `saqme open`); that hands the window its key. |

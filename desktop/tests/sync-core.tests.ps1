@@ -781,6 +781,81 @@ Test-Case 'the own Worker''s API and version come with its answers (one before 1
   Assert-True ($null -eq $res.Api) 'no API from a shared list''s server'
 }
 
+# ---------------------------------------------------------------- Deletions paused > Restore them (Get-RestorePlan)
+Write-Host 'Restore them'
+Test-Case 'Restore them: held-back tasks go back with subtasks, notes and deadlines, new tasks stay, the guard clears, nothing is deleted' {
+  $d = New-TempLists
+  $a = New-TaskRow 'aaaaaaaa' 'proj0001' $null 'a0' 'A'; $a.fields.due.v = @{ date = '2026-10-25'; time = '14:00' }
+  $a1 = New-TaskRow 'aaaaaaa1' 'proj0001' 'aaaaaaaa' 'a0' 'A1' 'x'; $a1.fields.notes.v = 'a note'
+  $rows = @((New-ProjectRow 'proj0001' 'Work'), $a, $a1,
+    (New-TaskRow 'bbbbbbbb' 'proj0001' $null 'a1' 'B'), (New-TaskRow 'cccccccc' 'proj0001' $null 'a2' 'C'),
+    (New-TaskRow 'dddddddd' 'proj0001' $null 'a3' 'D'), (New-TaskRow 'eeeeeeee' 'proj0001' $null 'a4' 'E'))
+  $st = New-SyncedState $rows @{ proj0001 = 'Work' }
+  Write-List $d 'Work' "- [ ] B ^bbbbbbbb`n- [ ] smoke task ^smoke001`n"
+  $srv = New-FakeServer @()
+  $res = Invoke-TestCycle $st $d $srv $null $null
+  Assert-Eq $res.Guarded 5 'held back'
+  $script:testDir = $d
+  $ctx = @{ State = $st; StatePath = (Join-Path $d '.state-test.json'); ListsDir = $d; Url = 'https://owner.example'; Token = 't'; DeviceId = 'pc-test'; NotifyAt = ''
+            ApplyPlan = { param($plan) $false }; Transport = $script:fakeTransport; SettleMs = 0; Restore = $true }
+  $busy = Invoke-SyncCycle $ctx   # the list is being edited: the plan is refused, nothing changes
+  Assert-True $busy.RestorePending 'still to do'
+  Assert-Eq (Read-List $d 'Work') "- [ ] B ^bbbbbbbb`n- [ ] smoke task ^smoke001`n"
+  Assert-True ($null -ne $st.Guard) 'the guard stays'
+  $ctx.ApplyPlan = { param($plan) return ((Invoke-PlanOps $plan.Ops $script:testDir) -eq @($plan.Ops).Count) }
+  $res = Invoke-SyncCycle $ctx
+  Assert-Eq $res.Restored 5 'put back'; Assert-True (-not $res.RestorePending) 'done'
+  Assert-True ($null -eq $st.Guard) 'the guard is cleared'
+  Assert-Eq (Read-List $d 'Work') ("- [ ] A due:2026-10-25T14:00 ^aaaaaaaa`n  - [x] A1 ^aaaaaaa1`n    > a note`n- [ ] B ^bbbbbbbb`n- [ ] C ^cccccccc`n" +
+    "- [ ] smoke task ^smoke001`n- [ ] D ^dddddddd`n- [ ] E ^eeeeeeee`n")   # (the new task took key a2 after B: C, a2 too, sorts first by id)
+  [IO.File]::SetLastWriteTimeUtc((Join-Path $d 'Work.md'), [DateTime]::UtcNow.AddSeconds(-10))
+  $res = Invoke-TestCycle $st $d $srv $null $null
+  Assert-Eq $res.Guarded 0 'nothing held back afterwards'
+  foreach ($body in $srv.Got) {
+    foreach ($c in @($body.changes)) { if ($c['fields'].ContainsKey('deleted') -and $c['fields']['deleted']['v']) { throw "a delete reached the server: $($c['id'])" } }
+  }
+}
+Test-Case 'Restore them with nothing held back does nothing; a list written a moment ago waits' {
+  $d = New-TempLists
+  Write-List $d 'Work' "- [ ] A ^aaaaaaaa`n"
+  $st = New-SyncedState @((New-ProjectRow 'proj0001' 'Work'), (New-TaskRow 'aaaaaaaa' 'proj0001' $null 'a0' 'A')) @{ proj0001 = 'Work' }
+  Assert-True ($null -eq (Get-RestorePlan $st (Read-LocalLists $d) $d)) 'no plan'
+  $st.Guard = @{ ids = @('task:aaaaaaaa') }
+  Write-List $d 'Work' "- [ ] A ^aaaaaaaa`n" 0
+  Assert-True ($null -eq (Get-RestorePlan $st (Read-LocalLists $d) $d).Plan) 'a list written a moment ago: later'
+}
+
+# ---------------------------------------------------------------- the widget's data folder (Resolve-WidgetDataDir)
+Write-Host 'The data folder, and the self-check never on real lists'
+Test-Case 'the app: -DataDir, else SAQME_DATA_DIR, else portable, else %APPDATA%\SaqmeToDo' {
+  $app = New-TempLists
+  Assert-Eq (Resolve-WidgetDataDir 'D:\x' -AppDir $app -EnvDir 'E:\env' -AppData 'C:\AD' -TempDir 'C:\T').Dir 'D:\x'
+  Assert-Eq (Resolve-WidgetDataDir '' -AppDir $app -EnvDir 'E:\env' -AppData 'C:\AD' -TempDir 'C:\T').Dir 'E:\env'
+  Assert-Eq (Resolve-WidgetDataDir '' -AppDir $app -EnvDir '' -AppData 'C:\AD' -TempDir 'C:\T').Dir 'C:\AD\SaqmeToDo'
+  [void](New-Item -ItemType Directory -Path (Join-Path $app 'lists'))
+  Assert-Eq (Resolve-WidgetDataDir '' -AppDir $app -EnvDir '' -AppData 'C:\AD' -TempDir 'C:\T').Dir $app
+}
+Test-Case 'the self-check without -DataDir: a new temp folder each time, never SAQME_DATA_DIR, portable lists or %APPDATA%' {
+  $app = New-TempLists; [void](New-Item -ItemType Directory -Path (Join-Path $app 'lists'))
+  $tmp = [IO.Path]::GetTempPath()
+  foreach ($envDir in 'E:\env', '') {
+    $r1 = Resolve-WidgetDataDir '' -SmokeTest -AppDir $app -EnvDir $envDir -AppData 'C:\AD' -TempDir $tmp
+    $r2 = Resolve-WidgetDataDir '' -SmokeTest -AppDir $app -EnvDir $envDir -AppData 'C:\AD' -TempDir $tmp
+    Assert-True ($r1.Temp -and -not $r1.Refused) 'a temp folder'
+    Assert-True ($r1.Dir.StartsWith($tmp) -and $r1.Dir -ne $r2.Dir) "a new one under TEMP: $($r1.Dir)"
+    Assert-True (-not (Test-Path -LiteralPath $r1.Dir)) 'not there yet (the widget makes it)'
+  }
+}
+Test-Case 'the self-check refuses a -DataDir that holds real lists (%APPDATA%\SaqmeToDo, SAQME_DATA_DIR, the portable app folder)' {
+  $app = New-TempLists
+  foreach ($dd in 'C:\AD\SaqmeToDo', 'c:\ad\saqmetodo\', 'E:\env', $app, "$app\") {
+    $r = Resolve-WidgetDataDir $dd -SmokeTest -AppDir $app -EnvDir 'E:\env' -AppData 'C:\AD' -TempDir 'C:\T'
+    Assert-True ([bool]$r.Refused) "refused: $dd"
+  }
+  $r = Resolve-WidgetDataDir 'C:\temp\saqme-x' -SmokeTest -AppDir $app -EnvDir 'E:\env' -AppData 'C:\AD' -TempDir 'C:\T'
+  Assert-True (-not $r.Refused -and -not $r.Temp -and $r.Dir -eq 'C:\temp\saqme-x') 'a scratch folder is fine'
+}
+
 Write-Host ''
 Write-Host ("{0} passed, {1} failed" -f $script:passed, $script:failed)
 if ($script:failed) { exit 1 }
