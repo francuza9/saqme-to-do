@@ -1,6 +1,6 @@
 # Changes
 
-## Unreleased
+## 1.1.3
 
 **Windows: the list's name instead of tabs.** The widget now has the same list switcher as the phone, Linux and
 macOS apps: its tab strip is gone, and the title at the top is the current list's name.
