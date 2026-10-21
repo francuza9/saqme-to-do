@@ -19,6 +19,9 @@ import { listTree, treeToMarkdown, toFileName, MARKS, isValidDate as validDate }
 import { parseInviteLink } from './pairing.js';
 
 const DB_NAME = 'saqme';
+// a server API (worker/src/version.js) features need, and what the app says on an older one
+export const SHARING_API = 2;
+export const OLDER_SERVER = 'Your sync service runs an older version than this app, without shared lists yet. It is updated together with the app on your computer (Settings > Updates there); then try again.';
 const MAX_BATCH = 100;
 const MAX_BATCH_BYTES = 400_000;
 const POLL_MS = 10_000;
@@ -419,6 +422,9 @@ export class Store extends EventTarget {
     this.change('conflict', id, { resolved: true });
   }
 
+  /** Whether this device's own server is known to be older than `api` (unknown: not before a first sync). */
+  olderServer(api) { return Number.isInteger(this.meta.serverApi) && this.meta.serverApi < api; }
+
   /** URL of an API route ('sync', 'config', ...) on the server this device syncs with. */
   apiUrl(path) {
     const origin = this.base || this.meta.server;
@@ -592,10 +598,16 @@ export class Store extends EventTarget {
       this.handleRejected(data.rejected || [], share, batch);
       if (share && ['edit', 'view'].includes(data.share?.access)) share.access = data.share.access;   // the owner changed it
       if (!share && Array.isArray(data.shared)) this.meta.shared = data.shared.filter((x) => typeof x === 'string');
+      // which release this device's own server is (Workers before 1.1.0 do not say: API 1): the app says "not
+      // updated yet" instead of failing when a feature needs a newer one (version.js in worker/src)
+      if (!share) { this.meta.serverApi = Number.isInteger(data.api) ? data.api : 1; this.meta.serverVersion = typeof data.version === 'string' ? data.version : ''; }
       if (!share && Array.isArray(data.remotes)) this.reconcileRemotes(data.remotes);
       if (firstContact && !data.more) { this.adoptServerProjects(); this.meta.adoptPending = false; }
       Object.assign(m, { cursor: data.cursor, dbId: data.dbId, lastSync: Date.now() });
-      this.setMeta(share ? { shares: this.shares() } : { cursor: data.cursor, dbId: data.dbId, lastSync: m.lastSync, clockOffset: m.clockOffset, adoptPending: this.meta.adoptPending, shared: this.meta.shared });
+      this.setMeta(share ? { shares: this.shares() } : {
+        cursor: data.cursor, dbId: data.dbId, lastSync: m.lastSync, clockOffset: m.clockOffset, adoptPending: this.meta.adoptPending, shared: this.meta.shared,
+        serverApi: this.meta.serverApi, serverVersion: this.meta.serverVersion,
+      });
       if (firstContact) continue;
       await this.save();
       this.emit();
@@ -913,9 +925,11 @@ export class Store extends EventTarget {
     let share;
     if (this.meta.token) {
       if (inv.server === this.ownOrigin()) throw new Error('That invite is for one of your own lists.');
+      if (this.olderServer(SHARING_API)) throw new Error(OLDER_SERVER);
       let r;
       try { r = await this.ownCall('remotes/join', { link }, fetchImpl); } catch { throw new Error('No connection. Try again when you are online.'); }
       if (r.status === 401) throw new Error('This device is no longer paired (token rejected). Pair it again from the desktop app.');
+      if (r.status === 404 && (this.meta.serverApi ?? 1) < SHARING_API) throw new Error(OLDER_SERVER);
       if (r.status !== 200 || !validId(r.data.remote?.projectId)) throw new Error(r.data.error || `The invite did not work (${r.status}).`);
       if (this.get('project', r.data.remote.projectId) && !this.shareOf(r.data.remote.projectId)) throw new Error(`“${r.data.remote.name}” is one of your own lists.`);
       this.setMeta({ leaving: (this.meta.leaving ?? []).filter((id) => id !== r.data.remote.id) });

@@ -12,6 +12,7 @@ import {
 } from '../../public/js/markdown.js';
 import * as model from '../../public/js/model.js';
 import { parsePairingLink, parseInviteLink, serverLabel } from '../../public/js/pairing.js';
+import { checkManifest, compareVersions, updateDecision } from '../../../local/update.mjs';
 import { keyBetween, isValidKey, rekey } from '../../public/js/keys.js';
 import { normalizeText, normalizeNotes, isValidDate as serverValidDate } from '../../src/merge.js';
 import {
@@ -229,4 +230,18 @@ describe('engine.json: remotePlan, addLocalDiff (local/engine.mjs)', () => {
       if (c.guardAfter) expect([...(st.Guard?.ids ?? [])].sort()).toEqual([...c.guardAfter].sort());
     });
   }
+});
+
+// ---------------------------------------------------------------- the app updater
+describe('update.json: the updater\'s rules (local/update.mjs; desktop/update-core.ps1 runs the same cases)', () => {
+  const fx = load('update.json');
+  it('compareVersions', () => {
+    expect(fx.compareVersions.map(([a, b]) => compareVersions(a, b))).toEqual(fx.compareVersions.map((c) => c[2]));
+  });
+  it('checkManifest', () => {
+    for (const c of fx.manifest) expect(checkManifest(c.in), JSON.stringify(c.in)).toEqual(c.out);
+  });
+  it('updateDecision', () => {
+    for (const c of fx.decision) expect(updateDecision(c), JSON.stringify(c)).toBe(c.out);
+  });
 });

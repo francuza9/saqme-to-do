@@ -1,0 +1,66 @@
+{
+  "_doc": [
+    "The rules of the app updater (docs/setup.md, Updating) that exist in both languages:",
+    "  desktop/update-core.ps1 (Windows: ConvertTo-SaqmeVersion, Compare-SaqmeVersion, Test-ReleaseManifest, Get-UpdateDecision)",
+    "  local/update.mjs (Linux/macOS: parseVersion, compareVersions, checkManifest, updateDecision).",
+    "compareVersions: [a, b, -1 | 0 | 1 | null]  (null: one of them is not X.Y.Z, an optional leading v allowed).",
+    "manifest: { in, out } with out null (refused) or what the updater uses of it; the release workflow writes it",
+    "  (scripts/build-release.mjs). The asset is always saqme-<version>.zip; where it is downloaded from is never",
+    "  taken from the manifest.",
+    "decision: { deploy, workerApi, minWorkerApi, out }: deploy is how updating the user's own Worker went",
+    "  (none: no sync of their own; ok: updated, or already that version; needs-login; failed), workerApi the",
+    "  API of the Worker that runs now (null: unknown, taken as 1), minWorkerApi what the new release needs.",
+    "  out: apply (all done) | apply-pending (the apps update, the Worker is tried again later) | hold (nothing",
+    "  changes: the new apps would not work with that Worker)."
+  ],
+  "compareVersions": [
+    ["1.2.0", "1.10.0", -1],
+    ["1.10.0", "1.2.0", 1],
+    ["1.2.0", "1.2.0", 0],
+    ["v1.2.0", "1.2.0", 0],
+    ["2.0.0", "1.99.99", 1],
+    ["1.0.0", "1.0.1", -1],
+    ["0.9.9", "1.0.0", -1],
+    ["1.2", "1.2.0", null],
+    ["1.2.0-beta", "1.2.0", null],
+    ["", "1.0.0", null],
+    ["1.0.0", "x.y.z", null],
+    [" 1.0.0 ", "1.0.0", 0]
+  ],
+  "manifest": [
+    {
+      "in": { "schema": 1, "name": "saqme-to-do", "version": "1.2.0", "tag": "v1.2.0", "api": 3, "minWorkerApi": 1, "published": "2026-10-22T10:00:00Z",
+              "asset": { "name": "saqme-1.2.0.zip", "size": 812345, "sha256": "0F0E0D0C0B0A09080706050403020100F0E0D0C0B0A090807060504030201000" },
+              "notes": "https://github.com/francuza9/saqme-to-do/releases/tag/v1.2.0" },
+      "out": { "version": "1.2.0", "tag": "v1.2.0", "api": 3, "minWorkerApi": 1, "asset": "saqme-1.2.0.zip", "size": 812345, "sha256": "0f0e0d0c0b0a09080706050403020100f0e0d0c0b0a090807060504030201000" }
+    },
+    {
+      "in": { "schema": 1, "version": "1.2.0", "tag": "v1.2.0", "api": 3, "minWorkerApi": 2, "asset": { "name": "saqme-1.2.0.zip", "size": 1, "sha256": "0000000000000000000000000000000000000000000000000000000000000000" }, "extra": "ignored" },
+      "out": { "version": "1.2.0", "tag": "v1.2.0", "api": 3, "minWorkerApi": 2, "asset": "saqme-1.2.0.zip", "size": 1, "sha256": "0000000000000000000000000000000000000000000000000000000000000000" }
+    },
+    { "in": { "schema": 2, "version": "1.2.0", "tag": "v1.2.0", "api": 3, "minWorkerApi": 1, "asset": { "name": "saqme-1.2.0.zip", "size": 1, "sha256": "0000000000000000000000000000000000000000000000000000000000000000" } }, "out": null },
+    { "in": { "schema": 1, "version": "1.2", "tag": "v1.2", "api": 3, "minWorkerApi": 1, "asset": { "name": "saqme-1.2.zip", "size": 1, "sha256": "0000000000000000000000000000000000000000000000000000000000000000" } }, "out": null },
+    { "in": { "schema": 1, "version": "1.2.0", "tag": "v1.2.1", "api": 3, "minWorkerApi": 1, "asset": { "name": "saqme-1.2.0.zip", "size": 1, "sha256": "0000000000000000000000000000000000000000000000000000000000000000" } }, "out": null },
+    { "in": { "schema": 1, "version": "1.2.0", "tag": "v1.2.0", "api": 3, "minWorkerApi": 1, "asset": { "name": "../../evil.zip", "size": 1, "sha256": "0000000000000000000000000000000000000000000000000000000000000000" } }, "out": null },
+    { "in": { "schema": 1, "version": "1.2.0", "tag": "v1.2.0", "api": 3, "minWorkerApi": 1, "asset": { "name": "saqme-1.2.0.zip", "size": 0, "sha256": "0000000000000000000000000000000000000000000000000000000000000000" } }, "out": null },
+    { "in": { "schema": 1, "version": "1.2.0", "tag": "v1.2.0", "api": 3, "minWorkerApi": 1, "asset": { "name": "saqme-1.2.0.zip", "size": 200000000, "sha256": "0000000000000000000000000000000000000000000000000000000000000000" } }, "out": null },
+    { "in": { "schema": 1, "version": "1.2.0", "tag": "v1.2.0", "api": 3, "minWorkerApi": 1, "asset": { "name": "saqme-1.2.0.zip", "size": 1, "sha256": "not-a-checksum" } }, "out": null },
+    { "in": { "schema": 1, "version": "1.2.0", "tag": "v1.2.0", "api": 3, "minWorkerApi": 4, "asset": { "name": "saqme-1.2.0.zip", "size": 1, "sha256": "0000000000000000000000000000000000000000000000000000000000000000" } }, "out": null },
+    { "in": { "schema": 1, "version": "1.2.0", "tag": "v1.2.0", "api": 0, "minWorkerApi": 0, "asset": { "name": "saqme-1.2.0.zip", "size": 1, "sha256": "0000000000000000000000000000000000000000000000000000000000000000" } }, "out": null },
+    { "in": { "schema": 1, "version": "1.2.0", "tag": "v1.2.0", "api": 3, "minWorkerApi": 1 }, "out": null },
+    { "in": [], "out": null },
+    { "in": null, "out": null }
+  ],
+  "decision": [
+    { "deploy": "none", "workerApi": null, "minWorkerApi": 1, "out": "apply" },
+    { "deploy": "none", "workerApi": null, "minWorkerApi": 3, "out": "apply" },
+    { "deploy": "ok", "workerApi": 3, "minWorkerApi": 1, "out": "apply" },
+    { "deploy": "ok", "workerApi": 1, "minWorkerApi": 3, "out": "apply" },
+    { "deploy": "needs-login", "workerApi": 2, "minWorkerApi": 1, "out": "apply-pending" },
+    { "deploy": "needs-login", "workerApi": 1, "minWorkerApi": 2, "out": "hold" },
+    { "deploy": "failed", "workerApi": 3, "minWorkerApi": 3, "out": "apply-pending" },
+    { "deploy": "failed", "workerApi": null, "minWorkerApi": 1, "out": "apply-pending" },
+    { "deploy": "failed", "workerApi": null, "minWorkerApi": 2, "out": "hold" },
+    { "deploy": "failed", "workerApi": 2, "minWorkerApi": 3, "out": "hold" }
+  ]
+}

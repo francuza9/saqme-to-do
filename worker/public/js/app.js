@@ -1,7 +1,7 @@
 // Saqme To Do — iPhone PWA. Mirrors the desktop widget: project tabs, status chips, collapsible tasks,
 // deadlines, notes with links, Postponed section, folded Completed, drag to reorder, move to project.
 
-import { Store } from './store.js';
+import { Store, SHARING_API, OLDER_SERVER } from './store.js';
 import {
   STATUSES, statusOf, rank, sections, kidsInDisplayOrder, progress, linkify, openCount, subtreeIds, isAncestor,
   cleanText, cleanNotes,   // same cleanup as the server (worker/src/merge.js): saving never changes text by itself
@@ -158,6 +158,11 @@ const ACCESS = {
   view: { name: 'Can view', help: 'They see the list and its updates, but can\'t change anything.' },
 };
 const SHARE_NEEDS_SYNC = 'Sharing needs sync with your own Cloudflare account (Settings, Sync): a shared list lives on your sync service, where the people you share it with sync it from.';
+/** A sharing call's error -> what to say: "not updated yet" when one's own sync service is older than sharing. */
+function shareError(e) {
+  const older = ui.local ? (ui.local.cloud?.workerApi ?? SHARING_API) < SHARING_API : store.olderServer(SHARING_API);
+  return older ? OLDER_SERVER : e.message;
+}
 const canShare = () => (ui.local ? !!ui.local.cloud : !!store.meta.token);
 
 /** The local app's API for the Linux/macOS window, the phone app's own server otherwise. */
@@ -278,7 +283,7 @@ async function shareSheet(projectId) {
         if (ui.local) loadLocalInfo();
         else if (!store.sharedByMe(projectId)) store.setMeta({ shared: [...(store.meta.shared ?? []), projectId] });
         await refresh();
-      } catch (e) { state.error = e.message; draw(); }
+      } catch (e) { state.error = shareError(e); draw(); }
     };
     name.onkeydown = (e) => { if (e.key === 'Enter') { e.preventDefault(); create(); } };
     name.oninput = () => name.classList.remove('bad');
@@ -301,7 +306,7 @@ async function shareSheet(projectId) {
     if (focusName) name.focus();
   };
   const refresh = async () => {
-    try { state.people = (await shareApi.list(projectId)).shares; state.error = ''; } catch (e) { state.people = state.people ?? []; state.error = e.message; }
+    try { state.people = (await shareApi.list(projectId)).shares; state.error = ''; } catch (e) { state.people = state.people ?? []; state.error = shareError(e); }
     store.sync({ force: true });
     draw();
   };
@@ -1306,6 +1311,7 @@ function renderSettings() {
     } else out.push(pairingField());
   }
   out.push(...sharedListSettings());
+  if (ui.local) out.push(...localUpdateSettings());
 
   out.push(label('Data'));
   if (store.saveError) out.push(saveWarning());
@@ -1322,6 +1328,9 @@ function renderSettings() {
     : store.meta.token
       ? 'Saqme To Do. Your lists live in your own Cloudflare account; this device keeps a full offline copy and syncs in the background.'
       : 'Saqme To Do. Your lists are stored on this device only. Export them now and then, or pair with your own sync to keep a copy elsewhere.'));
+  if (!ui.local && bootVersion) {
+    out.push(setting(`Version ${bootVersion}`, 'It updates by itself with your sync service (the computer that set it up updates it).', null));
+  }
   els.list.replaceChildren(...out);
 }
 
@@ -1430,6 +1439,50 @@ function localSyncSettings() {
       } }, 'Delete them'))));
   }
   return out;
+}
+
+/**
+ * Settings > Updates in the Linux/macOS window (local/updater.mjs): this version, the newest one with Update now,
+ * what an update is doing, how the last one ended, the Cloudflare sign-in that finishes a Worker update, and
+ * "Install updates automatically". The window refreshes it with the rest of ui.local while Settings are open.
+ */
+function localUpdateSettings() {
+  const u = ui.local?.update;
+  const out = [label('Updates')];
+  if (!u?.supported) {
+    out.push(setting(`Version ${ui.local?.version ?? ''}`.trim(), 'This copy runs from a source folder: update it with git pull, then run scripts/setup.sh.', null));
+    return out;
+  }
+  const run = u.running;
+  const steps = { downloading: 'Downloading it and checking it against the release.', installing: 'Installing. The app restarts by itself in a moment; your lists are not touched.', worker: 'Updating your sync service.', restarting: 'Restarting the app.' };
+  if (run) out.push(setting(`Updating to ${run.version}…`, steps[run.state] ?? 'Working on it.', null));
+  else if (u.available) {
+    out.push(setting(`Update available: ${u.latest}`, `You have ${u.current}. It installs in the background, your sync service too, and the app restarts; your lists are not touched.`,
+      h('button', { class: 'btn primary', onclick: () => updateAction('now') }, 'Update now')));
+  } else {
+    out.push(setting(`Version ${u.current}`, u.checking ? 'Checking for updates…' : u.error ? `Could not check for updates: ${u.error}` : `Up to date${u.checkedAt ? ` · checked ${ago(u.checkedAt)}` : ''}`,
+      h('button', { class: 'btn', onclick: () => updateAction('check') }, 'Check now')));
+  }
+  const signIn = () => h('button', { class: 'btn primary', onclick: () => updateAction('login') }, 'Sign in');
+  if (u.login?.running) {
+    out.push(h('div', { class: 'callout', role: 'status' }, h('b', {}, 'Signing in to Cloudflare. '), 'Sign in in the browser and click Allow.',
+      u.login.url ? h('div', {}, 'No browser opened? ', h('a', { href: u.login.url, target: '_blank', rel: 'noopener noreferrer' }, 'Open the sign-in page')) : null));
+  } else if (u.worker?.pending) {
+    out.push(setting(u.worker.needsLogin ? 'Sign in to Cloudflare to finish the update' : 'Your sync service is not updated yet', u.worker.message,
+      u.worker.needsLogin ? signIn() : h('button', { class: 'btn', onclick: () => updateAction('worker') }, 'Try again')));
+  }
+  if (u.login?.message && !u.login.running) out.push(h('div', { class: 'callout', role: 'alert' }, u.login.message));
+  if (u.result && !u.result.ok && !run) {
+    out.push(h('div', { class: 'callout', role: 'alert' }, h('div', {}, h('b', {}, `${u.result.message} `), u.result.next ?? ''),
+      h('div', { class: 'btn-row' }, u.result.needsLogin ? signIn() : h('button', { class: 'btn', onclick: () => updateAction('now') }, 'Try again'))));
+  }
+  out.push(setting('Install updates automatically', 'When the app has not been used for a while, with your sync service. Off: only with Update now.',
+    segmented([['on', 'On'], ['off', 'Off']], u.auto ? 'on' : 'off', (v) => updateAction('auto', { on: v === 'on' }), 'Install updates automatically')));
+  return out;
+}
+async function updateAction(kind, body = {}) {
+  try { ui.local.update = await api(`local/update/${kind}`, body); } catch (e) { toast(e.message); }
+  render();
 }
 
 /** The pairing link and a fresh one-time code: from the local app (Linux/macOS window) or this device's own key. */
@@ -1945,8 +1998,37 @@ window.addEventListener('focus', () => checkClipboardForInvite());
 setInterval(() => { if (document.visibilityState === 'visible' && !ui.editing) requestRender(); }, 60_000);   // relative dates
 
 if ('serviceWorker' in navigator) {
-  navigator.serviceWorker.register('sw.js').catch((e) => console.warn('service worker', e));
+  navigator.serviceWorker.register('sw.js').then((reg) => {
+    // (a new sw.js is looked for on every launch; an app left open looks when it comes back)
+    document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') reg.update().catch(() => {}); });
+  }).catch((e) => console.warn('service worker', e));
 }
+
+// ---------------------------------------------------------------- updates of the app itself
+// Its files come from the server that serves it (your Worker, or the Linux/macOS app), and sw.js fetches them
+// network-first, so an update there reaches the next launch. A page that stays open (a Home Screen app iOS keeps
+// in memory, the desktop window) notices too: when the server says another version than the one this page
+// started with, it reloads at the next quiet moment, and then says "Updated". (A copy on a static host has no
+// such server: it updates with its next launch.)
+let bootVersion = null;
+async function watchVersion() {
+  let v = null;
+  try {
+    const r = await fetch('api/health', { cache: 'no-store' });
+    if (r.ok) v = (await r.json()).version ?? null;
+  } catch { /* offline, or a static host */ }
+  if (!v) return;
+  if (bootVersion === null) {
+    bootVersion = v;
+    const was = ls.get('appVersion');
+    ls.set('appVersion', v);
+    if (was && was !== v) toast(`Saqme was updated to ${v}`);
+    return;
+  }
+  if (v !== bootVersion && !ui.editing && els.sheetWrap.hidden && document.visibilityState === 'visible') location.reload();   // (it says so after)
+}
+document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') watchVersion(); });
+setInterval(() => { if (document.visibilityState === 'visible') watchVersion(); }, 30 * 60_000);
 
 els.addBar.querySelector('.add-plus').append(icon('plus'));
 els.tabAdd.append(icon('plus'));
@@ -1971,3 +2053,4 @@ setInterval(() => { if (ui.local && document.visibilityState === 'visible' && ui
 store.startAuto();
 syncTimeZone();
 syncSharePush();
+watchVersion();
