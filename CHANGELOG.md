@@ -14,6 +14,12 @@ before they ask for sync.
 - **WSL:** the Linux one-liner without options no longer starts a Cloudflare sign-in. It prints the Windows
   command (the Windows app is the one to use there); `--cloud` / `--cloud-only` still set up sync for the Windows
   app, and `--app` installs the Linux app inside WSL.
+- **Phone app without sync:** the welcome screen says that no account is needed. **Settings > Notifications** no
+  longer offers a daily summary that never came. It says *Need sync* and why (on a phone, reminders are push
+  notifications from your sync service), links to Sync & sharing, and says the summary time applies once the phone
+  is paired.
+- `pwa-static-check.mjs` (the GitHub Pages copy) also checks that Chrome finds the app installable from its
+  sub-folder, and checks the Notifications page without sync, axe included.
 - Tests: `setup-node.test.js` runs the real `setup.sh` against stand-in Node.js downloads for each case; the
   container tests now install on CentOS 7 (glibc 2.17) instead of expecting it to stop.
 

@@ -282,6 +282,10 @@ above so the system keeps that storage.
   format as the desktop apps (one file per list, plus the lists' order). Unzipped into a desktop lists folder,
   they just appear. **Import lists** takes such a zip or `.md` files; tasks that are already there (same
   `^id`) are skipped, nothing is deleted, so importing twice is harmless.
+- **Reminders need sync on a phone.** A web app cannot wake itself up at a deadline: on iPhone and Android the
+  reminders are push notifications that your sync service sends. Without it, **Settings > Notifications** says
+  *Need sync*, and deadlines show in the lists when you open the app. (The computer apps remind you without any
+  account.)
 - **Add sync later:** set up the cloud part from a computer, then paste the pairing link into
   **Settings > Sync & sharing** of this copy of the app (pairing codes only work in the copy your sync service serves,
   the one the QR code opens). Your lists are merged with the synced ones (same-name lists

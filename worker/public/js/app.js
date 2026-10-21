@@ -1778,6 +1778,15 @@ function notificationsPage() {
     return out;
   }
   const p = pushState();
+  if (p.state === 'unpaired') {
+    // used without sync: say what reminders need before offering a time for them
+    return [
+      card(infoRow('Notifications', p.short), linkRow('Sync & sharing', 'Not paired', 'sync', { help: 'Pair this phone with your sync service' })),
+      foot(p.help),
+      card(infoRow('Daily summary', '', at)),
+      foot('Once this phone is paired: one notification with what is due today or overdue, at this time, and reminders 15 minutes before a timed deadline and at the time.'),
+    ];
+  }
   if (p.state === 'on' || p.state === 'off') {
     out.push(card(
       switchRow('Notifications', p.state === 'on', async (on) => { if (on) await enablePush(); else { await disablePush(); render(); } }, { help: p.help, fk: 'push' }),
@@ -2491,7 +2500,9 @@ function pushState() {
       : 'This browser does not support web push notifications.' };
   }
   const browserOnly = !store.meta.token && browserShares().length > 0;   // reminders from the lists' owner's server
-  if (!store.meta.token && !browserOnly) return { state: 'unpaired', short: 'Off', help: 'Pair this device first (Sync & sharing): your sync service sends them.' };
+  if (!store.meta.token && !browserOnly) {
+    return { state: 'unpaired', short: 'Need sync', help: 'On a phone, reminders come from your sync service: a web app cannot wake itself up at a deadline. Set up sync on a computer (free, in your own Cloudflare account), then pair this phone. Until then, deadlines show in your lists, but nothing reminds you of them here.' };
+  }
   if (Notification.permission === 'denied') return { state: 'blocked', short: 'Blocked', help: 'Allow them in iPhone Settings › Notifications › Saqme.' };
   if (Notification.permission === 'granted' && ls.get('push') === '1') {
     return { state: 'on', short: 'On', help: browserOnly ? 'On for the lists shared with you here; their owner\'s sync service sends them.' : 'On for this device.' };
@@ -2702,7 +2713,7 @@ function renderWelcome() {
   }
   els.list.replaceChildren(h('div', { class: 'welcome' }, logo,
     h('h1', {}, 'Saqme To Do'),
-    h('p', {}, 'To-do lists in plain markdown. Start on this device right away; sync with your computer through your own Cloudflare account now or later.'),
+    h('p', {}, 'To-do lists in plain markdown. No account needed: start on this device right away, and your lists stay on it. Sync with your computer through your own free Cloudflare account later, if you like.'),
     h('button', { class: 'btn primary', onclick: () => { ui.welcomeSkipped = true; ls.set('localOnly', '1'); store.addProject('General'); render(); } }, 'Use it on this device'),
     h('ol', { class: 'steps' },
       h('li', {}, 'Already syncing on your computer? Open ', h('b', {}, 'Pair phone'), ' in its settings (Settings › Sync & sharing).'),

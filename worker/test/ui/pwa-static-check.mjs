@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 // The phone app served as plain static files from a sub-folder, as GitHub Pages does (.github/workflows/pages.yml):
-// local-only use, export / import as markdown, offline start, and pairing with a Worker on another origin.
+// local-only use, installable (Chrome's own check), what Notifications says without sync, export / import as
+// markdown, offline start, and pairing with a Worker on another origin.
 // Optional QA tool like pwa-ui-check.mjs (Playwright is a devDependency of worker/):
 //   cd worker && npm install && npx playwright install chromium     (once)
 //   npm run dev                                                                       (another terminal; for the pairing step)
@@ -11,6 +12,7 @@ try { ({ chromium, devices } = await import('playwright')); } catch {
   process.exit(2);
 }
 import { createServer } from 'node:http';
+import { createRequire } from 'node:module';
 import { mkdtempSync, readFileSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, extname, join, normalize } from 'node:path';
@@ -51,12 +53,32 @@ watch(page);
 await page.goto(site);
 await page.waitForSelector('.welcome');
 check(await page.isVisible('text=Use it on this device'), 'welcome offers local use first');
+check((await page.textContent('.welcome')).includes('No account needed'), 'welcome says no account is needed');
 await page.click('text=Use it on this device');
 for (const t of ['Water the plants', 'Call Anna']) { await page.fill('#addInput', t); await page.press('#addInput', 'Enter'); }
 await page.waitForTimeout(300);
 check((await texts(page)).join('|') === 'Water the plants|Call Anna', 'tasks added and kept on the device');
 const scope = await page.evaluate(() => navigator.serviceWorker.ready.then((r) => r.scope));
 check(scope === site, `service worker scoped to the sub-folder (${scope})`);
+// what Chrome on Android decides before it offers Install app: its own check, through the DevTools protocol
+await page.reload();
+await page.waitForSelector('.row .text');
+const cdp = await ctx.newCDPSession(page);
+const { installabilityErrors } = await cdp.send('Page.getInstallabilityErrors');
+check(installabilityErrors.length === 0, `installable from the sub-folder, as Chrome checks it (${installabilityErrors.map((e) => e.errorId).join(', ')})`);
+const { url: manifestUrl, errors: manifestErrors } = await cdp.send('Page.getAppManifest');
+check(manifestUrl === `${site}manifest.webmanifest` && manifestErrors.length === 0, `manifest found and valid (${manifestUrl}; ${manifestErrors.map((e) => e.message).join('; ')})`);
+await cdp.detach();
+
+// ---- 1b. reminders without sync: says what they need instead of offering a summary that never comes
+await page.click('#logo');
+await page.click('[data-fk="open:notifications"]');
+const notes = await page.textContent('#list');
+check(notes.includes('Need sync') && notes.includes('a web app cannot wake itself up') && notes.includes('Once this phone is paired'), 'Notifications without sync: says reminders need sync');
+await page.click('#list [data-fk="open:sync"]');
+check(await page.isVisible('text=Not paired'), 'and leads to Sync & sharing');
+await page.click('#logo');   // (back to the list)
+await page.waitForSelector('.row .text');
 
 // ---- 2. export -> zip in the desktop format (Settings > Your lists)
 await page.click('#logo');
@@ -90,6 +112,13 @@ watch(page);
 await page.goto(site);
 await page.click('text=Use it on this device');
 await page.click('#logo');
+// the page that explains reminders without sync, through axe (this profile lets it be injected)
+await page.click('[data-fk="open:notifications"]');
+await page.addScriptTag({ content: readFileSync(createRequire(import.meta.url).resolve('axe-core/axe.min.js'), 'utf8') });
+const axe = await page.evaluate(() => window.axe.run(document, { runOnly: { type: 'tag', values: ['wcag2a', 'wcag2aa', 'wcag21a', 'wcag21aa', 'wcag22aa', 'best-practice'] } }));
+const serious = axe.violations.filter((v) => v.impact === 'serious' || v.impact === 'critical');
+check(serious.length === 0, `Notifications without sync: no serious axe findings (${serious.map((v) => v.id).join(', ')})`);
+await page.click('.view-header .back');
 // (a static host has no version to tell: the line under Settings says the app's name only)
 check((await page.textContent('#list .version-line')) === 'Saqme To Do', `static host: the version line without a version (${await page.textContent('#list .version-line')})`);
 await page.click('[data-fk="open:lists"]');
