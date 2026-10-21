@@ -3,8 +3,9 @@
 # install -> app runs -> a hand-written list gets ids and reaches the API -> re-run keeps key and lists ->
 # uninstall keeps lists -> --purge-data removes them, and only what Saqme created. Old and odd systems must
 # stop with a clear message.
-#   scripts/dev/test-setup-linux.sh [image ...]     (default: debian:10 ubuntu:20.04 fedora:41)
+#   scripts/dev/test-setup-linux.sh [image ...]     (default: debian:10 ubuntu:20.04 fedora:41 centos:7)
 #   an image name ending in +node gets the distribution's own Node.js first (e.g. alpine:3.22+node)
+#   glibc older than 2.28 (centos:7 has 2.17, ubuntu:18.04 2.27) gets Node.js's unofficial glibc-2.17 build
 set -euo pipefail
 repo="$(cd "$(dirname "$0")/../.." && pwd)"
 
@@ -89,14 +90,14 @@ if [ "${1:-}" = --inside-expect-fail ]; then
 fi
 
 images=("$@")
-[ ${#images[@]} -gt 0 ] || images=(debian:10 ubuntu:20.04 fedora:41)
+[ ${#images[@]} -gt 0 ] || images=(debian:10 ubuntu:20.04 fedora:41 centos:7)
 total=0
 for spec in "${images[@]}"; do
   echo "== $spec"
   img="${spec%+node}"
   case "$spec" in
     *+node) inner=--inside ;;
-    centos:7*|alpine*) inner=--inside-expect-fail ;;
+    alpine*) inner=--inside-expect-fail ;;
     *) inner=--inside ;;
   esac
   case "$img" in

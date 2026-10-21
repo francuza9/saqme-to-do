@@ -179,8 +179,9 @@ more to get the updater. [Details](docs/setup.md#updating).
 
 **Android?** Yes: the phone app installs from Chrome, push included. It is tuned and tested mostly on iPhone.
 
-**Which Linux and macOS versions?** Linux with glibc 2.28 or newer (Debian 10, Ubuntu 20.04, RHEL 8, Fedora
-and anything newer) and macOS 13.5 or newer; older systems work with Node.js 22.13+ installed.
+**Which Linux and macOS versions?** Linux on x64 with glibc 2.17 or newer (Ubuntu 18.04, Debian 9, RHEL /
+CentOS 7, Amazon Linux 2 and anything newer), on arm64 with glibc 2.28 or newer, and macOS 11 or newer: setup
+brings the Node.js that fits. Anything else works with Node.js 22.13+ installed.
 [Details](docs/setup.md#requirements-linux-and-macos).
 
 **No notifications on Windows?** Check Do Not Disturb, and make Saqme To Do a priority app under Windows

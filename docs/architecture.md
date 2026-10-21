@@ -103,9 +103,10 @@ device id), `sync\state.json` (sync engine state), `sync\sync.log`, `cloud.json`
   the version `current` names, a menu entry or `~/Applications/Saqme To Do.app`, and starts `saqme serve` at
   login (systemd user service, desktop autostart entry, or LaunchAgent). `saqme open` starts it if needed and
   opens the window.
-- **Runtime:** Node.js 22.13+ (for `node:sqlite`). Setup uses an installed one or downloads the official
-  Node.js 24 build into the app folder (glibc 2.28+, macOS 13.5+). No compiled code of our own and no npm
-  dependencies at run time.
+- **Runtime:** Node.js 22.13+ (for `node:sqlite`). Setup uses an installed one or downloads one into the app
+  folder: the official Node.js 24 (glibc 2.28+, macOS 13.5+), the official 22 on macOS 11–13.4, and on x64 Linux
+  with glibc 2.17–2.27 the glibc-2.17 build from unofficial-builds.nodejs.org (24, else 22). No compiled code of
+  our own and no npm dependencies at run time, so there is nothing of ours to build per glibc.
 
 ## Phone (PWA)
 

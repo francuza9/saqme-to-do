@@ -116,8 +116,8 @@ Linux, macOS (or WSL):
 ```bash
 node local/saqme.mjs open --data /tmp/saqme-dev      # run the Linux/macOS app on scratch data (any OS, Node.js 22.13+)
 node local/saqme.mjs connect 'http://localhost:8787/#pair=<AUTH_TOKEN>' --data /tmp/saqme-dev   # sync it with npm run dev
-scripts/dev/test-setup-linux.sh                       # setup.sh in Debian 10 / Ubuntu 20.04 / Fedora containers (Docker)
-scripts/dev/test-setup-linux.sh centos:7 alpine:3.20 alpine:3.22+node   # old glibc, musl, a distribution's own Node.js
+scripts/dev/test-setup-linux.sh                       # setup.sh in Debian 10 / Ubuntu 20.04 / Fedora / CentOS 7 containers (Docker)
+scripts/dev/test-setup-linux.sh ubuntu:18.04 alpine:3.20 alpine:3.22+node   # glibc 2.27, musl, a distribution's own Node.js
 ```
 
 To try the desktop against your local Worker, put a `sync\config.json` into the scratch data folder:

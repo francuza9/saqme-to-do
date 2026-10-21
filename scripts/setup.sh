@@ -4,7 +4,7 @@
 #
 #   setup.sh                  install or update the app. No account needed: your lists stay on this computer.
 #   setup.sh --cloud          also sync through your own free Cloudflare account (adds or updates it)
-#   setup.sh --cloud-only     only the Cloudflare part (what WSL does by default, for the Windows app)
+#   setup.sh --cloud-only     only the Cloudflare part (on WSL: for the Windows app; so is --cloud there)
 #   setup.sh --uninstall      remove the app (your lists stay; add --purge-data to delete them too)
 #
 #   --data DIR      keep the lists somewhere else (default: ~/.local/share/saqme, or on macOS
@@ -24,7 +24,7 @@ main() {
 
 REPO="${SAQME_REPO:-francuza9/saqme-to-do}"
 BRANCH="${SAQME_BRANCH:-main}"
-NODE_MAJOR=24          # downloaded when no Node.js 22.13+ is installed
+NODE_MAJOR=24          # downloaded when no Node.js 22.13+ is installed (22 where 24 does not run: download_node)
 NODE_MIN="22.13.0"     # node:sqlite without flags
 
 mode="app"; cloud=0; purge=0; start=1; autostart=1; force_app=0
@@ -104,7 +104,15 @@ wsl=0
 # (not /proc/version: containers on a WSL2 kernel say "microsoft" there too)
 if [ "$platform" = linux ] && { [ -n "${WSL_DISTRO_NAME:-}${WSL_INTEROP:-}" ] || has wslpath; }; then wsl=1; fi
 if [ "$wsl" = 1 ] && [ "$mode" = app ] && [ "$force_app" = 0 ]; then
-  mode="cloud-only"; cloud=1
+  # WSL is Windows: the Windows app is the one to install, and without --cloud nothing goes to Cloudflare
+  if [ "$cloud" = 0 ]; then
+    printf '\n%sThis is WSL, on Windows.%s Install the Windows app instead: paste this into PowerShell (no account needed):\n\n' "$B" "$N"
+    printf '  %s\n\n' 'powershell -NoProfile -ExecutionPolicy Bypass -Command "irm https://raw.githubusercontent.com/francuza9/saqme-to-do/main/scripts/setup.ps1 | iex"'
+    info "Or, here in WSL:  --app         install the Linux app inside WSL (its own lists, not the Windows app's)"
+    info "                  --cloud-only  set up sync in your Cloudflare account for the Windows app"
+    exit 0
+  fi
+  mode="cloud-only"
   info "WSL: setting up the cloud part for the Windows app (install the app itself with setup.cmd on Windows)."
   info "To install the Linux app inside WSL as well, run with --app."
 fi
@@ -222,8 +230,25 @@ find_node() {
   return 1
 }
 
+# Where Node.js comes from: the official builds (glibc 2.28+, macOS 13.5+), Node.js 22 for macOS 11-13.4, and for
+# x64 Linux with glibc 2.17-2.27 (Ubuntu 18.04, Debian 9, RHEL / CentOS 7, Amazon Linux 2) the glibc-2.17 builds
+# of the Node.js project's unofficial-builds. SAQME_NODE_DIST / SAQME_NODE_DIST_GLIBC217: mirrors of the two (tests)
+NODE_DIST="${SAQME_NODE_DIST:-https://nodejs.org/dist}"
+NODE_DIST_GLIBC217="${SAQME_NODE_DIST_GLIBC217:-https://unofficial-builds.nodejs.org/download/release}"
+# the newest version of one of the majors $3 (newest first) that $1/index.json lists with a build named $2 -> vX.Y.Z
+newest_build() {
+  local major ver
+  fetch "$1/index.json" "$node_tmp/index.json" || return 2
+  for major in $3; do
+    # (one object per release, newest first; its "files" array names the builds it has)
+    ver="$(tr '}' '\n' < "$node_tmp/index.json" | grep -F "\"$2\"" | grep -oE "\"version\": *\"v$major\.[0-9]+\.[0-9]+\"" | head -n 1 | grep -oE "v[0-9.]+" || true)"
+    if [ -n "$ver" ]; then printf '%s\n' "$ver"; return 0; fi
+  done
+  return 1
+}
+
 download_node() {
-  local arch os_name libc ver file base sum got
+  local arch os_name libc ver file base sum got build dist majors="$NODE_MAJOR" glibc217=0 what
   case "$(uname -m)" in
     x86_64|amd64) arch=x64 ;;
     aarch64|arm64) arch=arm64 ;;
@@ -232,8 +257,10 @@ download_node() {
   if [ "$platform" = mac ]; then
     os_name=darwin
     macver="$(sw_vers -productVersion 2>/dev/null || echo 0)"
-    if ! version_ge "$macver.0.0" "13.5.0"; then
-      die "the Node.js $NODE_MAJOR download needs macOS 13.5 or newer (this Mac has $macver)." "Install Node.js 22 (supports macOS 11 and newer) from https://nodejs.org or with Homebrew (brew install node@22), then run setup again."
+    if ! version_ge "$macver.0.0" "11.0.0"; then
+      die "Saqme needs macOS 11 (Big Sur) or newer for its Node.js (this Mac has $macver)." "Install Node.js $NODE_MIN or newer another way (for example MacPorts), then run setup again."
+    elif ! version_ge "$macver.0.0" "13.5.0"; then
+      majors=22   # Node.js 24 needs macOS 13.5; 22 (supported until April 2027) runs on 11 and newer
     fi
   else
     os_name=linux
@@ -243,26 +270,43 @@ download_node() {
     fi
     glibc="$(printf '%s' "$libc" | grep -oE '[0-9]+\.[0-9]+' | tail -n 1)"
     if [ -n "$glibc" ] && ! version_ge "$glibc.0" "2.28.0"; then
-      die "this system's C library (glibc $glibc) is older than Node.js needs (2.28)." "Install Node.js $NODE_MIN or newer another way (your distribution, nvm, or an unofficial glibc-2.17 build) and run setup again."
+      if [ "$arch" != x64 ] || ! version_ge "$glibc.0" "2.17.0"; then
+        die "this system's C library (glibc $glibc) is older than the Node.js builds for $(uname -m) need (2.28$([ "$arch" = x64 ] && echo ', or 2.17 for the older-system build'))." "Install Node.js $NODE_MIN or newer another way (your distribution, nvm) and run setup again."
+      fi
+      glibc217=1; majors="$NODE_MAJOR 22"
     fi
   fi
   has curl || has wget || die "neither curl nor wget is installed." "Install curl (e.g. sudo apt install curl) and run this again."
   node_tmp="$(mktemp -d)"
-  info "downloading Node.js $NODE_MAJOR for $os_name-$arch (about 50 MB, used only by Saqme)..."
-  fetch "https://nodejs.org/dist/latest-v$NODE_MAJOR.x/SHASUMS256.txt" "$node_tmp/SHASUMS256.txt" || die "could not reach nodejs.org." "Check the internet connection, or install Node.js $NODE_MIN+ yourself."
-  file="$(grep -oE "node-v[0-9.]+-$os_name-$arch\.tar\.gz" "$node_tmp/SHASUMS256.txt" | head -n 1)"
-  [ -n "$file" ] || die "no Node.js $NODE_MAJOR build for $os_name-$arch." "Install Node.js $NODE_MIN+ yourself."
+  if [ "$glibc217" = 1 ]; then
+    dist="$NODE_DIST_GLIBC217"; build="linux-x64-glibc-217"
+    rc=0; ver="$(newest_build "$dist" "$build" "$majors")" || rc=$?
+    [ "$rc" = 2 ] && die "could not reach unofficial-builds.nodejs.org." "Check the internet connection, or install Node.js $NODE_MIN+ yourself."
+    [ "$rc" = 0 ] || die "there is no Node.js $NODE_MIN+ build for glibc $glibc yet." "Install Node.js $NODE_MIN or newer another way (your distribution, nvm) and run setup again."
+    what="Node.js $ver for older Linux systems (glibc $glibc; the Node.js project's unofficial-builds, $build)"
+  else
+    dist="$NODE_DIST"; build="$os_name-$arch"
+    # the newest of that major: its checksums say which file it is ("latest" may move on before the download)
+    fetch "$dist/latest-v$majors.x/SHASUMS256.txt" "$node_tmp/SHASUMS256.txt" || die "could not reach nodejs.org." "Check the internet connection, or install Node.js $NODE_MIN+ yourself."
+    file="$(grep -oE "node-v[0-9.]+-$build\.tar\.gz" "$node_tmp/SHASUMS256.txt" | head -n 1)"
+    [ -n "$file" ] || die "no Node.js $majors build for $build." "Install Node.js $NODE_MIN+ yourself."
+    ver="${file#node-}"; ver="${ver%%-*}"
+    what="Node.js $ver for $build"
+  fi
+  base="$dist/$ver"
+  fetch "$base/SHASUMS256.txt" "$node_tmp/SHASUMS256.txt" || die "could not download the checksums of Node.js $ver." "Check the internet connection and run setup again (or install Node.js $NODE_MIN+ yourself)."
+  # .tar.gz where there is one; .tar.xz needs xz
+  file="node-$ver-$build.tar.gz"
+  if ! grep -q " $file\$" "$node_tmp/SHASUMS256.txt" && has xz; then file="node-$ver-$build.tar.xz"; fi
   sum="$(grep " $file\$" "$node_tmp/SHASUMS256.txt" | cut -d' ' -f1)"
-  [ -n "$sum" ] || die "nodejs.org lists no checksum for $file." "Run setup again (or install Node.js $NODE_MIN+ yourself)."
-  # from that version's own folder: "latest" may move on between the two downloads
-  ver="${file#node-}"; ver="${ver%%-*}"
-  base="https://nodejs.org/dist/$ver"
-  fetch "$base/$file" "$node_tmp/$file" || die "could not download $file from nodejs.org." "Check the internet connection and run setup again (or install Node.js $NODE_MIN+ yourself)."
+  [ -n "$sum" ] || die "the Node.js $ver download has no checksum for $file." "Run setup again (or install Node.js $NODE_MIN+ yourself)."
+  info "downloading $what: about 50 MB, used only by Saqme..."
+  fetch "$base/$file" "$node_tmp/$file" || die "could not download $file." "Check the internet connection and run setup again (or install Node.js $NODE_MIN+ yourself)."
   if has sha256sum; then got="$(sha256sum "$node_tmp/$file" | cut -d' ' -f1)"; else got="$(shasum -a 256 "$node_tmp/$file" | cut -d' ' -f1)"; fi
   [ "$sum" = "$got" ] || die "the Node.js download is damaged (checksum mismatch)." "Run setup again."
   mkdir -p "$APP_DIR"
   rm -rf "$APP_DIR/node" && mkdir -p "$APP_DIR/node"
-  tar -xzf "$node_tmp/$file" -C "$APP_DIR/node" --strip-components 1
+  case "$file" in *.xz) tar -xJf "$node_tmp/$file" -C "$APP_DIR/node" --strip-components 1 ;; *) tar -xzf "$node_tmp/$file" -C "$APP_DIR/node" --strip-components 1 ;; esac
   NODE="$APP_DIR/node/bin/node"
   "$NODE" -e 'require("node:sqlite")' 2>/dev/null || die "the downloaded Node.js does not run on this system." "Install Node.js $NODE_MIN+ with your package manager and run setup again."
   ok "Node.js $("$NODE" -p 'process.versions.node') ($NODE)"

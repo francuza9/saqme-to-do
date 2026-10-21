@@ -34,7 +34,7 @@ What is automated and what you do yourself:
 | Step | Done by setup | Left to you |
 |---|---|---|
 | Install / update the app, start at login, menu entry | Windows, Linux, macOS | run one command |
-| Node.js (Linux, macOS) | uses yours if it is 22.13 or newer, otherwise downloads Node.js 24 just for Saqme | very old or unusual systems: install Node.js 22.13+ yourself ([details](#requirements-linux-and-macos)) |
+| Node.js (Linux, macOS) | uses yours if it is 22.13 or newer, otherwise downloads one just for Saqme (also for glibc 2.17+ and macOS 11+) | very old or unusual systems: install Node.js 22.13+ yourself ([details](#requirements-linux-and-macos)) |
 | Cloudflare database, Worker, keys, deploy | **Set up sync** in the app's Settings (Windows: Sync & sharing; Linux, macOS: Sync), or setup with `-Cloud` / `--cloud` | sign in to Cloudflare and click **Allow** (once); pick a workers.dev name (first time only) |
 | Connecting the desktop app to sync | yes | — |
 | Phone | — | scan the QR code, add to Home Screen, type the pairing code (iPhone), enable notifications |
@@ -146,28 +146,33 @@ as a normal tab). Set `SAQME_BROWSER` to the browser command you prefer.
 |---|---|
 | `--cloud` | also set up sync in your Cloudflare account, or update it |
 | `--cloud-only` | only the Cloudflare part (for example on a server, or from WSL for the Windows app) |
+| `--app` | on WSL: install the Linux app inside WSL (without it, setup there only shows the Windows command) |
 | `--data DIR` | keep the lists somewhere else (a synced folder, for example) |
 | `--port N` | local port of the window (default 47613; the address must stay the same, as the window's data belongs to it) |
 | `--no-start`, `--no-autostart` | don't start now / don't start at login |
 | `--uninstall [--purge-data]` | remove the app (your lists stay unless you add `--purge-data`) |
 | `--rotate-token`, `--device-login`, `--worker-name NAME`, `--yes` | for the Cloudflare part, as on Windows |
 
-On **WSL**, `setup.sh` sets up the cloud part for the Windows app (and connects it if it is installed); add
-`--app` to install the Linux app inside WSL as well.
+On **WSL**, `setup.sh` without options installs nothing: it prints the Windows one-liner (WSL runs on Windows,
+and the Windows app is the one to use there). `--cloud` or `--cloud-only` sets up the cloud part for the Windows
+app (and connects it if it is installed); `--app` installs the Linux app inside WSL, with lists of its own.
 
 ### Requirements (Linux and macOS)
 
-Setup uses the Node.js you have if it is **22.13 or newer**; otherwise it downloads the official Node.js 24
-(checksum-verified, about 50 MB, used only by Saqme). That download needs:
+Setup uses the Node.js you have if it is **22.13 or newer**; otherwise it downloads one just for Saqme
+(checksum-verified, about 50 MB, kept in the app folder and removed with `--uninstall`):
 
-- **Linux:** x64 or arm64 with **glibc 2.28 or newer** and kernel 4.18+: Debian 10, Ubuntu 20.04, RHEL /
-  Rocky / Alma 8, Fedora 29 and anything newer. Tested in containers on Debian 10, Ubuntu 20.04 and
-  Fedora 41.
-- **macOS:** 13.5 (Ventura) or newer, Intel or Apple silicon.
+| System | What setup downloads |
+|---|---|
+| **Linux** x64 or arm64 with **glibc 2.28 or newer**: Debian 10, Ubuntu 20.04, RHEL / Rocky / Alma 8, Fedora 29 and anything newer | the official Node.js 24 |
+| **Older Linux, x64**, glibc 2.17 to 2.27: Ubuntu 18.04, Debian 9, RHEL / CentOS 7, Amazon Linux 2, SLES 12 | Node.js 24 (or 22) built for glibc 2.17 by the Node.js project's [unofficial-builds](https://unofficial-builds.nodejs.org), checked against its checksums there |
+| **macOS 13.5** (Ventura) or newer, Intel or Apple silicon | the official Node.js 24 |
+| **macOS 11 to 13.4** (Big Sur, Monterey, early Ventura) | the official Node.js 22 (supported until April 2027) |
 
-Older systems and musl-based ones (Alpine) stop with a clear message: install Node.js 22.13+ another way
-(your distribution, `nvm`, Homebrew `node@22` for macOS 11–13.4, an unofficial glibc 2.17 build), run setup
-again, and it uses that one. (Tested on Alpine 3.22 with its own `nodejs` package.)
+The container tests (`scripts/dev/test-setup-linux.sh`) cover Debian 10, Ubuntu 20.04, Fedora 41 and CentOS 7. Older systems, arm64 Linux with glibc
+before 2.28 and musl-based ones (Alpine) stop with a clear message: install Node.js 22.13+ another way (your
+distribution, `nvm`), run setup again, and it uses that one. (Tested on Alpine 3.22 with its own `nodejs`
+package.) Saqme itself has no compiled code: Node.js is the only program that has to match the system.
 
 ## 3. Cloud sync: Cloudflare account and login
 

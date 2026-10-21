@@ -1,5 +1,22 @@
 # Changes
 
+## Unreleased
+
+**Saqme without any account, on more systems.** Every app already worked with no Cloudflare account; setup on
+Linux and macOS now gets the app running on older systems too, and nothing points a new user at Cloudflare
+before they ask for sync.
+
+- **Older Linux (x64, glibc 2.17 to 2.27):** Ubuntu 18.04, Debian 9, RHEL / CentOS 7, Amazon Linux 2 and SLES 12
+  used to stop with "glibc is older than Node.js needs". Setup now downloads Node.js 24 (or 22) built for glibc
+  2.17 by the Node.js project's unofficial-builds, checked against its checksums. Saqme has no compiled code of its
+  own, so Node.js is the only part that has to match the system.
+- **macOS 11 to 13.4:** setup downloads Node.js 22 there instead of stopping (Node.js 24 needs macOS 13.5).
+- **WSL:** the Linux one-liner without options no longer starts a Cloudflare sign-in. It prints the Windows
+  command (the Windows app is the one to use there); `--cloud` / `--cloud-only` still set up sync for the Windows
+  app, and `--app` installs the Linux app inside WSL.
+- Tests: `setup-node.test.js` runs the real `setup.sh` against stand-in Node.js downloads for each case; the
+  container tests now install on CentOS 7 (glibc 2.17) instead of expecting it to stop.
+
 ## 1.2.2
 
 **Use Saqme with your AI.** Your lists are markdown files, so an AI assistant with file access (Claude Desktop or
