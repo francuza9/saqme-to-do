@@ -1,7 +1,7 @@
 // Saqme To Do — iPhone PWA. Mirrors the desktop widget: lists (the title switches them), status chips, collapsible
 // tasks, deadlines, notes with links, Postponed section, folded Completed, drag to reorder, move to project.
 
-import { Store, SHARING_API, OLDER_SERVER } from './store.js';
+import { Store, SHARING_API, OLDER_SERVER, SELF_UPDATE_API } from './store.js';
 import {
   STATUSES, statusOf, rank, sections, kidsInDisplayOrder, progress, linkify, listCounts, subtreeIds, isAncestor,
   cleanText, cleanNotes,   // same cleanup as the server (worker/src/merge.js): saving never changes text by itself
@@ -1541,7 +1541,8 @@ document.addEventListener('keydown', (e) => {
 
 // ---------------------------------------------------------------- Settings and the views it opens
 // Settings is a short list of pages, as in the Windows app: General, Notifications, Sync & sharing, Your lists; then
-// App: Updates (the Linux/macOS window only: the phone app updates with its sync service) and About. Every view is a
+// App: Updates (the Linux/macOS window: the app and the sync service; a paired phone: the sync service, which the
+// phone app updates with) and About. Every view is a
 // grouped list (docs/design.md, "Grouped lists"): cards of one-line rows, where places to go have a chevron, actions are
 // violet rows (red when risky) and what needs explaining is a footnote under the card. Rare and risky actions sit at the
 // bottom of their page, under Advanced. A quiet line at the bottom of every view says the version.
@@ -1559,7 +1560,8 @@ function go(view, focus = '') {
   ui.focusKey = focus || (view === 'list' ? '' : 'back');
   render();
   els.list.scrollTop = 0;
-  if (fromList && view !== 'list') loadLocalInfo();
+  if (fromList && view !== 'list') { loadLocalInfo(); loadServiceUpdate(); }
+  else if (view === 'updates') loadServiceUpdate();
 }
 /** Back: one level up, with focus on the row that opened the view just left (in the list: the task, or Settings). */
 function goBack() {
@@ -1668,7 +1670,7 @@ const VIEWS = {
 };
 /** Every view but the list: its header (Back, title), its cards, and the version line at the bottom. */
 function renderSettingsView() {
-  if (!VIEWS[ui.view] || (ui.view === 'updates' && !ui.local)) ui.view = 'settings';
+  if (!VIEWS[ui.view] || (ui.view === 'updates' && !ui.local && !store.meta.token)) ui.view = 'settings';
   // a view rebuilt in place (sync status, the Linux/macOS app's news) keeps what was typed in its boxes
   const typed = new Map([...els.list.querySelectorAll('input.g-input[data-fk]')].map((i) => [i.dataset.fk, [i.value, i.selectionStart, i.selectionEnd]]));
   els.list.replaceChildren(viewHeader(VIEW_TITLES[ui.view]), ...VIEWS[ui.view]().filter(Boolean), versionLine());
@@ -1708,7 +1710,8 @@ function settingsHome() {
     ),
     head('App'),
     card(
-      ui.local ? page('updates', updateBadge() ?? updateSummary(), 'The version, checking and installing updates', 'update') : null,
+      ui.local ? page('updates', updateBadge() ?? updateSummary(), 'The version, checking and installing updates', 'update')
+        : store.meta.token ? page('updates', serviceSummary(), 'Your sync service: its version, updating it by itself', 'update') : null,
       page('about', { short: v ?? '', text: v ? `version ${v}` : 'Saqme To Do' }, 'Version, where your lists are', 'info'),
     ),
   ];
@@ -1891,13 +1894,16 @@ function aboutPage() {
   const where = ui.local ? 'Your lists are the markdown files in the lists folder (Your lists): this window, AI assistants and any editor can change them.'
     : store.meta.token ? 'Your lists live in your own Cloudflare account; this device keeps a full offline copy and syncs in the background.'
       : 'Your lists are stored on this device only. Export them now and then (Your lists), or pair with your own sync to keep a copy elsewhere.';
+  const svc = !ui.local && store.meta.token ? serviceSummary() : null;
   return [
     card(
       v ? infoRow('Version', v) : null,
-      badge ? linkRow('Updates', badge.short, 'updates', { dot: badge.dot, help: badge.text }) : null,
+      badge ? linkRow('Updates', badge.short, 'updates', { dot: badge.dot, help: badge.text })
+        : svc ? linkRow('Updates', svc.short, 'updates', { dot: !!svc.dot, help: 'Your sync service: its version, updating it by itself' }) : null,
     ),
     foot(ui.local ? (ui.local.update?.supported ? 'It updates itself, and your sync service with it (Updates).' : 'This copy runs from a source folder and does not update itself.')
-      : v ? 'It updates by itself with your sync service (the computer that set it up updates it).' : 'This copy updates with the site that serves it.'),
+      : svc ? 'It updates with your sync service, which serves it: by itself, or from the app on your computer (Updates).'
+        : v ? 'It updates with the sync service that serves it.' : 'This copy updates with the site that serves it.'),
     note(`${where} Saqme To Do is free and open source (MIT license).`),
   ];
 }
@@ -2072,9 +2078,10 @@ const AUTO_HELP = 'When the app has not been used for a while, with your sync se
  * "Install updates automatically". The window refreshes it with the rest of ui.local while Settings are open.
  */
 function updatesPage() {
+  if (!ui.local) return serviceUpdateSettings();   // (a paired phone: its app is the sync service's)
   const u = ui.local?.update;
   const version = infoRow('Version', u?.current ?? appVersion() ?? '');
-  if (!u?.supported) return [card(version), foot('This copy runs from a source folder, so it does not update itself: update it with git pull, then run scripts/setup.sh.')];
+  if (!u?.supported) return [card(version), foot('This copy runs from a source folder, so it does not update itself: update it with git pull, then run scripts/setup.sh.'), ...(ui.local.cloud ? serviceUpdateSettings() : [])];
   const out = [];
   const run = u.running;
   if (run) {
@@ -2108,11 +2115,140 @@ function updatesPage() {
     foot([u.result.message, u.result.next].filter(Boolean).join(' '), { alert: true }));
   }
   out.push(card(switchRow('Install updates automatically', !!u.auto, (on) => updateAction('auto', { on }), { help: AUTO_HELP })), foot(AUTO_HELP));
+  if (ui.local.cloud) out.push(...serviceUpdateSettings());
   return out;
 }
 async function updateAction(kind, body = {}) {
   try { ui.local.update = await api(`local/update/${kind}`, body); } catch (e) { toast(e.message); }
   render();
+}
+
+// ---- the sync service updating itself (worker/src/selfupdate.js): on the phone through its own Worker, in the
+// Linux/macOS window through the local server (which calls the Worker with this computer's key)
+const svcApi = (path, body) => api(ui.local ? `local/worker-update${path}` : `update${path}`, body);
+/** Whether the sync service is new enough to update itself (an older one gets it with its next update from a computer). */
+function serviceCanSelfUpdate() {
+  const a = ui.local ? ui.local.cloud?.workerApi : store.meta.serverApi;
+  return !Number.isInteger(a) || a >= SELF_UPDATE_API;
+}
+async function loadServiceUpdate() {
+  if (!(ui.local ? ui.local.cloud : store.meta.token) || !serviceCanSelfUpdate()) return;
+  try { ui.svc = await svcApi(''); ui.svcError = ''; } catch (e) { ui.svcError = e.message; }
+  if (ui.view !== 'list' && !ui.editing && els.sheetWrap.hidden) requestRender();
+  // follow a run until it ends
+  clearTimeout(ui.svcTimer);
+  if (ui.svc?.running && ui.view === 'updates') ui.svcTimer = setTimeout(loadServiceUpdate, 3000);
+}
+const SVC_STEPS = { checking: 'Checking…', downloading: 'Downloading…', uploading: 'Uploading…', switching: 'Switching over…' };
+/** How the sync service's updates stand: the Updates row's value (short) and in words (text). */
+function serviceSummary() {
+  const s = ui.svc;
+  const v = s?.version ?? store.meta.serverVersion ?? '';
+  if (!serviceCanSelfUpdate() || !s) return { short: v, text: v ? `your sync service runs ${v}` : 'your sync service' };
+  if (s.running) return { short: 'Updating…', text: 'your sync service is updating itself' };
+  if (s.last && !s.last.ok) return { short: 'Didn\'t update', text: 'the last update of your sync service did not finish', dot: true };
+  if (!s.token) return { short: v, text: `your sync service runs ${v}; it is updated from your computer` };
+  return { short: s.auto ? 'Automatic' : 'Manual', text: `your sync service runs ${v}${s.auto ? ', and updates itself' : ''}` };
+}
+const SVC_HELP = 'Then it installs new versions of Saqme by itself, from this project\'s releases on GitHub, also when your computer is off. It needs a token from Cloudflare that only you can make (two minutes).';
+/** Updates > Your sync service: its version; giving it a token, or how updating itself stands, Update now, its log. */
+function serviceUpdateSettings() {
+  const out = [head(ui.local ? 'Your sync service' : 'Sync service')];
+  const s = ui.svc;
+  if (!serviceCanSelfUpdate()) {
+    const v = ui.local ? ui.local.cloud?.workerVersion : store.meta.serverVersion;
+    out.push(card(infoRow('Version', v || 'An older one')), foot('It updates with the Saqme app on your computer (Settings > Updates there). From its next update on, it can also update itself.'));
+    return out;
+  }
+  if (!s) {
+    out.push(card(infoRow('Version', store.meta.serverVersion || '')), ui.svcError ? foot(`Could not ask your sync service: ${ui.svcError}`, { alert: true }) : null);
+    return out;
+  }
+  const version = infoRow('Version', s.version);
+  if (!s.knowsItself) {
+    out.push(card(version), foot('It updates with the Saqme app on your computer. Once that has updated it, it can also update itself (it then knows its Cloudflare account).'));
+    return out;
+  }
+  if (!s.token) {
+    out.push(card(version, actionRow('Let it update itself…', () => tokenSheet(s), { help: SVC_HELP, fk: 'svc-token' })), foot(`${ui.local ? 'Now it updates with this app.' : 'Now it updates with the Saqme app on your computer.'} ${SVC_HELP}`));
+    return out;
+  }
+  const newer = s.latest && s.latest !== s.version && !s.running ? s.latest : '';
+  const state = s.running ? SVC_STEPS[s.running] ?? 'Updating…' : newer ? `${newer} available` : s.checkedAt ? 'Up to date' : 'Not checked yet';
+  out.push(card(
+    version,
+    infoRow('Status', state, null, { dot: !!newer, long: true, title: state }),
+    actionRow('Update now', serviceUpdateNow, { help: 'Looks for a new version now and installs it', fk: 'svc-now' }),
+    switchRow('Update by itself', s.auto, async (on) => { try { ui.svc = await svcApi('/auto', { on }); } catch (e) { toast(e.message); } render(); },
+      { help: 'Looks every 6 hours and installs a new version. Off: only with Update now.', fk: 'svc-auto' }),
+  ));
+  const last = s.last && !s.running ? s.last : null;
+  out.push(foot(last && !last.ok ? last.message : [last ? `${last.message} ` : '', s.checkedAt ? `Checked ${ago(s.checkedAt)}; ` : '', s.auto ? 'it looks every 6 hours by itself.' : 'it looks only with Update now.'].join(''), { alert: !!(last && !last.ok) }));
+  // what it did, and the token, under Advanced
+  const open = ui.svcOpen;
+  out.push(card(
+    h('button', { class: 'g-row link', 'aria-expanded': String(!!open), dataset: { fk: 'svc-advanced' }, onclick: () => { ui.svcOpen = !open; render(); } }, rowParts('What it did, the token', { trailing: chevron() })),
+    open ? actionRow('Remove the token', confirmRemoveToken, { danger: true, help: 'It stops updating itself; the app on your computer updates it again' }) : null,
+  ));
+  if (open) {
+    const lines = (s.log ?? []).map((l) => `${new Date(l.at).toLocaleString([], { dateStyle: 'short', timeStyle: 'short' })}  ${l.text}`);
+    out.push(lines.length ? h('pre', { class: 'setup-log', 'aria-label': 'What your sync service did' }, lines.join('\n')) : foot('Nothing yet.'));
+    out.push(foot(`The token is kept by your sync service on Cloudflare (as the secret UPDATE_TOKEN of ${s.worker || 'your Worker'}), never on this ${ui.local ? 'computer' : 'device'}. It can change the Workers of your Cloudflare account and nothing else; deleting it at dash.cloudflare.com (My Profile, API Tokens) stops it too.`));
+  }
+  return out;
+}
+async function serviceUpdateNow() {
+  try {
+    ui.svc = await svcApi('/now', {});
+    announce('Your sync service is looking for a new version.');
+  } catch (e) { toast(e.message); }
+  render();
+  clearTimeout(ui.svcTimer);
+  ui.svcTimer = setTimeout(loadServiceUpdate, 3000);
+}
+function confirmRemoveToken() {
+  sheet('Remove the token?', [
+    h('p', {}, 'Your sync service then stops updating itself; the Saqme app on your computer updates it again, as before. You can give it a token again any time.'),
+    h('div', { class: 'btn-row' }, h('button', { class: 'btn', onclick: closeSheet }, 'Cancel'),
+      h('button', { class: 'btn primary', onclick: async () => {
+        closeSheet();
+        try { ui.svc = await svcApi('/token', { token: '' }); toast('The token is removed.'); } catch (e) { toast(e.message); }
+        render();
+      } }, 'Remove')),
+  ]);
+}
+/** Making the token on Cloudflare's page (prefilled) and pasting it here; the sync service checks it before it keeps it. */
+function tokenSheet(s) {
+  const input = h('input', {
+    class: 'field', type: 'password', placeholder: 'Paste the token', 'aria-label': 'Cloudflare API token', autocomplete: 'off', autocapitalize: 'off', spellcheck: false, enterKeyHint: 'done',
+  });
+  const msg = h('p', { class: 'g-foot alert', role: 'status' });
+  const save = async () => {
+    const token = input.value.trim();
+    if (!token) { input.focus(); return; }
+    btn.disabled = true;
+    msg.textContent = 'Checking it with Cloudflare…';
+    try {
+      ui.svc = await svcApi('/token', { token });
+      closeSheet();
+      toast('Your sync service updates itself from now on.');
+      render();
+    } catch (e) { msg.textContent = e.message; btn.disabled = false; }
+  };
+  input.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); save(); } });
+  const btn = h('button', { class: 'btn primary', onclick: save }, 'Save');
+  const paste = navigator.clipboard?.readText ? h('button', { class: 'btn', onclick: async () => { try { input.value = (await navigator.clipboard.readText()).trim(); } catch { toast('Paste it into the box instead.'); } } }, 'Paste') : null;
+  sheet('Let your sync service update itself', [
+    h('p', {}, 'It then installs new versions of Saqme by itself, from this project\'s releases on GitHub, also when your computer is off. For that, Cloudflare needs a token from you that may change the Workers of your account, and nothing else.'),
+    h('ol', { class: 'steps' },
+      h('li', {}, 'Open Cloudflare\'s token page and sign in. It is filled in already: Workers Scripts, Edit, on your account only. ', h('a', { href: s.tokenUrl, target: '_blank', rel: 'noopener noreferrer' }, 'Open Cloudflare')),
+      h('li', {}, 'Tap Continue to summary, then Create Token, and copy the token it shows.'),
+      h('li', {}, 'Paste it here:')),
+    h('div', { class: 'field-row' }, input, paste),
+    msg,
+    h('p', { class: 'sheet-note' }, 'No permission shown on that page? Choose Create Custom Token; Permissions: Account, Workers Scripts, Edit; Account Resources: Include, your account.'),
+    h('div', { class: 'btn-row' }, h('button', { class: 'btn', onclick: closeSheet }, 'Cancel'), btn),
+  ]);
 }
 
 /** The pairing link and a fresh one-time code: from the local app (Linux/macOS window) or this device's own key. */

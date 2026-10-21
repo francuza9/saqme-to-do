@@ -18,6 +18,8 @@
 //   POST /api/local/update/check  look now;  POST /api/local/update/now  install the newest one now
 //   POST /api/local/update/auto   { on }: "Install updates automatically"
 //   POST /api/local/update/login  sign in to Cloudflare (to finish updating the Worker); /update/worker tries that again
+//   GET  /api/local/worker-update, POST .../token | auto | now: the sync service updating itself, passed on to the
+//                                  Worker's own /api/update routes with this computer's key (worker/src/selfupdate.js)
 // Shared lists (local/shares.mjs, docs/sync.md "Shared lists"):
 //   POST /api/local/join          { link }: join a list from its invite link -> { id, name }
 //   POST /api/local/leave         { id }: leave one (its file goes to lists/.trash)
@@ -160,6 +162,20 @@ export function startServer(opts) {
       }[route];
       if (run) {
         try { return json(res, 200, await run()); } catch (e) { return json(res, 500, { error: e.message }); }
+      }
+    }
+    if (opts.workerUpdate && (route === 'GET /api/local/worker-update' || route.startsWith('POST /api/local/worker-update/'))) {
+      let b = {};
+      try { b = body?.length ? JSON.parse(body.toString('utf8')) : {}; } catch { /* bad JSON: empty */ }
+      const w = opts.workerUpdate;
+      const run = {
+        'GET /api/local/worker-update': () => w.status(),
+        'POST /api/local/worker-update/token': () => w.token(String(b.token ?? '')),
+        'POST /api/local/worker-update/auto': () => w.auto(b.on !== false),
+        'POST /api/local/worker-update/now': () => w.now(),
+      }[route];
+      if (run) {
+        try { return json(res, 200, await run()); } catch (e) { return json(res, e.status ?? 500, { error: e.message }); }
       }
     }
     if (opts.sharing && (route.startsWith('POST /api/local/') || route === 'GET /api/local/shares')) {

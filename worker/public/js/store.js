@@ -22,6 +22,7 @@ const DB_NAME = 'saqme';
 // a server API (worker/src/version.js) features need, and what the app says on an older one
 export const SHARING_API = 2;
 export const OLDER_SERVER = 'Your sync service runs an older version than this app, without shared lists yet. It is updated together with the app on your computer (Settings > Updates there); then try again.';
+export const SELF_UPDATE_API = 4;   // the sync service updating itself (Settings > Updates)
 const MAX_BATCH = 100;
 const MAX_BATCH_BYTES = 400_000;
 const POLL_MS = 10_000;
