@@ -6,8 +6,8 @@
 // The README shows the -dark files with plain <img> tags (they read well on light pages too). Not <picture>
 // with light/dark <source>s: the GitHub mobile app shows those as broken images (worker/test/node/repository.test.js
 // fails on them); try a variant in that app before using it.
-// Needs a local `npm run dev` server (a fresh database) and the desktop render first, 480 px wide so that the
-// sample's three tabs all show (the hero takes the window's size from the PNG):
+// Needs a local `npm run dev` server (a fresh database) and the desktop render first, 480 px wide (the window,
+// with the list's name as its switcher title; the hero takes the window's size from the PNG):
 //   powershell -File scripts\dev\render-widget.ps1 -Out <shots> -Width 480     (writes <shots>\desktop-dark.png)
 //   cd <folder with playwright> && node <repo>/scripts/dev/readme-images.mjs --shots <shots>
 import { readFileSync, mkdirSync } from 'node:fs';
