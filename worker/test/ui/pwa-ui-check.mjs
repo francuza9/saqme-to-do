@@ -237,7 +237,8 @@ check(order.join('|') === 'Last one|Write the report', `drag moved the task abov
   check(/^Share…needs sync\|Rename\|Move up\|Delete list$/.test(opts), `a long press on a list in the menu: share, rename, move, delete (${opts})`);
   await page.tap('#sheet .menu-item:has-text("Move up")');
   await page.waitForSelector('#listMenu [role="menuitemradio"]');
-  const moved = await page.$$eval('#listMenu [role="menuitemradio"] .g-label', (e) => e.map((x) => x.textContent));
+  await page.waitForTimeout(400);   // (the menu grows into place; a long press needs it still)
+  const moved =await page.$$eval('#listMenu [role="menuitemradio"] .g-label', (e) => e.map((x) => x.textContent));
   check(moved.join() === 'Errands,General' && (await page.evaluate(() => document.activeElement?.dataset.fk ?? '')).startsWith('list:'), `Move up: the menu opens again in the new order (${moved.join()})`);
   await longPress('#listMenu [role="menuitemradio"]:has-text("Errands")');
   await page.tap('#sheet .menu-item:has-text("Move down")');
@@ -417,8 +418,13 @@ await page.tap('.view-header .back');
 
 // Settings: a short list of pages, each with how it stands; the version under every view
 const pages = await page.$$eval('#list .group .g-row.link .g-label', (els) => els.map((e) => e.textContent));
-check(pages.join() === 'General,Notifications,Sync & sharing,Your lists,About', `Settings: the pages, in two cards (${pages.join()})`);
+// (a paired phone has Updates too: its sync service's version, and its updating itself)
+check(pages.join() === 'General,Notifications,Sync & sharing,Your lists,Updates,About', `Settings: the pages, in two cards (${pages.join()})`);
 check(/Saqme To Do \d+\.\d+\.\d+/.test(await page.textContent('#list .version-line')), `the version under Settings (${await page.textContent('#list .version-line')})`);
+await page.tap('[data-fk="open:updates"]');
+await page.waitForSelector('.view-header h1:has-text("Updates")');
+check(await page.isVisible('#list .g-head:has-text("Sync service")') && await page.isVisible('#list .g-row:has-text("Version")'), 'Settings > Updates on a paired phone: the sync service and its version');
+await page.tap('.view-header .back');
 
 // trash view (Settings > Your lists > Recently deleted), and back one level at a time
 await page.tap('[data-fk="open:lists"]');
