@@ -1740,7 +1740,8 @@ function Get-TextWithNewIds([string]$text) {
 #           ApplyPlan = { param($plan) -> $true when the whole plan was applied };  Log = { param($msg) }
 #           Clock = { -> ms } (tests); Transport = { param($body) -> @{ Status; Data } } (tests; else HTTP to Url)
 #           View (Read-LocalLists); Scope = @{ Project; File; ReadOnly } (a shared list's engine); Expected }
-# Returns @{ Status = 'synced'|'offline'|'error'|'auth'; Message; Conflicts; Guarded; Retry; Access }
+# Returns @{ Status = 'synced'|'offline'|'error'|'auth'; Message; Conflicts; Guarded; Retry; Access;
+#            Api, WorkerVersion (the own Worker's, once it answered: worker/src/version.js) }
 function Invoke-SyncCycle($ctx) {
   $st = $ctx.State
   $clock = $(if ($ctx.Clock) { [long](& $ctx.Clock) } else { [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds() })
@@ -1783,6 +1784,11 @@ function Invoke-SyncCycle($ctx) {
     }
     if ($r.Status -ne 200 -or -not $r.Data) { $res.Status = 'error'; $res.Message = "Server error $($r.Status)"; return $res }
     $d = $r.Data
+    if (-not $scope) {
+      # what the own Worker runs (one before 1.1.0 does not say: API 1); a shared list's server is someone else's
+      $res.Api = $(if ($d['api'] -is [int] -or $d['api'] -is [long]) { [long]$d['api'] } else { [long]1 })
+      $res.WorkerVersion = [string]$d['version']
+    }
     if ($scope -and $d['share'] -and @('edit', 'view') -contains [string]$d['share']['access']) { $res.Access = [string]$d['share']['access'] }
     if (-not $scope -and $null -ne $d['shared']) { $st.Shared = @(@($d['shared']) | ForEach-Object { [string]$_ }) }   # this PC's lists others have
     $recvAt = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()

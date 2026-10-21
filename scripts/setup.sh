@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Saqme To Do - setup for Linux and macOS (on Windows use setup.cmd). Safe to run again: it updates the
-# app and keeps your lists, settings and keys.
+# app and keeps your lists, settings and keys. Once installed, the app updates itself (Settings > Updates).
 #
 #   setup.sh                  install or update the app. No account needed: your lists stay on this computer.
 #   setup.sh --cloud          also sync through your own free Cloudflare account (adds or updates it)
@@ -71,8 +71,27 @@ fetch() {
   done
   return 1
 }
+# a small file that may not be there: 0 = downloaded, 1 = not there (404), 2 = no answer
+fetch_maybe() {
+  local code rc=0 https=()
+  rm -f "$2"
+  if has curl; then
+    case "$1" in https://*) https=(--proto '=https' --tlsv1.2) ;; esac
+    code="$(curl -sSL "${https[@]+"${https[@]}"}" --retry 2 -o "$2" -w '%{http_code}' "$1" 2>/dev/null)" || rc=$?
+    case "$1" in file://*) [ "$rc" = 0 ] && return 0; [ "$rc" = 37 ] && return 1; return 2 ;; esac
+    [ "$rc" = 0 ] && [ "$code" = 200 ] && return 0
+    [ "$code" = 404 ] && return 1
+    return 2
+  fi
+  wget -q -O "$2" "$1" || rc=$?
+  [ "$rc" = 0 ] && return 0
+  [ "$rc" = 8 ] && return 1   # (the server said no: there is no such file)
+  return 2
+}
 src_tmp=""; node_tmp=""
 trap 'rm -rf "$src_tmp" "$node_tmp"' EXIT
+# an app this setup stopped always comes back, also when setup stops halfway (restore_app, below)
+was_running=0; restarted=0
 
 # ---------------------------------------------------------------- platform and paths
 os="$(uname -s)"
@@ -90,6 +109,10 @@ if [ "$wsl" = 1 ] && [ "$mode" = app ] && [ "$force_app" = 0 ]; then
   info "To install the Linux app inside WSL as well, run with --app."
 fi
 
+# The install (local/update.mjs keeps it; one folder per version, so an update never runs half old, half new):
+#   $APP_DIR/versions/<X.Y.Z>/   the app (local/, worker/, scripts/)      $APP_DIR/current, previous   which one runs
+#   $APP_DIR/cloud/              where the Worker is deployed from        $APP_DIR/node/   Node.js, if downloaded
+#   $APP_DIR/update/             what the updater downloads and says      $APP_DIR/icon-512.png   for menus
 if [ "$platform" = mac ]; then
   DEFAULT_DATA="$HOME/Library/Application Support/Saqme To Do"
   APP_DIR="$HOME/Library/Application Support/Saqme To Do/app"
@@ -125,12 +148,26 @@ AGENT_ID="com.saqme.todo"
 AGENT_FILE="$HOME/Library/LaunchAgents/$AGENT_ID.plist"
 
 # ---------------------------------------------------------------- running app
+app_running() { [ -x "$BIN" ] && "$BIN" status 2>/dev/null | grep -q '^Running'; }
 stop_app() {
+  if app_running; then was_running=1; fi
   if [ -x "$BIN" ]; then "$BIN" stop >/dev/null 2>&1 || true; fi
   if [ "$platform" = mac ]; then launchctl bootout "gui/$(id -u)/$AGENT_ID" >/dev/null 2>&1 || true
   elif has systemctl; then systemctl --user stop saqme-todo.service >/dev/null 2>&1 || true; fi
   sleep 0.5
 }
+# (on exit) the app this setup stopped and did not start again: started, the way it ran
+restore_app() {
+  [ "$was_running" = 1 ] && [ "$restarted" = 0 ] && [ "$mode" != uninstall ] && [ -x "$BIN" ] || return 0
+  app_running && return 0
+  if [ "$platform" = mac ] && [ -f "$AGENT_FILE" ]; then launchctl bootstrap "gui/$(id -u)" "$AGENT_FILE" >/dev/null 2>&1 || true
+  elif [ -f "$UNIT_FILE" ] && has systemctl; then systemctl --user start saqme-todo.service >/dev/null 2>&1 || true
+  else nohup "$BIN" serve >/dev/null 2>&1 & fi
+  printf '       (the app was started again)\n'
+}
+# started at the end: unless --no-start, and always when it ran before
+want_start() { [ "$start" = 1 ] || [ "$was_running" = 1 ]; }
+trap 'restore_app; rm -rf "$src_tmp" "$node_tmp"' EXIT
 
 # ---------------------------------------------------------------- uninstall
 # Deletes what Saqme created in the data folder and nothing else: --data may point at a folder with other
@@ -173,34 +210,7 @@ if [ "$mode" = uninstall ]; then
   exit 0
 fi
 
-# ---------------------------------------------------------------- source files
-step "Getting Saqme To Do"
-# the repository this script is part of, when it runs from a file (a clone or an extracted zip); piped from
-# the web (curl ... | bash) there is no such file, and the current folder must not be mistaken for one
-here=""
-if [ -n "${BASH_SOURCE[0]:-}" ] && [ -f "${BASH_SOURCE[0]}" ]; then here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"; fi
-if [ -n "$here" ] && [ -f "$here/../local/saqme.mjs" ]; then
-  SRC="$(cd "$here/.." && pwd)"
-  ok "using the files in $SRC"
-else
-  # run from the web: download the repository (keeping worker/node_modules from an earlier run)
-  SRC="$CONFIG_DIR/source"
-  url="${SAQME_SOURCE_URL:-https://codeload.github.com/$REPO/tar.gz/refs/heads/$BRANCH}"   # override: tests, forks
-  src_tmp="$(mktemp -d)"
-  info "downloading $url"
-  has curl || has wget || die "neither curl nor wget is installed." "Install curl (e.g. sudo apt install curl) and run this again."
-  fetch "$url" "$src_tmp/src.tar.gz" || die "could not download Saqme To Do." "Check the internet connection, or clone the repository and run scripts/setup.sh from it."
-  mkdir -p "$src_tmp/x" && tar -xzf "$src_tmp/src.tar.gz" -C "$src_tmp/x"
-  inner="$(find "$src_tmp/x" -mindepth 1 -maxdepth 1 -type d | head -n 1)"
-  { [ -n "$inner" ] && [ -f "$inner/local/saqme.mjs" ] && [ -f "$inner/scripts/setup.sh" ]; } || die "the download is not a Saqme To Do source archive." "Run setup again; if it keeps failing, download the repository zip and run scripts/setup.sh from it."
-  mkdir -p "$SRC"
-  find "$SRC" -mindepth 1 -maxdepth 1 ! -name worker -exec rm -rf {} +
-  if [ -d "$SRC/worker" ]; then find "$SRC/worker" -mindepth 1 -maxdepth 1 ! -name node_modules -exec rm -rf {} +; fi
-  cp -R "$inner/." "$SRC/"
-  ok "downloaded to $SRC"
-fi
-
-# ---------------------------------------------------------------- Node.js
+# ---------------------------------------------------------------- Node.js (first: it also checks and unpacks the download)
 version_ge() { [ "$(printf '%s\n%s\n' "$2" "$1" | sort -t. -k1,1n -k2,2n -k3,3n | head -n 1)" = "$2" ]; }
 NODE=""
 find_node() {
@@ -236,6 +246,7 @@ download_node() {
       die "this system's C library (glibc $glibc) is older than Node.js needs (2.28)." "Install Node.js $NODE_MIN or newer another way (your distribution, nvm, or an unofficial glibc-2.17 build) and run setup again."
     fi
   fi
+  has curl || has wget || die "neither curl nor wget is installed." "Install curl (e.g. sudo apt install curl) and run this again."
   node_tmp="$(mktemp -d)"
   info "downloading Node.js $NODE_MAJOR for $os_name-$arch (about 50 MB, used only by Saqme)..."
   fetch "https://nodejs.org/dist/latest-v$NODE_MAJOR.x/SHASUMS256.txt" "$node_tmp/SHASUMS256.txt" || die "could not reach nodejs.org." "Check the internet connection, or install Node.js $NODE_MIN+ yourself."
@@ -261,6 +272,90 @@ download_node() {
 step "Checking tools"
 if find_node; then ok "Node.js $("$NODE" -p 'process.versions.node') ($NODE)"; else download_node; fi
 NODE_BIN_DIR="$(dirname "$NODE")"
+
+# ---------------------------------------------------------------- source files
+# A release's manifest (saqme-release.json, scripts/build-release.mjs) -> its version, or nothing when it is not one
+release_version() {
+  "$NODE" -e '
+const m = JSON.parse(require("fs").readFileSync(process.argv[1], "utf8")), v = String(m.version || ""), a = m.asset || {};
+if (m.schema !== 1 || !/^\d+\.\d+\.\d+$/.test(v) || m.tag !== "v" + v || a.name !== "saqme-" + v + ".zip" || !/^[0-9a-fA-F]{64}$/.test(a.sha256 || "") || !(a.size > 0)) process.exit(1);
+console.log(v);' "$1" 2>/dev/null
+}
+# Checks a release's zip against its manifest (size and SHA-256), then unpacks it: manifest zip folder.
+# Exit 3: it does not match; 4: not a zip this can unpack.
+unpack_release() {
+  "$NODE" -e '
+const fs = require("fs"), path = require("path"), zlib = require("zlib"), crypto = require("crypto");
+const [mf, zip, dest] = process.argv.slice(1);
+const m = JSON.parse(fs.readFileSync(mf, "utf8")), b = fs.readFileSync(zip);
+if (b.length !== m.asset.size || crypto.createHash("sha256").update(b).digest("hex") !== m.asset.sha256.toLowerCase()) process.exit(3);
+let e = b.length - 22;
+while (e >= 0 && b.readUInt32LE(e) !== 0x06054b50) e--;
+if (e < 0) process.exit(4);
+let p = b.readUInt32LE(e + 16);
+for (let i = b.readUInt16LE(e + 10); i > 0; i--) {
+  const method = b.readUInt16LE(p + 10), size = b.readUInt32LE(p + 20), off = b.readUInt32LE(p + 42), n = b.readUInt16LE(p + 28);
+  const name = b.toString("utf8", p + 46, p + 46 + n);
+  p += 46 + n + b.readUInt16LE(p + 30) + b.readUInt16LE(p + 32);
+  if (path.isAbsolute(name) || name.split(/[\\/]/).includes("..") || (method !== 0 && method !== 8)) process.exit(4);
+  const out = path.join(dest, name);
+  if (name.endsWith("/")) { fs.mkdirSync(out, { recursive: true }); continue; }
+  const at = off + 30 + b.readUInt16LE(off + 26) + b.readUInt16LE(off + 28), raw = b.subarray(at, at + size);
+  fs.mkdirSync(path.dirname(out), { recursive: true });
+  fs.writeFileSync(out, method === 8 ? zlib.inflateRawSync(raw) : raw);
+}' "$1" "$2" "$3"
+}
+
+step "Getting Saqme To Do"
+# the repository this script is part of, when it runs from a file (a clone or an extracted release); piped from
+# the web (curl ... | bash) there is no such file, and the current folder must not be mistaken for one
+here=""
+if [ -n "${BASH_SOURCE[0]:-}" ] && [ -f "${BASH_SOURCE[0]}" ]; then here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"; fi
+if [ -n "$here" ] && [ -f "$here/../local/saqme.mjs" ]; then
+  SRC="$(cd "$here/.." && pwd)"
+  ok "using the files in $SRC"
+else
+  # run from the web: the newest release, checked against its manifest; the main branch only while there is none
+  # (SAQME_SOURCE_URL: a source archive instead, for tests and forks; SAQME_RELEASES: where releases are, tests)
+  has curl || has wget || die "neither curl nor wget is installed." "Install curl (e.g. sudo apt install curl) and run this again."
+  src_tmp="$(mktemp -d)"
+  releases="${SAQME_RELEASES:-https://github.com/$REPO/releases}"
+  got=1
+  if [ -z "${SAQME_SOURCE_URL:-}" ]; then fetch_maybe "$releases/latest/download/saqme-release.json" "$src_tmp/saqme-release.json" && got=0 || got=$?; fi
+  case "$got" in
+    0)
+      v="$(release_version "$src_tmp/saqme-release.json")" || die "the release on GitHub has no valid manifest." "Try again later, or clone the repository and run scripts/setup.sh from it."
+      info "downloading Saqme To Do $v"
+      fetch "$releases/download/v$v/saqme-$v.zip" "$src_tmp/saqme-$v.zip" || die "could not download Saqme To Do $v." "Check the internet connection and run setup again."
+      rc=0; unpack_release "$src_tmp/saqme-release.json" "$src_tmp/saqme-$v.zip" "$src_tmp/x" || rc=$?
+      [ "$rc" = 3 ] && die "the download does not match the checksum of the release." "Run setup again; if it keeps happening, please open an issue on GitHub."
+      [ "$rc" = 0 ] || die "the download could not be unpacked." "Run setup again; if it keeps happening, please open an issue on GitHub."
+      inner="$src_tmp/x/saqme-$v"
+      ;;
+    1)
+      url="${SAQME_SOURCE_URL:-https://codeload.github.com/$REPO/tar.gz/refs/heads/$BRANCH}"
+      info "downloading $url$([ -z "${SAQME_SOURCE_URL:-}" ] && echo ' (no release published yet)')"
+      fetch "$url" "$src_tmp/src.tar.gz" || die "could not download Saqme To Do." "Check the internet connection, or clone the repository and run scripts/setup.sh from it."
+      mkdir -p "$src_tmp/x" && tar -xzf "$src_tmp/src.tar.gz" -C "$src_tmp/x"
+      inner="$(find "$src_tmp/x" -mindepth 1 -maxdepth 1 -type d | head -n 1)"
+      ;;
+    *) die "could not reach GitHub." "Check the internet connection, or clone the repository and run scripts/setup.sh from it." ;;
+  esac
+  { [ -n "$inner" ] && [ -f "$inner/local/saqme.mjs" ] && [ -f "$inner/scripts/setup.sh" ]; } || die "the download is not Saqme To Do." "Run setup again; if it keeps failing, clone the repository and run scripts/setup.sh from it."
+  SRC="$inner"
+  ok "downloaded"
+fi
+
+# wrangler of an install before 1.1.0 (in the app folder, or in the source setup downloaded): moved to the Worker's
+# deploy folder instead of downloaded again
+adopt_wrangler() {
+  local ws="$APP_DIR/cloud/worker" old
+  [ -d "$ws/node_modules" ] && return 0
+  for old in "$APP_DIR/worker/node_modules" "$CONFIG_DIR/source/worker/node_modules"; do
+    if [ -d "$old" ]; then mkdir -p "$ws" && mv "$old" "$ws/node_modules" && return 0; fi
+  done
+  return 0
+}
 
 # ---------------------------------------------------------------- the app
 # saqme://join links (the invite page of a list someone shares) open the app on macOS, which asks before joining.
@@ -298,31 +393,46 @@ EOF
 
 install_app() {
   step "Installing the app"
-  stop_app
-  mkdir -p "$APP_DIR" "$APP_DIR/worker" "$BIN_DIR" "$DATA_DIR/lists"
+  mkdir -p "$APP_DIR" "$BIN_DIR" "$DATA_DIR/lists"
   # marks the folder as Saqme's: --purge-data deletes only what Saqme created, and only where this is
   [ -f "$DATA_DIR/.saqme-data" ] || printf 'Saqme To Do keeps its lists here (lists/, local/, sync/).\n' > "$DATA_DIR/.saqme-data"
-  rm -rf "$APP_DIR/local" "$APP_DIR/scripts" "$APP_DIR/worker/src" "$APP_DIR/worker/public" "$APP_DIR/worker/migrations"
-  cp -R "$SRC/local" "$APP_DIR/local"
-  for d in src public migrations; do cp -R "$SRC/worker/$d" "$APP_DIR/worker/$d"; done
-  cp "$SRC/worker/package.json" "$APP_DIR/worker/package.json"   # "type": "module" for worker/src
-  # what Settings > Sync > Set up sync runs (the same cloud setup as --cloud; it installs its tools on first use)
-  mkdir -p "$APP_DIR/scripts" && cp "$SRC/scripts/cloud-setup.mjs" "$APP_DIR/scripts/cloud-setup.mjs"
-  cp "$SRC/worker/package-lock.json" "$SRC/worker/wrangler.toml.template" "$APP_DIR/worker/"
-  cp "$SRC/LICENSE" "$APP_DIR/LICENSE" 2>/dev/null || true
-  ok "app files in $APP_DIR"
+  # the version folder, next to the one that runs (which keeps running); $v is worker/package.json's version
+  local v vdir t
+  v="$("$NODE" "$SRC/local/update.mjs" stage --source "$SRC" --root "$APP_DIR")" || die "the app files could not be copied to $APP_DIR/versions." "Check that the disk is not full, then run setup again."
+  vdir="$APP_DIR/versions/$v"
+  # sanity check before anything points at it: a copy of the app starts on a scratch folder and syncs a list
+  t="$("$NODE" --disable-warning=ExperimentalWarning "$vdir/local/saqme.mjs" selftest 2>&1 || true)"
+  if ! printf '%s' "$t" | grep -q 'SELFTEST OK'; then
+    [ "$(cat "$APP_DIR/current" 2>/dev/null || true)" = "$v" ] || rm -rf "$vdir"
+    printf '%s\n' "$t" | tail -n 20
+    die "version $v failed its self-check, so it was not installed." "Please open an issue on GitHub with the output above."
+  fi
+  ok "version $v in $vdir (self-check passed)"
 
+  stop_app
+  "$NODE" "$SRC/local/update.mjs" switch --root "$APP_DIR" --version "$v" >/dev/null || die "could not switch to version $v." "Run setup again."
   local data_env=""
   if [ -n "$data" ]; then data_env="export SAQME_DATA=\"$DATA_DIR\""; fi
   cat > "$BIN" <<EOF
 #!/bin/sh
-# Saqme To Do launcher (written by setup.sh): saqme open | serve | status | stop | allow-deletes | pair-phone
+# Saqme To Do launcher (written by setup.sh): saqme open | serve | status | stop | update | version | pair-phone
+# Runs the version $APP_DIR/current names (the updater switches it; previous is the one before it).
 $data_env
-exec "$NODE" --disable-warning=ExperimentalWarning "$APP_DIR/local/saqme.mjs" "\$@"
+export SAQME_LAUNCHER="$BIN"
+root="$APP_DIR"
+v="\$(cat "\$root/current" 2>/dev/null)"
+[ -n "\$v" ] && [ -f "\$root/versions/\$v/local/saqme.mjs" ] || v="\$(cat "\$root/previous" 2>/dev/null)"
+exec "$NODE" --disable-warning=ExperimentalWarning "\$root/versions/\$v/local/saqme.mjs" "\$@"
 EOF
   chmod 755 "$BIN"
   ok "command: $BIN"
   case ":$PATH:" in *":$BIN_DIR:"*) ;; *) info "($BIN_DIR is not on your PATH: run it as $BIN, or add that folder to PATH)" ;; esac
+  # an install before 1.1.0 kept the app in $APP_DIR itself (and setup's download in $CONFIG_DIR/source)
+  adopt_wrangler
+  rm -rf "$APP_DIR/local" "$APP_DIR/scripts" "$APP_DIR/worker" "$APP_DIR/LICENSE"
+  case "$SRC/" in "$CONFIG_DIR/source/"*) ;; *) rm -rf "$CONFIG_DIR/source" ;; esac
+  # what menus and the Dock show: stays where it is when the version changes
+  cp "$vdir/worker/public/icons/icon-512.png" "$APP_DIR/icon-512.png"
 
   if [ -n "$port" ]; then
     mkdir -p "$DATA_DIR/local"
@@ -342,13 +452,12 @@ EOF
   <key>CFBundleExecutable</key><string>saqme-todo</string>
   <key>CFBundleIconFile</key><string>AppIcon</string>
   <key>CFBundlePackageType</key><string>APPL</string>
-  <key>CFBundleShortVersionString</key><string>$("$BIN" version 2>/dev/null || echo 1.0.0)</string>
   <key>LSUIElement</key><true/>
 </dict></plist>
 EOF
     printf '#!/bin/sh\nexec "%s" open\n' "$BIN" > "$MAC_APP/Contents/MacOS/saqme-todo"
     chmod 755 "$MAC_APP/Contents/MacOS/saqme-todo"
-    "$NODE" "$APP_DIR/local/icns.mjs" "$APP_DIR/worker/public/icons/icon-512.png" "$MAC_APP/Contents/Resources/AppIcon.icns"
+    "$NODE" "$vdir/local/icns.mjs" "$APP_DIR/icon-512.png" "$MAC_APP/Contents/Resources/AppIcon.icns"
     ok "app: $MAC_APP (Launchpad, Spotlight)"
     install_mac_invite_handler
   else
@@ -359,7 +468,7 @@ Type=Application
 Name=Saqme To Do
 Comment=To-do lists in plain markdown
 Exec="$BIN" open
-Icon=$APP_DIR/worker/public/icons/icon-512.png
+Icon=$APP_DIR/icon-512.png
 Terminal=false
 Categories=Office;ProjectManagement;
 StartupNotify=false
@@ -370,7 +479,7 @@ EOF
 Type=Application
 Name=Saqme To Do (invite links)
 Exec="$BIN" invite %u
-Icon=$APP_DIR/worker/public/icons/icon-512.png
+Icon=$APP_DIR/icon-512.png
 Terminal=false
 NoDisplay=true
 MimeType=x-scheme-handler/saqme;
@@ -399,7 +508,7 @@ setup_autostart() {
   <key>StandardErrorPath</key><string>$DATA_DIR/local/launchd.log</string>
 </dict></plist>
 EOF
-    if [ "$start" = 1 ]; then launchctl bootstrap "gui/$(id -u)" "$AGENT_FILE" >/dev/null 2>&1 || launchctl load -w "$AGENT_FILE" >/dev/null 2>&1 || true; fi
+    if want_start; then launchctl bootstrap "gui/$(id -u)" "$AGENT_FILE" >/dev/null 2>&1 || launchctl load -w "$AGENT_FILE" >/dev/null 2>&1 || true; restarted=1; fi
     ok "starts at login (LaunchAgent $AGENT_ID)"
     return
   fi
@@ -424,7 +533,7 @@ WantedBy=default.target
 EOF
     systemctl --user daemon-reload
     systemctl --user enable saqme-todo.service >/dev/null 2>&1
-    if [ "$start" = 1 ]; then systemctl --user restart saqme-todo.service; fi
+    if want_start; then systemctl --user restart saqme-todo.service; restarted=1; fi
     ok "starts at login (systemd user service saqme-todo)"
   else
     mkdir -p "$(dirname "$AUTOSTART_FILE")"
@@ -442,14 +551,15 @@ EOF
 }
 
 start_app() {
-  [ "$start" = 1 ] || return 0
-  if ! "$BIN" status 2>/dev/null | grep -q '^Running'; then
+  want_start || return 0
+  if ! app_running; then
     nohup "$BIN" serve >/dev/null 2>&1 &
-    for _ in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20; do "$BIN" status 2>/dev/null | grep -q '^Running' && break; sleep 0.5; done
+    for _ in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20; do app_running && break; sleep 0.5; done
   fi
-  "$BIN" status 2>/dev/null | grep -q '^Running' || die "the app did not start." "See $DATA_DIR/local/saqme.log, then run setup again."
+  restarted=1
+  app_running || die "the app did not start." "See $DATA_DIR/local/saqme.log, then run setup again."
   ok "running"
-  if [ "$platform" = mac ] || [ -n "${DISPLAY:-}${WAYLAND_DISPLAY:-}" ]; then
+  if [ "$start" = 1 ] && { [ "$platform" = mac ] || [ -n "${DISPLAY:-}${WAYLAND_DISPLAY:-}" ]; }; then
     "$BIN" open >/dev/null 2>&1 && ok "window opened" || true
   fi
 }
@@ -477,8 +587,11 @@ if [ "$cloud" = 1 ]; then
   extra=()
   [ -n "$desktop" ] && extra+=(--desktop-config "$desktop")
   [ "$mode" = app ] && extra+=(--pair-again "$BIN pair-phone")
+  # deployed from $APP_DIR/cloud (the app's updater deploys from there too; wrangler stays between runs)
+  adopt_wrangler
+  ws="$("$NODE" "$SRC/local/update.mjs" workspace --source "$SRC" --root "$APP_DIR")" || die "could not prepare $APP_DIR/cloud." "Check that the disk is not full, then run setup again."
   # the cloud tools (wrangler) come through npm, from the same Node.js
-  PATH="$NODE_BIN_DIR:$PATH" "$NODE" "$SRC/scripts/cloud-setup.mjs" --state "$CONFIG_DIR/cloud.json" \
+  PATH="$NODE_BIN_DIR:$PATH" "$NODE" "$ws/scripts/cloud-setup.mjs" --state "$CONFIG_DIR/cloud.json" \
     ${extra[@]+"${extra[@]}"} ${cloud_args[@]+"${cloud_args[@]}"} || exit 1
 fi
 
@@ -488,8 +601,9 @@ if [ "$mode" = app ]; then
   printf '\n%sSaqme To Do is ready.%s\n' "$B" "$N"
   info "Open it from your applications menu$([ "$platform" = mac ] && echo ' or Spotlight'), or run: $BIN open"
   info "Your lists are plain markdown files in: $DATA_DIR/lists"
+  info "It updates itself (Settings > Updates); you never need to run this again for that."
   if [ "$cloud" = 0 ]; then
-    if [ -f "$DATA_DIR/sync/config.json" ]; then info "Cloud sync stays on (set up earlier)."
+    if [ -f "$DATA_DIR/sync/config.json" ]; then info "Cloud sync stays on (set up earlier); the app keeps it updated."
     else info "Want them on your phone too? In the app: Settings > Sync > Set up sync (free Cloudflare account)."; fi
   fi
 fi

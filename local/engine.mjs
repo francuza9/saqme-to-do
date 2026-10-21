@@ -976,7 +976,8 @@ export function withNewIds(text) {
  * ctx = { state, statePath, listsDir, transport(body) -> { status, data }, deviceId, notifyAt, allowMassDelete,
  *         settleMs, applyPlan(plan) -> true when the whole plan was applied, clock() -> ms (tests),
  *         view (readLocalLists), scope = { project, file, readOnly } (a shared list's engine), expected (Set) }
- * Returns { status: 'synced'|'offline'|'error'|'auth', message, guarded, retry, sent, received, refused, access }.
+ * Returns { status: 'synced'|'offline'|'error'|'auth', message, guarded, retry, sent, received, refused, access,
+ * api, workerVersion } (the last two: of one's own server, not a shared list's).
  */
 export async function syncCycle(ctx) {
   const st = ctx.state;
@@ -1016,6 +1017,8 @@ export async function syncCycle(ctx) {
     }
     if (r.status !== 200 || !r.data) { res.status = 'error'; res.message = `Server error ${r.status}`; return res; }
     const d = r.data;
+    // which release the server is (Workers before 1.1.0 do not say: API 1), for "your sync service is not updated yet"
+    if (!scope) { res.api = Number.isInteger(d.api) ? d.api : 1; res.workerVersion = typeof d.version === 'string' ? d.version : ''; }
     if (scope && ['edit', 'view'].includes(d.share?.access)) res.access = d.share.access;
     if (!scope && Array.isArray(d.shared)) st.Shared = d.shared.filter((x) => typeof x === 'string');   // this computer's lists others have
     st.clockOffset = Math.round(Number(d.serverTime) - (sentAt + Date.now()) / 2);

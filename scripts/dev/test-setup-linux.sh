@@ -18,11 +18,15 @@ if [ "${1:-}" = --inside ]; then
   (cd / && tar -czf /tmp/src.tar.gz --exclude=node_modules --exclude=.git --exclude=.wrangler src)
   mkdir -p /tmp/plant/local /tmp/plant/x && echo 'planted' > /tmp/plant/local/saqme.mjs
   (cd /tmp/plant/x && SAQME_SOURCE_URL=file:///tmp/src.tar.gz bash -s -- --no-autostart < /src/scripts/setup.sh) > /tmp/setup1.log 2>&1 || { cat /tmp/setup1.log; exit 1; }
-  check 'grep -q "downloaded to /root/.config/saqme/source" /tmp/setup1.log && ! grep -q /tmp/plant /tmp/setup1.log' 'piped install fetched the source (not the folder above)'
+  check 'grep -q "ok  downloaded" /tmp/setup1.log && ! grep -q /tmp/plant /tmp/setup1.log' 'piped install fetched the source (not the folder above)'
   tail -n 4 /tmp/setup1.log | sed 's/^/  | /'
   B="$HOME/.local/bin/saqme"
+  A="$HOME/.local/lib/saqme"
+  v="$(sed -n 's/^ *"version": *"\([^"]*\)".*/\1/p' /src/worker/package.json | head -n 1)"
   check '[ -x "$B" ]' 'launcher installed'
-  check '[ -f "$HOME/.local/lib/saqme/scripts/cloud-setup.mjs" ] && [ -f "$HOME/.local/lib/saqme/worker/package-lock.json" ]' 'the cloud setup is installed for Settings > Sync'
+  check '[ "$(cat "$A/current")" = "$v" ] && [ -f "$A/versions/$v/local/saqme.mjs" ] && [ ! -e "$A/local" ]' "version $v in its own folder, named by current"
+  check '[ -f "$A/versions/$v/scripts/cloud-setup.mjs" ] && [ -f "$A/versions/$v/worker/package-lock.json" ]' 'the cloud setup is installed for Settings > Sync'
+  check '"$B" version | grep -qx "$v"' 'saqme version'
   check '"$B" status | grep -q "^Running"' 'app is running'
   check '[ -f "$HOME/.local/share/applications/saqme-todo.desktop" ]' 'menu entry written'
   check '[ ! -e "$HOME/.config/autostart/saqme-todo.desktop" ]' 'no autostart with --no-autostart'
@@ -45,6 +49,15 @@ if [ "${1:-}" = --inside ]; then
   check 'grep -q "Water the plants" "$lists/Home.md"' 're-run keeps the lists'
   node1="$(grep -m1 'ok  Node.js' /tmp/setup1.log)"; node2="$(grep -m1 'ok  Node.js' /tmp/setup2.log)"
   check '[ -n "$node1" ] && [ "${node1#*(}" = "${node2#*(}" ]' "re-run uses the same Node.js (${node1#*ok  })"
+  # an update, as Settings > Updates installs it: a release of another version (worker/package.json), switched to
+  # and restarted by the launcher; the lists stay (a version that does not start: worker/test/node/update.test.js)
+  mkdir -p /tmp/rel && cp -R /src/local /src/scripts /tmp/rel/ && mkdir -p /tmp/rel/worker && cp -R /src/worker/src /src/worker/public /src/worker/migrations /src/worker/package-lock.json /src/worker/wrangler.toml.template /tmp/rel/worker/
+  sed '0,/"version": *"[^"]*"/s//"version": "9.9.9"/' /src/worker/package.json > /tmp/rel/worker/package.json
+  before="$(cat "$lists/Home.md")"
+  node_bin="$(sed -n 's/^exec "\([^"]*\)".*/\1/p' "$B")"
+  out="$("$node_bin" "$A/versions/$v/local/update.mjs" apply --source /tmp/rel --root "$A" --data "$HOME/.local/share/saqme" --port "$port" --restart spawn --launcher "$B" --no-worker 2>&1 || true)"
+  check '[ "$(cat "$A/current")" = 9.9.9 ] && [ "$(cat "$A/previous")" = "$v" ] && "$B" status | grep -q "^Running"' "update to 9.9.9 applied and running ($out)"
+  check '[ "$(cat "$lists/Home.md")" = "$before" ]' 'the update left the lists as they were'
   bash /src/scripts/setup.sh --uninstall > /tmp/setup3.log 2>&1
   check '[ ! -e "$B" ] && [ ! -d "$HOME/.local/lib/saqme" ]' 'uninstall removes the app'
   check '[ -f "$lists/Home.md" ]' 'uninstall keeps the lists'

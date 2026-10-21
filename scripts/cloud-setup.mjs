@@ -1,10 +1,11 @@
 #!/usr/bin/env node
 // Saqme To Do - cloud setup: creates (or reuses) everything in YOUR Cloudflare account and prints the
 // pairing link + QR code for the phone. Safe to re-run: existing database, keys and token are reused.
-// Called by scripts/setup.ps1 (Windows) and scripts/setup.sh (macOS / Linux / WSL); it can be run directly:
+// Called by scripts/setup.ps1 (Windows), scripts/setup.sh (macOS / Linux / WSL) and the apps' updaters; it can
+// be run directly:
 //
 //   node scripts/cloud-setup.mjs --state <file> [--desktop-config <file>] [--worker-name saqme]
-//                                [--rotate-token] [--yes] [--device-login]
+//                                [--rotate-token] [--yes] [--device-login] [--update | --login-only]
 //
 //   --state           where to keep what setup generated (token, push keys, database id, URL); private file
 //   --desktop-config  also write the desktop app's sync config there (setup.ps1 and setup.sh pass it)
@@ -12,12 +13,17 @@
 //   --rotate-token    issue a new access token and push keys: the old ones stop working at once (every
 //                     phone / PC must pair again; phones paired with the old key get no more notifications)
 //   --device-login    log in with a code instead of a browser redirect (SSH, containers)
-//   --result FILE     write how it ended there as JSON ({ ok, url } or { ok: false, message, next }), for the
-//                     apps' Settings > Sync > Set up sync
+//   --update          the apps' updater: deploy this version's code and phone app to the existing Worker, and
+//                     nothing else (no keys, no new database, no questions, no login: { needsLogin } instead)
+//   --login-only      the apps' "Sign in to Cloudflare" (to finish an update): the browser login, nothing else
+//   --result FILE     write how it ended there as JSON ({ ok, url } or { ok: false, message, next, needsLogin }),
+//                     for the apps
 //
 // Steps: Node check -> npm ci (worker/) -> wrangler login (the one manual step) -> D1 database ->
-// worker/wrangler.toml -> migrations -> token + VAPID keys -> deploy (code + secrets together) -> health
-// check -> desktop config -> pairing link + QR.
+// worker/wrangler.toml -> token + VAPID keys -> deploy -> health check -> desktop config -> pairing link + QR.
+// The keys (Worker secrets) are sent only with a first setup, a rotation, or to a Worker that has none: they
+// stay on the Worker across deploys, so every other deploy is code only. The database's tables are made and
+// updated by the Worker itself (worker/src/schema.js), on its first request after a deploy.
 import { spawn, spawnSync } from 'node:child_process';
 import { existsSync, mkdirSync, readFileSync, writeFileSync, rmSync, mkdtempSync, chmodSync, openSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -32,7 +38,7 @@ const repo = resolve(here, '..');
 
 // ---------------------------------------------------------------- args
 function parseArgs(argv) {
-  const out = { workerName: 'saqme', yes: false, rotateToken: false, deviceLogin: false, skipInstall: false };
+  const out = { workerName: 'saqme', yes: false, rotateToken: false, deviceLogin: false, skipInstall: false, update: false, loginOnly: false };
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
     const next = () => argv[++i];
@@ -45,6 +51,8 @@ function parseArgs(argv) {
     else if (a === '--yes' || a === '-y') out.yes = true;
     else if (a === '--device-login') out.deviceLogin = true;
     else if (a === '--skip-install') out.skipInstall = true;
+    else if (a === '--update') out.update = true;
+    else if (a === '--login-only') out.loginOnly = true;
     else if (a === '--result') out.result = next();
     else if (a === '--help' || a === '-h') out.help = true;
     else throw new Error(`unknown option ${a}`);
@@ -62,7 +70,7 @@ const say = {
   warn: (text) => console.log(`      ${c('33', '!!')}  ${text}`),
 };
 class SetupError extends Error {
-  constructor(message, next) { super(message); this.next = next; }
+  constructor(message, next, extra = {}) { super(message); this.next = next; Object.assign(this, extra); }
 }
 
 // the terminal, also under `curl ... | bash` (stdin is the script there); null when there is none
@@ -167,14 +175,27 @@ function checkNode() {
   say.ok(`Node.js ${process.versions.node}`);
 }
 
-function installDeps(workerDir, skip) {
+/** npm: the one that comes with this Node.js (a Node.js setup downloaded is not on PATH), else the one on PATH. */
+function npmCommand() {
+  const dir = dirname(process.execPath);
+  for (const cli of [join(dir, 'node_modules', 'npm', 'bin', 'npm-cli.js'), join(dir, '..', 'lib', 'node_modules', 'npm', 'bin', 'npm-cli.js')]) {
+    if (existsSync(cli)) return { cmd: process.execPath, pre: [cli], shell: false };
+  }
+  return { cmd: 'npm', pre: [], shell: process.platform === 'win32' };
+}
+
+function installDeps(workerDir, skip, quiet = false) {
   if (skip) { say.ok('tools: skipped'); return; }
   const marker = join(workerDir, 'node_modules', '.saqme-lock');
   const lock = readFileSync(join(workerDir, 'package-lock.json'), 'utf8');
   if (existsSync(marker) && readFileSync(marker, 'utf8') === lock) { say.ok('tools already installed'); return; }
   say.info('installing the Cloudflare tools (wrangler) - about a minute the first time...');
-  const r = spawnSync('npm', ['ci', '--no-audit', '--no-fund', '--loglevel=error'], { cwd: workerDir, stdio: 'inherit', shell: process.platform === 'win32' });
-  if (r.status !== 0) throw new SetupError('npm could not install the tools.', 'Check the internet connection (and proxy settings), then run setup again.');
+  const npm = npmCommand();
+  const env = { ...process.env, PATH: `${dirname(process.execPath)}${process.platform === 'win32' ? ';' : ':'}${process.env.PATH ?? ''}` };
+  const r = spawnSync(npm.cmd, [...npm.pre, 'ci', '--no-audit', '--no-fund', '--loglevel=error'], { cwd: workerDir, env, stdio: quiet ? 'pipe' : 'inherit', shell: npm.shell, encoding: 'utf8' });
+  if (r.status !== 0) {
+    throw new SetupError('npm could not install the tools.', `Check the internet connection (and proxy settings), then run setup again.${quiet ? `\n${lastLines(`${r.stdout ?? ''}${r.stderr ?? ''}`, 6)}` : ''}`);
+  }
   writeFileSync(marker, lock);
   say.ok('tools installed');
 }
@@ -216,12 +237,14 @@ async function ensureLogin(workerDir, opts, state) {
   return acc;
 }
 
+async function listDatabases(workerDir, accountEnv) {
+  const r = await run(workerDir, ['d1', 'list', '--json'], { env: accountEnv });
+  if (r.code !== 0) throw new SetupError('Could not list your D1 databases.', `Wrangler said:\n${lastLines(r.out)}`);
+  try { return JSON.parse(r.out.slice(r.out.indexOf('['))); } catch { throw new SetupError('Unexpected answer from "wrangler d1 list".', lastLines(r.out)); }
+}
+
 async function ensureDatabase(workerDir, name, accountEnv) {
-  const list = async () => {
-    const r = await run(workerDir, ['d1', 'list', '--json'], { env: accountEnv });
-    if (r.code !== 0) throw new SetupError('Could not list your D1 databases.', `Wrangler said:\n${lastLines(r.out)}`);
-    try { return JSON.parse(r.out.slice(r.out.indexOf('['))); } catch { throw new SetupError('Unexpected answer from "wrangler d1 list".', lastLines(r.out)); }
-  };
+  const list = () => listDatabases(workerDir, accountEnv);
   let db = (await list()).find((d) => d.name === name);
   if (db) { say.ok(`database "${name}" already exists - reusing it`); return { name, id: db.uuid || db.id, existed: true }; }
   const r = await run(workerDir, ['d1', 'create', name], { env: accountEnv });
@@ -246,24 +269,50 @@ function writeWranglerToml(workerDir, { workerName, accountId, db }) {
   say.ok('worker/wrangler.toml written');
 }
 
-async function applyMigrations(workerDir, db, accountEnv) {
-  const r = await run(workerDir, ['d1', 'migrations', 'apply', db.name, '--remote'], { env: accountEnv });
-  if (r.code !== 0) throw new SetupError('Could not set up the database tables.', `Wrangler said:\n${lastLines(r.out)}`);
-  say.ok(/No migrations to apply/i.test(r.out) ? 'database tables up to date' : 'database tables created');
-}
-
-async function loadOrCreateSecrets(state, rotate) {
+/** vapid: false when the push keys are on the Worker but not known here (setup made on another computer). */
+async function loadOrCreateSecrets(state, rotate, { vapid = true } = {}) {
   const out = { token: state.token, vapidPublicKey: state.vapidPublicKey, vapidPrivateKey: state.vapidPrivateKey };
   if (!out.token || rotate) { out.token = randomBytes(32).toString('base64url'); say.ok(rotate ? 'new access token issued' : 'access token generated'); }
   else say.ok('reusing your access token');
-  if (!out.vapidPublicKey || !out.vapidPrivateKey || rotate) {
-    // new push keys on a rotation too: notifications to phones subscribed with the old ones stop
-    const { generateVapidKeys } = await import('../worker/src/push.js');
-    const k = await generateVapidKeys();
-    out.vapidPublicKey = k.publicKey; out.vapidPrivateKey = k.privateKey;
-    say.ok(rotate ? 'new push notification keys issued' : 'push notification keys generated');
-  } else say.ok('reusing your push notification keys');
+  if (!vapid && !rotate) return out;
+  if (!out.vapidPublicKey || !out.vapidPrivateKey || rotate) await newPushKeys(out, rotate);
+  else say.ok('reusing your push notification keys');
   return out;
+}
+async function newPushKeys(out, rotate = false) {
+  // new push keys on a rotation too: notifications to phones subscribed with the old ones stop
+  const { generateVapidKeys } = await import('../worker/src/push.js');
+  const k = await generateVapidKeys();
+  out.vapidPublicKey = k.publicKey; out.vapidPrivateKey = k.privateKey;
+  say.ok(rotate ? 'new push notification keys issued' : 'push notification keys generated');
+}
+
+/**
+ * The names of the Worker's secrets -> a Set, 'missing' when there is no such Worker (yet), or null when wrangler
+ * could not tell. Secrets stay on a Worker across deploys; this says whether they must be sent.
+ */
+async function workerSecrets(workerDir, accountEnv) {
+  const r = await run(workerDir, ['secret', 'list', '--format', 'json'], { env: accountEnv });
+  const text = stripAnsi(r.out);
+  if (r.code !== 0) return /does not exist|not found|10007/i.test(text) ? 'missing' : null;
+  try { return new Set(JSON.parse(text.slice(text.indexOf('['))).map((s) => s.name)); } catch { return null; }
+}
+
+/** Does this token open the Worker? true / false (401) / null (cannot tell: not reachable). */
+async function tokenWorks(url, token) {
+  try {
+    const r = await fetch(`${url.replace(/\/+$/, '')}/api/config`, { headers: { authorization: `Bearer ${token}` }, signal: AbortSignal.timeout(10_000) });
+    if (r.status === 401) return false;
+    return r.ok ? true : null;
+  } catch { return null; }
+}
+
+/** saqme.<subdomain>.workers.dev -> saqme (the Worker's name), else ''. */
+function workerNameOf(url) {
+  try {
+    const h = new URL(url).hostname.split('.');
+    return h.length >= 4 && h.slice(-2).join('.') === 'workers.dev' && /^[a-z0-9][a-z0-9-]{0,40}$/.test(h[0]) ? h[0] : '';
+  } catch { return ''; }
 }
 
 // after a rotation: the phones that subscribed with the old key get nothing more (a lost phone included)
@@ -276,28 +325,33 @@ async function forgetPushSubscriptions(workerDir, db, accountEnv) {
 
 const SUBDOMAIN_HINT = /workers\.dev subdomain|register a workers\.dev|no workers\.dev subdomain|subdomain/i;
 
+/** secrets: null for a code-only deploy (the Worker keeps the secrets it has). */
 async function deploy(workerDir, secrets, accountEnv, opts) {
   const dir = mkdtempSync(join(tmpdir(), 'saqme-'));
   const file = join(dir, 'secrets.json');
-  writeFileSync(file, JSON.stringify({ AUTH_TOKEN: secrets.token, VAPID_PUBLIC_KEY: secrets.vapidPublicKey, VAPID_PRIVATE_KEY: secrets.vapidPrivateKey }), { mode: 0o600 });
+  const args = ['deploy'];
+  if (secrets) {
+    writeFileSync(file, JSON.stringify({ AUTH_TOKEN: secrets.token, VAPID_PUBLIC_KEY: secrets.vapidPublicKey, VAPID_PRIVATE_KEY: secrets.vapidPrivateKey }), { mode: 0o600 });
+    args.push('--secrets-file', file);   // code and secrets go up together, so the Worker never runs without its token
+  }
   try {
     for (let attempt = 0; attempt < 3; attempt++) {
-      // code and secrets go up together, so the Worker never runs without its token
-      const r = await run(workerDir, ['deploy', '--secrets-file', file], { env: accountEnv });
+      const r = await run(workerDir, args, { env: accountEnv });
       const text = stripAnsi(r.out);
       const url = (text.match(/https:\/\/[a-z0-9-]+(?:\.[a-z0-9-]+)*\.workers\.dev/i) || [])[0];
       if (r.code === 0 && url) { say.ok(`deployed to ${url}`); return url.replace(/\/$/, ''); }
+      if (r.code === 0 && opts.knownUrl) { say.ok(`deployed (${opts.knownUrl})`); return opts.knownUrl.replace(/\/$/, ''); }
       if (r.code === 0) {
         say.warn('Deployed, but wrangler did not print the address.');
         const pasted = await ask('Paste the https://...workers.dev address shown in the Cloudflare dashboard (Workers & Pages):', { yes: opts.yes });
         if (/^https:\/\/\S+$/.test(pasted)) return pasted.replace(/\/$/, '');
         throw new SetupError('No Worker address.', 'Open https://dash.cloudflare.com -> Workers & Pages -> saqme to see it, then run setup again.');
       }
-      if (SUBDOMAIN_HINT.test(text) && attempt < 2) {
+      if (SUBDOMAIN_HINT.test(text) && attempt < 2 && !opts.update) {
         say.warn('Your Cloudflare account needs a free workers.dev subdomain first (one time only).');
         say.info('Wrangler will now ask you to pick one (any name, e.g. your nickname).');
         say.info('If it does not ask: open https://dash.cloudflare.com -> Workers & Pages, pick a subdomain there, then come back.');
-        const ri = await run(workerDir, ['deploy', '--secrets-file', file], { env: accountEnv, interactive: true });
+        const ri = await run(workerDir, args, { env: accountEnv, interactive: true });
         if (ri.code !== 0) await ask('Press Enter once the subdomain is set up...', { yes: opts.yes });
         continue;
       }
@@ -364,13 +418,103 @@ function writeResult(path, result) {
   try { writePrivateJson(path, result); } catch { /* the caller then sees no result: "did not finish" */ }
 }
 
+/**
+ * After an update's deploy: the Worker answers with the new version (a few tries: it takes effect within
+ * seconds). -> { reachable, version, schema: the database update's error, if any }
+ */
+async function verifyVersion(url, version) {
+  const attempts = Number(process.env.SAQME_VERIFY_ATTEMPTS || 20);
+  let last = { reachable: false, version: '' };
+  for (let i = 0; i < attempts; i++) {
+    try {
+      const h = await fetch(`${url}/api/health`, { cache: 'no-store', signal: AbortSignal.timeout(10_000) });
+      const d = await h.json().catch(() => ({}));
+      last = { reachable: true, version: String(d.version ?? ''), schema: d.code === 'schema' ? String(d.detail ?? d.error ?? '') : '' };
+      if (h.ok && last.version === version) { say.ok(`your sync service runs ${version}`); return last; }
+      if (last.schema) return last;
+    } catch { /* not reachable (yet) */ }
+    if (i < attempts - 1) await new Promise((r) => setTimeout(r, 3000));
+  }
+  if (last.reachable) say.warn(`Your sync service still answers as ${last.version || 'an older version'}; Cloudflare may take a minute.`);
+  else say.warn(`Could not reach ${url} to check it; the apps keep trying.`);
+  return last;
+}
+
+/** The account and database of an existing setup (the updater: nothing is asked or created). */
+async function findDeployment(workerDir, accounts, state, dbName) {
+  if (!accounts.length) throw new SetupError('This Cloudflare login has no account.', 'Sign in with the Cloudflare account you set up sync with.');
+  const prefer = [state.accountId, process.env.CLOUDFLARE_ACCOUNT_ID].filter(Boolean);
+  const order = [...accounts.filter((a) => prefer.includes(a.id)), ...accounts.filter((a) => !prefer.includes(a.id))];
+  for (const account of order) {
+    const db = (await listDatabases(workerDir, { CLOUDFLARE_ACCOUNT_ID: account.id })).find((d) => d.name === dbName);
+    if (db) { say.ok(`account: ${account.name} (${account.id}), database "${dbName}"`); return { account, db: { name: dbName, id: db.uuid || db.id } }; }
+  }
+  throw new SetupError(`There is no Saqme database ("${dbName}") in ${accounts.length === 1 ? 'this Cloudflare account' : 'these Cloudflare accounts'}.`,
+    'This computer is signed in to a different Cloudflare account than the one sync was set up with, or sync was set up under another name. Nothing was changed; the other computer can update it.');
+}
+
+/** --update: this version's code and phone app to the existing Worker. Nothing else changes; no questions. */
+async function updateMain(opts, workerDir) {
+  const state = readJson(opts.state) || {};
+  const desktop = opts.desktopConfig ? readJson(opts.desktopConfig) : null;
+  const workerName = state.workerName || workerNameOf(state.url || desktop?.url || '') || opts.workerName;
+  const version = readJson(join(workerDir, 'package.json'))?.version ?? '';
+  const total = 4;
+
+  say.step(1, total, 'Checking tools');
+  checkNode();
+  installDeps(workerDir, opts.skipInstall, true);
+
+  say.step(2, total, 'Cloudflare account');
+  const me = await whoami(workerDir);
+  if (!me) {
+    throw new SetupError('Sign in to Cloudflare to finish the update.', 'The app shows a Sign in button (Settings > Updates). Your lists and sync keep working meanwhile.', { needsLogin: true });
+  }
+  const accounts = (me.accounts || []).map((a) => ({ id: a.id, name: a.name }));
+  const { account, db } = await findDeployment(workerDir, accounts, state, state.databaseName || workerName);
+  const accountEnv = { CLOUDFLARE_ACCOUNT_ID: account.id };
+  writeWranglerToml(workerDir, { workerName, accountId: account.id, db });
+
+  say.step(3, total, `Updating your sync service to ${version}`);
+  const secrets = await workerSecrets(workerDir, accountEnv);
+  if (secrets === 'missing') throw new SetupError(`There is no sync service called "${workerName}" in this Cloudflare account.`, 'Set up sync again (Settings > Sync) to make it. Nothing was changed.');
+  if (secrets && !secrets.has('AUTH_TOKEN')) throw new SetupError('Your sync service has no access key on Cloudflare, so updating it would leave it locked.', 'Set up sync again (Settings > Sync). Nothing was changed.');
+  const url = await deploy(workerDir, null, accountEnv, { ...opts, knownUrl: state.url || desktop?.url || '' });
+  say.ok('code and phone app updated; your keys and lists stay as they are');
+  Object.assign(state, { accountId: account.id, workerName, databaseName: db.name, databaseId: db.id, url, updatedAt: new Date().toISOString() });
+  writePrivateJson(opts.state, state);
+
+  say.step(4, total, 'Checking it works');
+  const v = await verifyVersion(url, version);
+  if (v.schema) {
+    throw new SetupError(`Your sync service runs ${version} but could not update its database: ${v.schema}`,
+      'It tries again with every request. If this stays, open an issue with this message.');
+  }
+  writeResult(opts.result, { ok: true, url, version, reachable: v.reachable });
+}
+
+/** --login-only: the browser sign-in an update needs, and nothing else. */
+async function loginMain(opts, workerDir) {
+  checkNode();
+  installDeps(workerDir, opts.skipInstall, true);
+  if (!(await whoami(workerDir))) {
+    say.info('Sign in to Cloudflare in the browser window that opens (or open the address below), then click Allow.');
+    const r = opts.deviceLogin ? await runDeviceLogin(workerDir) : await run(workerDir, ['login'], { interactive: true });
+    if (r.code !== 0 || !(await whoami(workerDir))) throw new SetupError('The Cloudflare sign-in did not finish.', 'Try again; if no browser opened, open the address the app shows.');
+  }
+  say.ok('signed in to Cloudflare');
+  writeResult(opts.result, { ok: true });
+}
+
 async function main(opts) {
-  if (opts.help || !opts.state) {
-    console.log(readFileSync(fileURLToPath(import.meta.url), 'utf8').split('\n').filter((l) => l.startsWith('//')).slice(0, 16).map((l) => l.slice(3)).join('\n'));
+  if (opts.help || (!opts.state && !opts.loginOnly)) {
+    console.log(readFileSync(fileURLToPath(import.meta.url), 'utf8').split('\n').filter((l) => l.startsWith('//')).slice(0, 22).map((l) => l.slice(3)).join('\n'));
     process.exit(opts.help ? 0 : 2);
   }
   if (!/^[a-z0-9][a-z0-9-]{0,40}$/.test(opts.workerName)) throw new SetupError(`"${opts.workerName}" is not a valid Worker name.`, 'Use lowercase letters, digits and dashes.');
   const workerDir = resolve(opts.workerDir || join(repo, 'worker'));
+  if (opts.loginOnly) return loginMain(opts, workerDir);
+  if (opts.update) return updateMain(opts, workerDir);
   const state = readJson(opts.state) || {};
   const total = 7;
 
@@ -389,22 +533,40 @@ async function main(opts) {
   Object.assign(state, { databaseName: db.name, databaseId: db.id });
   writePrivateJson(opts.state, state);
   writeWranglerToml(workerDir, { workerName: opts.workerName, accountId: account.id, db });
-  await applyMigrations(workerDir, db, accountEnv);
+  // (its tables: the Worker makes and updates them itself on its first request, worker/src/schema.js)
 
   say.step(4, total, 'Keys');
+  let takenOver = false;
   if (db.existed && !state.token && !opts.rotateToken) {
-    // set up from another machine: its token cannot be read back, and a new one would unpair every device
-    throw new SetupError('Saqme is already set up in this Cloudflare account (from another computer).',
-      'To connect this PC, copy the pairing link on a device that already syncs (desktop: Settings > Sync > Pair phone > Copy link)\n'
-      + '          and paste it into this PC\'s Settings > Sync. To start over with a new key instead (all devices pair again,\n'
-      + '          phones re-enable notifications), run setup with -RotateToken (setup.sh: --rotate-token).');
+    // set up from another machine: its token cannot be read back, and a new one would unpair every device. This
+    // computer's app may have it already (connected with a pairing link): then that one is the key
+    const d = opts.desktopConfig ? readJson(opts.desktopConfig) : null;
+    if (d?.url && d?.token && (await tokenWorks(d.url, d.token)) !== false) {
+      Object.assign(state, { token: d.token, url: state.url || d.url });
+      takenOver = true;
+      say.ok('reusing the access key this computer\'s app already syncs with (sync was set up on another computer)');
+    } else {
+      throw new SetupError('Saqme is already set up in this Cloudflare account (from another computer).',
+        'To connect this PC, copy the pairing link on a device that already syncs (desktop: Settings > Sync > Pair phone > Copy link)\n'
+        + '          and paste it into this PC\'s Settings > Sync. To start over with a new key instead (all devices pair again,\n'
+        + '          phones re-enable notifications), run setup with -RotateToken (setup.sh: --rotate-token).');
+    }
   }
-  const secrets = await loadOrCreateSecrets(state, opts.rotateToken);
+  const newToken = !state.token || opts.rotateToken;
+  const secrets = await loadOrCreateSecrets(state, opts.rotateToken, { vapid: !takenOver });
   Object.assign(state, secrets);
   writePrivateJson(opts.state, state);   // saved before deploying, so a failure never loses them
 
   say.step(5, total, 'Deploying the sync service + phone app');
-  const url = await deploy(workerDir, secrets, accountEnv, opts);
+  // the keys go up only for a new setup, a rotation, or a Worker without them; otherwise the ones it has stay
+  let send = !!(newToken || opts.rotateToken);
+  if (!send) {
+    const names = await workerSecrets(workerDir, accountEnv);
+    send = names === 'missing' || (names instanceof Set && !names.has('AUTH_TOKEN'));
+  }
+  if (send && !(secrets.vapidPublicKey && secrets.vapidPrivateKey)) { await newPushKeys(secrets); Object.assign(state, secrets); writePrivateJson(opts.state, state); }
+  const url = await deploy(workerDir, send ? secrets : null, accountEnv, opts);
+  say.ok(send ? 'the keys went up with it' : 'the keys on your Worker stay as they are');
   Object.assign(state, { url, updatedAt: new Date().toISOString() });
   writePrivateJson(opts.state, state);
 
@@ -427,7 +589,8 @@ async function main(opts) {
 let opts = {};
 try { opts = parseArgs(process.argv.slice(2)); } catch (e) { console.error(e.message); process.exit(2); }
 main(opts).catch((e) => {
-  writeResult(opts.result, e instanceof SetupError ? { ok: false, message: e.message, next: e.next ?? '' } : { ok: false, message: `Setup failed unexpectedly: ${e.message ?? e}`, next: 'Running setup again is safe.' });
+  writeResult(opts.result, e instanceof SetupError ? { ok: false, message: e.message, next: e.next ?? '', ...(e.needsLogin ? { needsLogin: true } : {}) }
+    : { ok: false, message: `Setup failed unexpectedly: ${e.message ?? e}`, next: 'Running setup again is safe.' });
   if (e instanceof SetupError) {
     console.error(`\n${c('31;1', 'Setup stopped:')} ${e.message}`);
     if (e.next) console.error(`${c('1', 'What to do:')} ${e.next}`);

@@ -599,7 +599,9 @@ $script:fakeTransport = {
   $rej = @()
   if ($srv.Refuse) { foreach ($c in @($body.changes)) { $rej += @{ kind = $c['kind']; id = $c['id']; reason = $srv.Refuse } } }
   $out = @($srv.Rows); $srv.Rows = @()
-  return @{ Status = 200; Data = @{ cursor = 10; more = $false; changes = $out; rejected = $rej; serverTime = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds(); dbId = 'owner01'; share = @{ projectId = 'pshared1'; access = $srv.Access } } }
+  $data = @{ cursor = 10; more = $false; changes = $out; rejected = $rej; serverTime = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds(); dbId = 'owner01'; share = @{ projectId = 'pshared1'; access = $srv.Access } }
+  if ($srv.Extra) { foreach ($k in @($srv.Extra.Keys)) { $data[$k] = $srv.Extra[$k] } }   # (what a newer Worker adds)
+  return @{ Status = 200; Data = $data }
 }
 function Invoke-TestCycle($st, $d, $srv, $scope, $view) {
   $script:testDir = $d
@@ -762,6 +764,21 @@ Test-Case 'lists from two owners next to this PC''s own: each engine sees its fi
   Remove-Item -LiteralPath (Join-Path $sd 'config.json')
   Assert-Eq (Read-ShareBindings $d).Count 2
   Assert-Eq (Read-ShareKeys $sd)['tokens']['s2'] 'key2'
+}
+
+# ---------------------------------------------------------------- versions (worker/src/version.js)
+Write-Host 'Workers of other versions'
+Test-Case 'the own Worker''s API and version come with its answers (one before 1.1.0 says none: API 1); a shared list''s server is not asked' {
+  $d = New-TempLists
+  Write-List $d 'Work' "- [ ] A ^aaaaaaaa`n"
+  $srv = New-FakeServer @()
+  $res = Invoke-TestCycle (New-SyncState) $d $srv $null $null
+  Assert-Eq $res.Status 'synced'; Assert-Eq $res.Api 1; Assert-Eq $res.WorkerVersion ''
+  $srv.Extra = @{ api = 99; version = '99.0.0'; somethingNew = @{ a = 1 } }
+  $res = Invoke-TestCycle (New-SyncState) $d $srv $null $null
+  Assert-Eq $res.Status 'synced'; Assert-Eq $res.Api 99; Assert-Eq $res.WorkerVersion '99.0.0'
+  $res = Invoke-TestCycle (New-SyncState) $d $srv @{ Project = 'pshared1'; File = 'Groceries'; ReadOnly = $false } @{ Only = 'Groceries' }
+  Assert-True ($null -eq $res.Api) 'no API from a shared list''s server'
 }
 
 Write-Host ''

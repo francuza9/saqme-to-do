@@ -10,6 +10,8 @@
 //   saqme connect LINK     sync with the cloud using a pairing link from a device that already syncs
 //   saqme join LINK        join a list someone shares with you, from their invite link (.../join#code=...)
 //   saqme invite LINK      what saqme:// links run: shows the invite in the window, which asks before joining
+//   saqme update           install the newest release now (the app also does it by itself; local/updater.mjs)
+//   saqme version          which version this is
 //   options: --data DIR (default: see local/paths.mjs, or $SAQME_DATA)   --port N (default 47613)
 //
 // The app is one process: a local server for the window (the phone app's own files and sync API, on
@@ -18,9 +20,10 @@
 // same folder is also synced with your Cloudflare Worker, exactly like the Windows app does.
 //
 //   window (phone app) <-> local store <-> [files engine] <-> lists/*.md <-> [cloud engine] <-> your Worker
-import { spawn } from 'node:child_process';
-import { appendFileSync, chmodSync, existsSync, mkdirSync, readFileSync, renameSync, statSync, unlinkSync, watch, writeFileSync } from 'node:fs';
+import { spawn, spawnSync } from 'node:child_process';
+import { appendFileSync, chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, statSync, unlinkSync, watch, writeFileSync } from 'node:fs';
 import { randomBytes } from 'node:crypto';
+import { tmpdir } from 'node:os';
 import { delimiter, dirname, join } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { D1 } from './d1.mjs';
@@ -32,8 +35,11 @@ import { Shares } from './shares.mjs';
 import { handleSync, HttpError } from '../worker/src/sync.js';
 import { computeReminders, localClock } from '../worker/src/reminders.js';
 import { parseInviteLink, parsePairingLink, serverLabel } from '../worker/public/js/pairing.js';
+import { VERSION } from '../worker/src/version.js';
+import { installRoot, prepareWorkspace } from './update.mjs';
+import { Updater, settingsFile } from './updater.mjs';
 
-export const VERSION = '1.0.0';
+export { VERSION };
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 // ---------------------------------------------------------------- small helpers
@@ -122,6 +128,7 @@ export class EngineLoop {
       },
     });
     if (allow) this.allowMassDelete = false;
+    if (res.api) { this.status.workerApi = res.api; this.status.workerVersion = res.workerVersion; }   // (the server it syncs with: older or newer than this app)
     this.status.guarded = res.guarded;
     this.status.conflicts = openConflicts(this.state).length;
     this.status.pending = this.state.Outbox.length;
@@ -221,14 +228,17 @@ export function cloudSetupRunner(p, { log = () => {}, onDone = () => {} } = {}) 
     status,
     start() {
       if (run && !run.done) return status();
-      if (!existsSync(appPaths.cloudSetup)) throw new Error('The cloud setup is not installed with this app. Run setup.sh --cloud instead.');
+      // an installed app deploys from its install's cloud folder, where wrangler stays between updates
+      const root = installRoot(APP_DIR);
+      const script = process.env.SAQME_CLOUD_SETUP_JS || !root ? appPaths.cloudSetup : join(prepareWorkspace(root, APP_DIR), 'scripts', 'cloud-setup.mjs');
+      if (!existsSync(script)) throw new Error('The cloud setup is not installed with this app. Run setup.sh --cloud instead.');
       const resultFile = join(p.local, 'setup-result.json');
       try { unlinkSync(resultFile); } catch { /* none */ }
       // npm (for the Cloudflare tools) sits next to this Node.js; --yes: no questions, nobody is at a terminal
       const env = { ...process.env, NO_COLOR: '1', PATH: `${dirname(process.execPath)}${delimiter}${process.env.PATH ?? ''}` };
-      const args = [appPaths.cloudSetup, '--state', cloudSetupStatePath(), '--desktop-config', p.cloudConfig,
+      const args = [script, '--state', cloudSetupStatePath(), '--desktop-config', p.cloudConfig,
         '--pair-again', 'Settings > Sync > Pair phone', '--yes', '--result', resultFile];
-      const child = spawn(process.execPath, args, { cwd: dirname(dirname(appPaths.cloudSetup)), env, stdio: ['ignore', 'pipe', 'pipe'] });
+      const child = spawn(process.execPath, args, { cwd: dirname(dirname(script)), env, stdio: ['ignore', 'pipe', 'pipe'] });
       const r = { child, lines: [], result: null, done: false };
       run = r;
       const add = (chunk) => {
@@ -306,10 +316,11 @@ async function localReminders(d1, notifyFn, nowMs = Date.now()) {
 }
 
 /**
- * Starts everything; resolves to { url, port, token, files, cloud, d1, stop() }. Options:
- *   dataDir, port, interval (files engine), cloudInterval, settleMs, reminders (false in tests), quiet
+ * Starts everything; resolves to { url, port, token, files, cloud, d1, updater, stop() }. Options:
+ *   dataDir, port, interval (files engine), cloudInterval, settleMs, reminders (false in tests), watchFiles,
+ *   updates (false: no update checks; an app run from a source folder never updates itself anyway)
  */
-export async function startApp({ dataDir = defaultDataDir(), port, interval = 10_000, cloudInterval = 12_000, settleMs = 1500, reminders = true, watchFiles = true } = {}) {
+export async function startApp({ dataDir = defaultDataDir(), port, interval = 10_000, cloudInterval = 12_000, settleMs = 1500, reminders = true, watchFiles = true, updates = true } = {}) {
   const p = dataPaths(dataDir);
   for (const d of [p.lists, p.local, p.sync]) {
     mkdirSync(d, { recursive: true });
@@ -450,16 +461,33 @@ export async function startApp({ dataDir = defaultDataDir(), port, interval = 10
     decline() { pendingInvite = null; return { ok: true }; },
   };
 
+  let updater = null;   // (created once the port is known)
   const info = () => ({
     lists: p.lists,
+    version: VERSION,
     files: files.status,
     cloud: cloud.status.state === 'off' ? null : cloud.status,
     guarded: Math.max(files.status.guarded, cloud.status.guarded, ...[...shareLoops.values()].map((s) => s.loop.status.guarded)),
+    update: updater?.status() ?? null,
     ...shareInfo(),
   });
+  // (installing and the Worker's retry go on in the background: the window and `saqme update` follow the status)
+  const updateRoutes = {
+    status: () => updater?.status() ?? { supported: false },
+    check: () => updater?.check() ?? { supported: false },
+    now: async () => {
+      if (!updater) return { supported: false };
+      await updater.check();
+      if (updater.available) updater.start().catch((e) => log(`update: ${e?.message ?? e}`));
+      return updater.status();
+    },
+    auto: (on) => { updater?.setAuto(on); return updater?.status() ?? { supported: false }; },
+    login: () => updater?.startLogin() ?? { supported: false },
+    worker: () => { if (!updater) return { supported: false }; updater.retryWorker().catch((e) => log(`update: ${e?.message ?? e}`)); return updater.status(); },
+  };
   const srv = await startServer({
-    port: port ?? portSetting(p), token, d1, publicDir: appPaths.public, version: VERSION, info,
-    onSync: () => files.wake(),
+    port: port ?? portSetting(p), token, d1, publicDir: appPaths.public, version: VERSION, info, updates: updateRoutes,
+    onSync: () => { files.wake(); updater?.touch(); },
     onAllowDeletes: () => {
       for (const l of [files, cloud, ...[...shareLoops.values()].map((s) => s.loop)]) { l.allowMassDelete = true; l.wake(); }
     },
@@ -492,13 +520,28 @@ export async function startApp({ dataDir = defaultDataDir(), port, interval = 10
   }
   log(`started ${VERSION} on ${srv.url}, lists in ${p.lists}`);
 
+  // updates (local/updater.mjs): checked shortly after the start, then about once a day; installed by itself
+  // when the window has not changed anything for a while (unless switched off in Settings > Updates)
+  let updateTimer = null;
+  if (updates) {
+    updater = new Updater({
+      appDir: APP_DIR, data: p.data, port: srv.port, settings: settingsFile(join(p.local, 'settings.json')), cloudConfig: p.cloudConfig, cloudState: cloudSetupStatePath(), log,
+    });
+    if (updater.supported) {
+      const tick = () => updater.tick().catch((e) => log(`updates: ${e?.message ?? e}`));
+      setTimeout(() => updater.check().catch(() => {}), 30_000).unref?.();
+      updateTimer = setInterval(tick, 60_000);
+    }
+  }
+
   const app = {
-    url: srv.url, port: srv.port, token, files, cloud, d1, paths: p, shares, shareLoops, sharing,
+    url: srv.url, port: srv.port, token, files, cloud, d1, paths: p, shares, shareLoops, sharing, updater,
     async stop() {
       const running = [...shareLoops.values()];
       files.stop(); cloud.stop();
       for (const s of running) s.loop.stop();
       clearInterval(reminderTimer);
+      clearInterval(updateTimer);
       watcher?.close();
       await Promise.all([...loops, ...running.map((s) => s.done)]);
       await srv.close();
@@ -629,6 +672,70 @@ async function cmdInvite(opts) {
   await api(p, port, '/api/local/invite', 'POST', { link });
 }
 
+/** saqme selftest: what an update runs on a new version before it switches to it (local/update.mjs apply). */
+async function cmdSelftest() {
+  const dir = mkdtempSync(join(tmpdir(), 'saqme-selftest-'));
+  try {
+    const app = await startApp({ dataDir: dir, port: 0, interval: 60_000, cloudInterval: 60_000, settleMs: 0, reminders: false, watchFiles: false, updates: false });
+    try {
+      const h = await (await fetch(`${app.url}/api/health`)).json();
+      if (!h.ok || h.version !== VERSION) throw new Error(`health check: ${JSON.stringify(h)}`);
+      const r = await fetch(`${app.url}/api/sync`, {
+        method: 'POST', headers: { authorization: `Bearer ${app.token}`, 'content-type': 'application/json' }, body: JSON.stringify({ deviceId: 'selftest', cursor: 0, changes: [] }),
+      });
+      if (!r.ok) throw new Error(`sync: ${r.status}`);
+      const page = await fetch(`${app.url}/`);
+      if (!page.ok || !/<script/.test(await page.text())) throw new Error('the app window does not load');
+    } finally { await app.stop(); }
+    console.log(`SELFTEST OK ${VERSION}`);
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+}
+
+/** saqme update: through the running app (it restarts itself), or right here when it is not running. */
+async function cmdUpdate(opts) {
+  const p = dataPaths(opts.data);
+  if (!installRoot(APP_DIR)) {
+    console.log(`This copy runs from a source folder (${APP_DIR}): update it with git pull, then run scripts/setup.sh.`);
+    process.exit(1);
+  }
+  const port = runningPort(p, opts.port);
+  if (await ping(port)) {
+    console.log('Checking for a newer version...');
+    const s = await api(p, port, '/api/local/update/now', 'POST');
+    if (!s.running && !s.available) {
+      console.log(s.error ? `Could not check for updates: ${s.error}` : `Saqme To Do ${s.current} is up to date.`);
+      if (s.result && !s.result.ok) console.log(`${s.result.message} ${s.result.next ?? ''}`.trim());
+      return;
+    }
+    console.log(`Updating to ${s.latest ?? s.running?.version} (the app restarts by itself; your lists are not touched)...`);
+    const started = Date.now();
+    for (let i = 0; i < 300; i++) {
+      await sleep(2000);
+      let st;
+      try { st = await api(p, port, '/api/local/update'); } catch { continue; }   // (restarting)
+      if (st.result && st.result.at > started) {
+        console.log(`${st.result.message}${st.result.next ? `\n${st.result.next}` : ''}`);
+        process.exit(st.result.ok ? 0 : 1);
+      }
+      if (!st.running && !st.available && st.current !== s.current) { console.log(`Updated to ${st.current}.`); return; }
+    }
+    console.log('Still updating; see Settings > Updates in the window.');
+    return;
+  }
+  // not running: install here (it stays stopped, as it was)
+  const updater = new Updater({
+    appDir: APP_DIR, data: p.data, port: portSetting(p, opts.port), settings: settingsFile(join(p.local, 'settings.json')), cloudConfig: p.cloudConfig, cloudState: cloudSetupStatePath(),
+    log: logger(p.log), restartMode: 'none',
+    spawnApply: (args) => spawnSync(process.execPath, ['--disable-warning=ExperimentalWarning', ...args], { stdio: 'inherit' }),
+  });
+  const started = Date.now();
+  const s = await updater.start({ manual: true });
+  const r = updater.result();
+  if (r && r.at >= started) { console.log(`${r.message}${r.next ? `\n${r.next}` : ''}`); process.exit(r.ok ? 0 : 1); }
+  if (s.error) { console.log(`Could not update: ${s.error}`); process.exit(1); }
+  console.log(`Saqme To Do ${VERSION} is up to date.`);
+}
+
 async function cmdSimple(opts, path, done) {
   const p = dataPaths(opts.data);
   const port = runningPort(p, opts.port);
@@ -662,11 +769,13 @@ if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
     connect: () => cmdConnect(opts),
     join: () => cmdJoin(opts),
     invite: () => cmdInvite(opts),
+    update: () => cmdUpdate(opts),
+    selftest: () => cmdSelftest(),
     version: () => console.log(VERSION),
   };
   const run = commands[opts.cmd];
   if (!run) {
-    console.log(readFileSync(fileURLToPath(import.meta.url), 'utf8').split('\n').slice(1, 13).map((l) => l.replace(/^\/\/ ?/, '')).join('\n'));
+    console.log(readFileSync(fileURLToPath(import.meta.url), 'utf8').split('\n').slice(1, 15).map((l) => l.replace(/^\/\/ ?/, '')).join('\n'));
     process.exit(opts.cmd === 'help' || opts.cmd === '--help' ? 0 : 2);
   }
   run().catch((e) => { console.error(e?.message ?? e); process.exit(1); });

@@ -13,6 +13,11 @@
 //   POST /api/local/disconnect    Settings > Sync > Turn off sync (the lists stay)
 //   POST /api/local/allow-deletes confirm a paused mass delete in the lists folder
 //   POST /api/local/stop          shut down (used by setup when updating)
+// Updates (local/updater.mjs), for Settings > Updates and `saqme update`:
+//   GET  /api/local/update        what it knows: this version, the newest one, what an update is doing, how it ended
+//   POST /api/local/update/check  look now;  POST /api/local/update/now  install the newest one now
+//   POST /api/local/update/auto   { on }: "Install updates automatically"
+//   POST /api/local/update/login  sign in to Cloudflare (to finish updating the Worker); /update/worker tries that again
 // Shared lists (local/shares.mjs, docs/sync.md "Shared lists"):
 //   POST /api/local/join          { link }: join a list from its invite link -> { id, name }
 //   POST /api/local/leave         { id }: leave one (its file goes to lists/.trash)
@@ -30,6 +35,7 @@ import { readFileSync, statSync } from 'node:fs';
 import { extname, join, normalize, sep } from 'node:path';
 import { randomBytes } from 'node:crypto';
 import worker, { authorized } from '../worker/src/index.js';
+import { API_VERSION } from '../worker/src/version.js';
 
 const TYPES = {
   '.html': 'text/html; charset=utf-8', '.css': 'text/css; charset=utf-8', '.js': 'text/javascript; charset=utf-8',
@@ -103,7 +109,7 @@ export function startServer(opts) {
     const route = `${req.method} ${url.pathname.replace(/\/+$/, '')}`;
     const body = req.method === 'POST' ? await readBody(req) : null;
     const request = toRequest(req, body);
-    if (route === 'GET /api/health') return json(res, 200, { ok: true, version: opts.version, local: true });
+    if (route === 'GET /api/health') return json(res, 200, { ok: true, version: opts.version, api: API_VERSION, local: true });
     if (route === 'POST /api/local/claim') {
       let code = '';
       try { code = String(JSON.parse(body.toString('utf8')).code ?? ''); } catch { /* bad JSON */ }
@@ -114,7 +120,7 @@ export function startServer(opts) {
     }
     if (!(await authorized(request, env))) return json(res, 401, { error: 'unauthorized' });
     switch (route) {
-      case 'GET /api/config': return json(res, 200, { vapidPublicKey: null, version: opts.version, local: opts.info() });
+      case 'GET /api/config': return json(res, 200, { vapidPublicKey: null, version: opts.version, api: API_VERSION, local: opts.info() });
       case 'GET /api/local': return json(res, 200, opts.info());
       case 'POST /api/local/code': {
         const now = Date.now();
@@ -139,6 +145,22 @@ export function startServer(opts) {
       case 'POST /api/local/cloud-setup/cancel': opts.cloudSetup.cancel(); return json(res, 200, opts.cloudSetup.status());
       case 'POST /api/local/disconnect': opts.disconnect(); return json(res, 200, { ok: true });
       case 'POST /api/local/stop': json(res, 200, { ok: true }); setTimeout(() => opts.onStop?.(), 50); return undefined;
+    }
+    if (opts.updates && (route === 'GET /api/local/update' || route.startsWith('POST /api/local/update/'))) {
+      let b = {};
+      try { b = body?.length ? JSON.parse(body.toString('utf8')) : {}; } catch { /* bad JSON: empty */ }
+      const u = opts.updates;
+      const run = {
+        'GET /api/local/update': () => u.status(),
+        'POST /api/local/update/check': () => u.check(),
+        'POST /api/local/update/now': () => u.now(),
+        'POST /api/local/update/auto': () => u.auto(b.on !== false),
+        'POST /api/local/update/login': () => u.login(),
+        'POST /api/local/update/worker': () => u.worker(),
+      }[route];
+      if (run) {
+        try { return json(res, 200, await run()); } catch (e) { return json(res, 500, { error: e.message }); }
+      }
     }
     if (opts.sharing && (route.startsWith('POST /api/local/') || route === 'GET /api/local/shares')) {
       let b = {};

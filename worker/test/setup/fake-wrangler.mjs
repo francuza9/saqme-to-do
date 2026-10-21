@@ -1,6 +1,7 @@
 // Stand-in for wrangler used by test/node/cloud-setup.test.js: same commands and output shapes as the
-// real CLI (whoami --json, d1 list --json, d1 create, migrations apply, deploy --secrets-file), backed
-// by a JSON file instead of Cloudflare.
+// real CLI (whoami --json, d1 list --json, d1 create, migrations apply, secret list, deploy [--secrets-file]),
+// backed by a JSON file instead of Cloudflare. st.worker: the deployed Worker ({ secrets: [names] }), if any;
+// like Cloudflare it keeps its secrets across deploys without a secrets file.
 import { readFileSync, writeFileSync, existsSync } from 'node:fs';
 
 const statePath = process.env.FAKE_WRANGLER_STATE;
@@ -38,14 +39,20 @@ if (cmd === 'd1' && sub === 'execute') {
   st.executed = [...(st.executed ?? []), args[args.indexOf('--command') + 1]];
   exit(0, '🚣 1 command executed successfully.\n');
 }
+if (cmd === 'secret' && sub === 'list') {
+  if (!st.worker) exit(1, '', '✘ [ERROR] This Worker does not exist on your account. [code: 10007]\n');
+  exit(0, JSON.stringify(st.worker.secrets.map((name) => ({ name, type: 'secret_text' })), null, 2) + '\n');
+}
 if (cmd === 'deploy') {
   const toml = readFileSync('wrangler.toml', 'utf8');
   if (!/database_id = "uuid-/.test(toml)) exit(1, '', 'wrangler.toml has no database id\n');
-  const secrets = JSON.parse(readFileSync(args[args.indexOf('--secrets-file') + 1], 'utf8'));
+  const at = args.indexOf('--secrets-file');
+  const secrets = at > 0 ? JSON.parse(readFileSync(args[at + 1], 'utf8')) : null;
   if (!st.subdomain) {
     if (!interactive) exit(1, '', '▲ [WARNING] You need to register a workers.dev subdomain before publishing to workers.dev\n✘ [ERROR] You can either deploy your worker to one or more routes by specifying them in your wrangler.toml file, or register a workers.dev subdomain here:\nhttps://dash.cloudflare.com/0123/workers/onboarding\n');
     st.subdomain = true;
   }
+  st.worker = { secrets: [...new Set([...(st.worker?.secrets ?? []), ...Object.keys(secrets ?? {})])] };
   st.deploys.push({ secrets, interactive });
   exit(0, 'Total Upload: 40.00 KiB / gzip: 10.00 KiB\nUploaded saqme (1.23 sec)\nDeployed saqme triggers (0.5 sec)\n  https://saqme.my-sub.workers.dev\n  schedule: */5 * * * *\nCurrent Version ID: 1234\n');
 }

@@ -4,6 +4,7 @@
 $ErrorActionPreference = 'Stop'
 . (Join-Path $PSScriptRoot '..\sync-core.ps1')
 . (Join-Path $PSScriptRoot '..\rules.ps1')
+. (Join-Path $PSScriptRoot '..\update-core.ps1')
 
 $Fixtures = Join-Path $PSScriptRoot '..\..\shared\fixtures'
 $CI = [Globalization.CultureInfo]::InvariantCulture
@@ -273,6 +274,22 @@ foreach ($c in $engine['diff']) {
         Assert-Eq ((Get-Sorted $after) -join ',') ((Get-Sorted @($c['guardAfter'])) -join ',') 'held back afterwards'
       }
     } finally { Remove-Item -LiteralPath (Split-Path $lists) -Recurse -Force -ErrorAction SilentlyContinue }
+  }
+}
+
+# ---------------------------------------------------------------- the app updater
+Write-Host 'update.json: Compare-SaqmeVersion, Test-ReleaseManifest, Get-UpdateDecision (update-core.ps1)'
+$updFx = Read-Fixture 'update.json'
+Test-Case 'compareVersions' {
+  foreach ($c in $updFx['compareVersions']) { Assert-Eq (ConvertTo-Canon (Compare-SaqmeVersion $c[0] $c[1])) (ConvertTo-Canon $c[2]) "compare '$($c[0])' '$($c[1])'" }
+}
+Test-Case 'manifest' {
+  $i = 0
+  foreach ($c in $updFx['manifest']) { $i++; Assert-Eq (ConvertTo-Canon (Test-ReleaseManifest $c['in'])) (ConvertTo-Canon $c['out']) "manifest case $i" }
+}
+Test-Case 'decision' {
+  foreach ($c in $updFx['decision']) {
+    Assert-Eq (Get-UpdateDecision $c['deploy'] $c['workerApi'] $c['minWorkerApi']) $c['out'] "decision $($c['deploy']) $($c['workerApi']) $($c['minWorkerApi'])"
   }
 }
 

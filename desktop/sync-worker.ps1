@@ -7,6 +7,7 @@
 #   Plan, PlanTaken, PlanResult, PlanDone, Lock
 #                                    file changes the UI thread applies between edits (see Apply-SyncPlan in widget.ps1)
 #   Conflicts, Guarded, AllowMassDelete, Queue (requests from the UI), NotifyAt
+#   WorkerApi, WorkerVersion         what this PC's own Worker runs, once it answered (an older one: API 1)
 # Lists shared with this PC (docs/sync.md, "Shared lists") each sync with their owner's server, in an engine of their
 # own after this PC's own one (sync-core.ps1 Read-ShareBindings); the own one leaves their files out:
 #   Shares                           @( @{ Id; File; Server; Access; Name; State; Message } )
@@ -262,6 +263,7 @@ while (-not $shared.Stop) {
       $res = Invoke-SyncCycle $ctx
       $guarded += $res.Guarded
       $shared.Pending = $state.Outbox.Count
+      if ($res.Api) { $shared.WorkerApi = $res.Api; $shared.WorkerVersion = $res.WorkerVersion }   # (Settings, the Share view)
       $worst = $res
       if ($res.Retry) { $retry = $true }
       if ($res.Status -eq 'synced' -and $res.Refused.Count) { Write-SyncLog ('refused by the server: ' + ($res.Refused -join '; ')) }

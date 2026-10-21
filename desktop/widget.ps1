@@ -52,6 +52,15 @@ $notifFile = Join-Path $listsDir '.notified'
 $CI        = [Globalization.CultureInfo]::InvariantCulture
 . (Join-Path $dir 'sync-core.ps1')
 . (Join-Path $dir 'qr.ps1')
+. (Join-Path $dir 'update-core.ps1')
+# this version (release.json, from worker\package.json) and where it is installed: <install>\versions\<v>\ (setup.ps1);
+# $null when it runs from a copy of the repository, which does not update itself (docs/setup.md, "Updating")
+$script:Release = Get-AppRelease $dir
+$InstallRoot = Get-InstallRoot $dir
+# what starts the app (shortcuts, start with Windows, a restart): the launcher next to versions\ picks the current one
+$Launcher = $(if ($InstallRoot -and (Test-Path -LiteralPath (Join-Path $InstallRoot 'start-widget.vbs'))) { Join-Path $InstallRoot 'start-widget.vbs' } else { Join-Path $dir 'start-widget.vbs' })
+$script:startHidden = ($env:SAQME_START_HIDDEN -eq '1')   # the updater restarted an app whose window was hidden
+Remove-Item Env:\SAQME_START_HIDDEN -ErrorAction SilentlyContinue
 
 # one instance per user: a second start just shows the running one; setup.ps1 can ask it to quit.
 # SAQME_INSTANCE (Local\SaqmeToDo.<something>) gives a test copy a name of its own (setup's sandbox).
@@ -87,7 +96,7 @@ if (-not (Get-ChildItem -LiteralPath $listsDir -Filter *.md -File)) {
 }
 
 # ---------------------------------------------------------------- settings + open/closed state
-$script:cfg = @{ showCompleted = '0'; active = ''; width = ''; height = ''; theme = 'auto'; notifyAt = '10:00' }
+$script:cfg = @{ showCompleted = '0'; active = ''; width = ''; height = ''; theme = 'auto'; notifyAt = '10:00'; autoUpdate = '1'; updatedSeen = '' }
 foreach ($l in (Read-Lines $cfgFile)) { if ($l -match '^(\w+)=(.*)$') { $script:cfg[$matches[1]] = $matches[2] } }
 function Save-Settings {
   $t = ($script:cfg.GetEnumerator() | ForEach-Object { "$($_.Key)=$($_.Value)" }) -join "`n"
@@ -419,6 +428,9 @@ $script:AccessText = @{
   view = @('Can view', 'They see the list and its updates, but can''t change anything.')
 }
 $script:ShareNeedsSync = 'Sharing needs sync with your own Cloudflare account (Settings > Sync): a shared list lives on your sync service, where the people you share it with sync it from.'
+# a Worker below this API has no shared lists (worker/src/version.js SHARING_API; the phone app's store.js says the same)
+$script:SharingApi = 2
+$script:WorkerTooOld = 'Your sync service runs an older version, without shared lists yet. It is updated together with this app (Settings > Updates); then try again.'
 function Save-Order($names) { try { Write-Utf8 $orderFile ((@($names) -join "`n") + "`n") } catch {} }
 function Open-Count([string]$name) {
   $n = 0
@@ -1854,7 +1866,7 @@ $clsBtn.Add_MouseLeftButtonDown({ param($s, $e) $e.Handled = $true; Commit-Edit;
 function Restart-Widget {
   Commit-Edit
   if ($script:mutexHeld) { $mutex.ReleaseMutex(); $script:mutexHeld = $false }
-  Start-Process wscript.exe -ArgumentList "`"$(Join-Path $dir 'start-widget.vbs')`""
+  Start-Process wscript.exe -ArgumentList "`"$Launcher`""
   Quit-App
 }
 
@@ -2116,8 +2128,9 @@ function Set-StartWithWindows([bool]$on) {
     $sh = New-Object -ComObject WScript.Shell
     $l = $sh.CreateShortcut($startupLnk)
     $l.TargetPath = Join-Path $env:WINDIR 'System32\wscript.exe'
-    $l.Arguments = '"' + (Join-Path $dir 'start-widget.vbs') + '"'
-    $l.WorkingDirectory = $dir; $l.IconLocation = (Join-Path $dir 'assets\saqme.ico') + ',0'; $l.Description = 'Saqme To Do'
+    $l.Arguments = '"' + $Launcher + '"'
+    $appHome = Split-Path -Parent $Launcher   # (the install's folder: it stays when the version changes)
+    $l.WorkingDirectory = $appHome; $l.IconLocation = (Join-Path $appHome 'assets\saqme.ico') + ',0'; $l.Description = 'Saqme To Do'
     $l.Save()
   } elseif (Test-Path -LiteralPath $startupLnk) { Remove-Item -LiteralPath $startupLnk -Force }
 }
@@ -2292,6 +2305,9 @@ function Render-Settings {
     Render
   } 'Start with Windows'
   [void]$list.Children.Add((New-SettingRow 'Start with Windows' '' $tg))
+
+  [void]$list.Children.Add((New-SectionLabel 'Updates'))
+  Render-UpdateSettings
 
   [void]$list.Children.Add((New-SectionLabel 'Keyboard'))
   $kr = New-SettingRow 'Keyboard shortcuts' 'Everything you can do without the mouse' (New-Text (G 0xE76C) 10 $TabInk)
@@ -2588,7 +2604,8 @@ function Render-SyncSettings {
   }
   $srvHost = try { ([Uri][string]$syncCfg['url']).Host } catch { [string]$syncCfg['url'] }
   $line = Get-SyncStatusLine
-  [void]$list.Children.Add((New-SettingRow $line "Your Cloudflare Worker: $srvHost" (New-SmallButton 'Sync now' { Request-Sync; if ($script:sync) { $script:sync.Status = 'syncing' }; [void](Update-SyncIndicator -Force); Render })))
+  $wv = $(if ($script:sync -and $script:sync.WorkerVersion) { ", version $($script:sync.WorkerVersion)" } elseif ($script:sync -and $script:sync.WorkerApi) { ', an older version' } else { '' })
+  [void]$list.Children.Add((New-SettingRow $line "Your Cloudflare Worker: $srvHost$wv" (New-SmallButton 'Sync now' { Request-Sync; if ($script:sync) { $script:sync.Status = 'syncing' }; [void](Update-SyncIndicator -Force); Render })))
   [void]$list.Children.Add((New-SettingRow 'Pair phone' 'QR code for the iPhone app (or another PC)' (New-SmallButton 'Pair phone' { $script:view = 'pair'; Render })))
   $n = @(Get-OpenConflictList).Count
   if ($n) { [void]$list.Children.Add((New-SettingRow "$n conflict$(if ($n -gt 1) { 's' })" 'Changed on two devices at once - pick which version to keep' (New-SmallButton 'Review' { $script:view = 'conflicts'; Render }))) }
@@ -2685,6 +2702,208 @@ function Render-PairView {
   $warn = New-Text 'The QR code and the link are the key to your lists: anyone who has them can read and change them. To revoke it, run setup again with -RotateToken and pair your devices again.' $TypeSize.meta $Faint
   $warn.Margin = '8,6,8,8'
   [void]$list.Children.Add($warn)
+}
+
+# ---------------------------------------------------------------- updates (Settings > Updates; docs/setup.md, "Updating")
+# The app checks GitHub's newest release when it starts and about once a day, in the background. Installing it is
+# desktop\update.ps1's job, hidden, in a process of its own that outlives this one: it downloads and checks the
+# release, has it installed next to this version (with the user's own Worker updated first), restarts the app
+# and goes back to this version if the new one does not come up. The widget starts it (Update now, or by itself
+# when the app is idle) and shows what it says in <install>\update\status.json and result.json.
+$script:upd = @{ Latest = $null; CheckedAt = [long]0; Error = ''; Checking = $null; Proc = $null; Watch = $false; Since = [long]0; Login = $null; LoginError = ''; Sig = ''; Tick = 0 }
+$script:startedAt = Get-NowMs
+$UpdateIdleMs = 10 * 60000
+if (-not $SmokeTest) {
+  try {
+    Add-Type -Namespace SaqmeApp -Name Idle -ErrorAction Stop -MemberDefinition @'
+[StructLayout(LayoutKind.Sequential)] public struct LastInput { public uint Size; public uint Time; }
+[DllImport("user32.dll")] static extern bool GetLastInputInfo(ref LastInput info);
+public static long Ms() { LastInput i = new LastInput(); i.Size = (uint)Marshal.SizeOf(i); if (!GetLastInputInfo(ref i)) return 0; return (long)unchecked((uint)Environment.TickCount - i.Time); }
+'@
+  } catch {}
+}
+# how long nobody touched the keyboard or mouse (0 when Windows does not say)
+function Get-IdleMs { try { return [long][SaqmeApp.Idle]::Ms() } catch { return [long]0 } }
+
+function Test-UpdateRunning {
+  if ($script:upd.Proc -and -not $script:upd.Proc.HasExited) { return $true }
+  $m = $null
+  if ([System.Threading.Mutex]::TryOpenExisting('Local\SaqmeToDo.Update', [ref]$m)) { $m.Dispose(); return $true }
+  return $false
+}
+function Start-UpdateCheck {
+  if (-not $InstallRoot -or $script:upd.Checking) { return }
+  $ps = [powershell]::Create()
+  [void]$ps.AddScript({
+    param($core, $upd, $repo)
+    . $core; . $upd
+    try { return (Get-LatestRelease $repo) } catch { return @{ Ok = $false; Error = $_.Exception.Message } }
+  }).AddArgument((Join-Path $dir 'sync-core.ps1')).AddArgument((Join-Path $dir 'update-core.ps1')).AddArgument($script:Release.Repo)
+  $script:upd.Checking = @{ Ps = $ps; Handle = $ps.BeginInvoke() }
+}
+function Receive-UpdateCheck {
+  $c = $script:upd.Checking
+  if (-not $c -or -not $c.Handle.IsCompleted) { return }
+  $r = $null
+  try { $r = @($c.Ps.EndInvoke($c.Handle)) | Select-Object -Last 1 } catch {}
+  try { $c.Ps.Dispose() } catch {}
+  $script:upd.Checking = $null
+  $script:upd.CheckedAt = Get-NowMs
+  if ($r -and $r.Ok) { $script:upd.Latest = $r.Manifest; $script:upd.Error = '' }
+  else { $script:upd.Error = $(if ($r -and $r.Error) { [string]$r.Error } else { 'The check did not finish.' }) }
+}
+# the newest release when it is newer than this version, else $null
+function Get-AvailableUpdate {
+  $m = $script:upd.Latest
+  if ($m -and (Compare-SaqmeVersion $m.version $script:Release.Version) -gt 0) { return $m }
+  return $null
+}
+# how the last update ended, when it still matters: this version installed (its Worker may still be pending), or
+# a newer one that did not install (failed, or held for the Worker); a check that failed. Else $null
+function Get-UpdateResult {
+  $r = Read-UpdateFile $InstallRoot 'result.json'
+  if (-not $r) { return $null }
+  $v = [string]$r['version']
+  if ($r['ok']) { if ($v -eq $script:Release.Version) { return $r } else { return $null } }
+  if (-not $v -or (Compare-SaqmeVersion $v $script:Release.Version) -gt 0) { return $r }
+  return $null
+}
+# -WorkerOnly: only the Worker part of the update already installed (after signing in to Cloudflare)
+function Start-Update([switch]$WorkerOnly) {
+  if (-not $InstallRoot -or (Test-UpdateRunning)) { return }
+  $ps = Join-Path $env:WINDIR 'System32\WindowsPowerShell\v1.0\powershell.exe'
+  $a = @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-WindowStyle', 'Hidden', '-File', "`"$(Join-Path $dir 'update.ps1')`"", '-AppDir', "`"$InstallRoot`"", '-DataDir', "`"$DataDir`"")
+  if (-not $w.IsVisible) { $a += '-Hidden' }   # (the new version starts in the tray as well)
+  if ($WorkerOnly) { $a += '-WorkerOnly' }
+  $script:upd.Since = Get-NowMs
+  try { $script:upd.Proc = Start-Process -FilePath $ps -ArgumentList $a -WindowStyle Hidden -PassThru -ErrorAction Stop; $script:upd.Watch = $true }
+  catch { $script:upd.Error = "The update could not start: $($_.Exception.Message)" }
+  Render-IfSettings
+}
+# the Cloudflare sign-in an update needs: the browser opens (wrangler), the Worker part runs once it is done
+function Start-CloudLogin {
+  if (-not $InstallRoot -or $script:upd.Login) { return }
+  $setup = Join-Path $dir 'setup.ps1'
+  $res = Join-Path $InstallRoot 'update\login.json'
+  Remove-Item -LiteralPath $res -Force -ErrorAction SilentlyContinue
+  $ps = Join-Path $env:WINDIR 'System32\WindowsPowerShell\v1.0\powershell.exe'
+  $a = @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-WindowStyle', 'Hidden', '-File', "`"$setup`"", '-CloudLogin', '-Yes', '-DataDir', "`"$DataDir`"", '-ResultFile', "`"$res`"")
+  try {
+    $p = Start-Process -FilePath $ps -ArgumentList $a -WindowStyle Hidden -PassThru -ErrorAction Stop
+    [void]$p.Handle   # (without it, ExitCode stays empty once the process is gone)
+    $script:upd.Login = @{ Proc = $p; Result = $res }; $script:upd.LoginError = ''
+  } catch { $script:upd.LoginError = "The sign-in could not start: $($_.Exception.Message)" }
+  Render-IfSettings
+}
+function Watch-CloudLogin {
+  $l = $script:upd.Login
+  if (-not $l -or -not $l.Proc.HasExited) { return }
+  $script:upd.Login = $null
+  $r = $null
+  if (Test-Path -LiteralPath $l.Result) { try { $r = ConvertFrom-JsonText (Read-TextFile $l.Result) } catch {} }
+  if (($r -and $r['ok']) -or (-not $r -and $l.Proc.ExitCode -eq 0)) {
+    # signed in: a held update installs now (with its Worker); an installed one gets its Worker
+    $held = Get-UpdateResult
+    if ($held -and -not $held['ok']) { Start-Update } else { Start-Update -WorkerOnly }
+  } else {
+    $script:upd.LoginError = $(if ($r -and $r['message']) { [string]$r['message'] } else { 'The sign-in did not finish. Try again; a browser window asks you to allow it.' })
+  }
+  Render-IfSettings
+}
+function Render-IfSettings {
+  $typing = [System.Windows.Input.Keyboard]::FocusedElement -is [System.Windows.Controls.TextBox]
+  if ($script:view -eq 'settings' -and -not $typing) { Render }
+}
+# the timer, every few seconds: the daily check, an idle update, what a running one says
+function Step-Updates {
+  if (-not $InstallRoot -or $SmokeTest) { return }
+  $now = Get-NowMs
+  Receive-UpdateCheck
+  if ($script:upd.Login) { Watch-CloudLogin }
+  $running = Test-UpdateRunning
+  if ($script:upd.Watch -and -not $running) {
+    # an update this app started ended without restarting it: say how (a Worker-only one, a failure, a hold)
+    $script:upd.Watch = $false; $script:upd.Proc = $null
+    $r = Get-UpdateResult
+    if ($r -and $r['message'] -and [long]$r['at'] -ge $script:upd.Since) { Show-Notice ([string]$r['message']) }
+  }
+  # checks: two minutes after the start, then once a day (after a failed check: every 6 hours)
+  $due = $(if (-not $script:upd.CheckedAt) { $script:startedAt + 120000 } elseif ($script:upd.Error) { $script:upd.CheckedAt + 6 * 3600000 } else { $script:upd.CheckedAt + 24 * 3600000 })
+  if (-not $running -and -not $script:upd.Checking -and $now -ge $due) { Start-UpdateCheck }
+  # Updated to X: once, when the window is up
+  $res = Get-UpdateResult
+  if ($w.IsVisible -and $res -and $res['ok'] -and $script:cfg.updatedSeen -ne $script:Release.Version) {
+    $script:cfg.updatedSeen = $script:Release.Version; Save-Settings
+    Show-Notice ([string]$res['message'])
+  }
+  # by itself: when the app is idle (window hidden, or nobody at the keyboard for 10 minutes), never mid-edit, and
+  # not again soon after one that did not work (12 hours; 6 when it waits for the Worker)
+  if ($script:cfg.autoUpdate -eq '1' -and -not $running -and -not $script:upd.Login -and -not $script:setupRun) {
+    $busy = $script:editItem -or $script:tabEditing -or $script:notesBox -or $script:drag -or (Test-PopupOpen) -or $script:saveFailed
+    $idle = (-not $w.IsVisible) -or ((Get-IdleMs) -ge $UpdateIdleMs)
+    if (-not $busy -and $idle) {
+      $wait = $(if ($res -and -not $res['ok'] -and $res['at']) { [long]$res['at'] + $(if ($res['held']) { 6 } else { 12 }) * 3600000 } else { 0 })
+      if ((Get-AvailableUpdate) -and $now -ge $wait) { Start-Update }
+      elseif ($res -and $res['ok'] -and $res['worker'] -eq 'pending' -and -not $res['needsLogin'] -and $now -ge [long]$res['at'] + 12 * 3600000) { Start-Update -WorkerOnly }
+    }
+  }
+  $st = Read-UpdateFile $InstallRoot 'status.json'
+  $sig = "$running|$(if ($st) { $st['state'] })|$(if ($res) { $res['at'] })|$($script:upd.CheckedAt)|$([bool]$script:upd.Checking)|$([bool]$script:upd.Login)|$($script:upd.LoginError)"
+  if ($sig -ne $script:upd.Sig) { $script:upd.Sig = $sig; Render-IfSettings }
+}
+
+function Render-UpdateSettings {
+  $cur = $script:Release.Version
+  if (-not $InstallRoot) {
+    [void]$list.Children.Add((New-SettingRow "Version $cur" 'This copy runs from a folder of its own, not an installed one, so it does not update itself. setup.cmd installs it.' $null))
+    return
+  }
+  $running = Test-UpdateRunning
+  $avail = Get-AvailableUpdate
+  $res = Get-UpdateResult
+  if ($running) {
+    $st = Read-UpdateFile $InstallRoot 'status.json'
+    $v = $(if ($st -and $st['version']) { [string]$st['version'] } elseif ($avail) { $avail.version } else { '' })
+    $what = $(switch ($(if ($st) { [string]$st['state'] } else { '' })) {
+      'checking' { 'Checking for updates...' }
+      'downloading' { "Downloading $v..." }
+      'installing' { "Installing $v..." }
+      'worker' { 'Updating your sync service...' }
+      'restarting' { 'Restarting...' }
+      default { 'Updating...' } })
+    [void]$list.Children.Add((New-SettingRow "Version $cur" "$what Saqme restarts by itself when it is done; your lists stay as they are." $null))
+  } elseif ($avail) {
+    $b = New-SmallButton 'Update now' { Start-Update } $OnAccent; $b.Background = $Accent
+    Set-Name $b "Update now to $($avail.version)" 'Saqme restarts by itself; your lists stay as they are'
+    [void]$list.Children.Add((New-SettingRow "Update available: $($avail.version)" "You have $cur. It takes a minute; Saqme restarts by itself and your lists stay as they are." $b))
+  } else {
+    $when = $(if ($script:upd.Checking) { 'Checking for updates...' } elseif ($script:upd.Error) { $script:upd.Error } elseif ($script:upd.CheckedAt) { "Up to date (checked $(Format-Ms $script:upd.CheckedAt 'H:mm'))." } else { 'Checked for updates shortly after the start, then once a day.' })
+    $b = New-SmallButton 'Check now' { Start-UpdateCheck; Render }
+    [void]$list.Children.Add((New-SettingRow "Version $cur" $when $b))
+  }
+  # how the last one ended, when there is something to do about it
+  if ($script:upd.Login) {
+    [void]$list.Children.Add((New-SettingRow 'Signing in to Cloudflare...' 'Allow it in the browser window that opened; the update finishes by itself afterwards.' $null))
+  } elseif (-not $running -and $res -and ($res['needsLogin'] -or -not $res['ok'] -or $res['worker'] -eq 'pending')) {
+    $hint = (([string]$res['message']), ([string]$res['next']), $script:upd.LoginError | Where-Object { $_ }) -join ' '
+    if ($res['needsLogin']) {
+      $b = New-SmallButton 'Sign in' { Start-CloudLogin } $OnAccent; $b.Background = $Accent
+      Set-Name $b 'Sign in to Cloudflare' 'Opens the browser; the update finishes by itself afterwards'
+      [void]$list.Children.Add((New-SettingRow 'Sign in to Cloudflare to finish the update' $hint $b))
+    } elseif ($res['ok']) {
+      [void]$list.Children.Add((New-SettingRow 'Your sync service is not updated yet' $hint (New-SmallButton 'Try again' { Start-Update -WorkerOnly })))
+    } elseif ($res['version']) {
+      [void]$list.Children.Add((New-SettingRow $(if ($res['held']) { "The update to $($res['version']) is waiting" } else { "The update to $($res['version']) did not install" }) $hint (New-SmallButton 'Try again' { Start-Update })))
+    } else {
+      [void]$list.Children.Add((New-SettingRow 'Could not check for updates' $hint $null))
+    }
+  }
+  $tg = New-Toggle ($script:cfg.autoUpdate -eq '1') {
+    param($on)
+    $script:cfg.autoUpdate = $(if ($on) { '1' } else { '0' }); Save-Settings
+    Render
+  } 'Install updates automatically'
+  [void]$list.Children.Add((New-SettingRow 'Install updates automatically' 'When the app is idle. It restarts by itself; your lists stay as they are.' $tg))
 }
 
 # ---------------------------------------------------------------- sharing a list (the owner's side)
@@ -2784,6 +3003,7 @@ function Render-ShareView {
   [void]$list.Children.Add((New-SettingsHeader "Share '$($sv.Name)'" 'list'))
   $say = { param([string]$t, $brush) $x = New-Text $t $TypeSize.meta $(if ($brush) { $brush } else { $Faint }); $x.Margin = '8,4,8,6'; [void]$list.Children.Add($x) }
   if (-not (Read-SyncConfigUi)) { & $say $script:ShareNeedsSync; return }
+  if ($script:sync -and $script:sync.WorkerApi -and $script:sync.WorkerApi -lt $script:SharingApi) { & $say $script:WorkerTooOld; return }
   if (-not $sv.ProjectId -and $script:sync -and $script:sync.ProjectIds) { $sv.ProjectId = $script:sync.ProjectIds[$sv.Name]; if ($sv.ProjectId) { Update-SharePeople } }
   if (-not $sv.ProjectId) { & $say 'This list is not on your sync service yet. It gets there within a few seconds; then open Share again.'; return }
   & $say 'They get a link that works once, for 24 hours. The list stays on your sync service; they sync it from there with a key that reaches this list only.'
@@ -3252,6 +3472,7 @@ $timer.Add_Tick({
   if ($quitEvt.WaitOne(0)) { Quit-App; return }
   if ($script:pendingUrl -and $w.IsVisible) { $u = $script:pendingUrl; $script:pendingUrl = $null; Receive-OpenUrl $u }
   if ($script:setupRun) { Watch-SyncSetup }
+  if (($script:upd.Tick++) % 4 -eq 0) { Step-Updates }
   if ($script:pairReq) { Receive-PairCode }
   elseif ($script:view -eq 'pair' -and $script:pairCode -and $script:pairCode.Until -lt (Get-Date)) { Render }   # a fresh code
   if ($script:apiReqs.Count) { Receive-OwnApi }
@@ -3342,6 +3563,15 @@ if ($SmokeTest) {
     try { Start-SyncSetup } finally { Remove-Item Env:\SAQME_TEST_PACKAGE }
     if ($script:setupRun -or [string]$script:setupOutcome.message -notmatch 'Some\.App_1\.0\.0\.0') { throw 'Set up sync started inside a package' }
     $script:setupOutcome = $null
+    # Settings > Updates as an installed copy sees it: an update available, one waiting for the Cloudflare sign-in
+    $keepRoot = $InstallRoot; $InstallRoot = Join-Path $DataDir 'smoke-install'
+    [void](New-Item -ItemType Directory -Path (Join-Path $InstallRoot 'update') -Force)
+    Write-TextFileAtomic (Join-Path $InstallRoot 'update\result.json') (ConvertTo-JsonText @{ ok = $false; held = $true; needsLogin = $true; version = '99.0.0'; message = 'Sign in to Cloudflare to finish the update.'; at = 1 })
+    $script:upd.Latest = @{ version = '99.0.0' }
+    $script:view = 'settings'; Render
+    if (-not (Get-AvailableUpdate) -or -not (Get-UpdateResult)['needsLogin']) { throw 'Settings > Updates' }
+    $script:upd.Latest = $null; Remove-Item -LiteralPath $InstallRoot -Recurse -Force; $InstallRoot = $keepRoot
+    $script:view = 'list'; Render
     Apply-Theme $(if ($script:themeName -eq 'dark') { 'light' } else { 'dark' })
     [void](New-QrImage 'https://saqme.example.workers.dev/#pair=0123456789abcdefghijklmnopqrstuvwxyzABCDEFG')
     Check-Reminders
@@ -3544,7 +3774,7 @@ if ($SmokeTest) {
 }
 $timer.Start()
 
-$w.Show()
+if (-not $script:startHidden) { $w.Show() }   # (else in the tray only, as it was before the updater restarted it)
 [System.Windows.Threading.Dispatcher]::Run()   # runs until Quit
 try { $tray.Dispose() } catch {}
 if ($script:mutexHeld) { try { $mutex.ReleaseMutex() } catch {} }
