@@ -10,7 +10,7 @@ name `Project con.md`.
 | Windows | `%APPDATA%\SaqmeToDo\lists\<Project>.md` |
 | Linux | `~/.local/share/saqme/lists/<Project>.md` (`$XDG_DATA_HOME`, or `setup.sh --data`) |
 | macOS | `~/Library/Application Support/Saqme To Do/lists/<Project>.md` |
-| Phone | inside the app; **Settings > Data > Export lists** writes the same files into a zip |
+| Phone | inside the app; **Settings > Your lists > Export lists** writes the same files into a zip |
 
 Edit the files with any editor (or let an AI assistant do it); the app shows the change within a few
 seconds and sync picks it up. Files are UTF-8 (a byte order mark is read and dropped; UTF-16 with a byte

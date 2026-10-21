@@ -2,6 +2,42 @@
 
 ## Unreleased
 
+**Phone, Linux and macOS: the same grouped look and Settings pages as on Windows.** The phone app is also the
+window of the Linux/macOS app, so this one change covers all three.
+
+- **The list:** each list's tasks are a rounded card a shade lighter than the window, one line per task with
+  hairlines that start where the text starts; subtasks are indented inside the card, their hairlines too. Open
+  notes are quiet text under the task instead of a box. The deadline, subtask count and notes mark are on the
+  right of the task's line when the window is wide enough (from 440 px: the phone turned sideways, a tablet, the
+  Linux/macOS window) and under the text on a phone held upright, where the text would otherwise get too narrow.
+  *Postponed* and *Completed* are cards under their headings, *Completed* opens and closes from its heading, and
+  the add line is a card of its own at the bottom, above the iPhone's home indicator. Editing, statuses,
+  deadlines, notes, drag and drop, the task menu, long-press and the keyboard work as before.
+- **Settings is a short list of pages** in two cards: *General* (theme; *Keyboard shortcuts* where there is a
+  keyboard), *Notifications* (daily summary; on the phone the notifications switch and *Send a test
+  notification*), *Sync & sharing* (pairing or how sync stands, *Sync now*, *Pair a phone*, conflicts, joining
+  and leaving shared lists; in the Linux/macOS window *Set up sync* or *Connect*), *Your lists* (export, import,
+  *Recently deleted*; the lists folder in the Linux/macOS window); then *App*: *Updates* (Linux/macOS window)
+  and *About*. Each row shows how it stands, with a violet dot when something needs a look (a conflict, paused
+  deletions, an update). Back and Esc go one level up.
+- **Rare and risky actions moved down:** *Unpair this device* (phone) and *Turn off sync* (Linux, macOS) are
+  under **Advanced** at the bottom of Sync & sharing. *Deletions paused* shows below the everyday rows when it
+  happens.
+- **The version** is on a quiet line at the bottom of every Settings page and in *About*; in the Linux/macOS
+  window the line says when an update is available or waits for the Cloudflare sign-in, and opens Updates.
+- **Share, Conflicts and Recently deleted** look the same way: in *Share* each person is one row that opens
+  their access (*Can edit*, *Can view*) and *Revoke* or *Cancel invite*; *Conflicts* shows both versions in full
+  under the task's text; *Recently deleted* is grouped by list.
+- Settings say the same as before, shorter, and nothing was removed; the *Conflicts* row shows when there is
+  something to pick (as the badge in the tab strip does). The phone app has no Updates page (it updates with
+  your sync service; About says so) and nothing Windows-only (start with Windows, the tray).
+- Accessibility: every row is one control with a name and a description; *Notifications* and *Install updates
+  automatically* are switches, *Advanced* and the people in *Share* are disclosures. Opening a page puts focus
+  on its Back button, going back returns it to the row you came from. A selected completed task is drawn in a
+  colour that keeps 4.5 : 1 on the selection tint. The browser checks (`worker/test/ui`) cover the new pages:
+  axe on every page in both themes, focus and Esc, the switch, Advanced, and 200 % zoom on Sync & sharing.
+- The Linux/macOS app's messages and `setup.sh` name the pages the new way (*Settings > Sync & sharing*).
+
 **Windows: a calmer, grouped look for the list and Settings.**
 
 - **Grouped cards, one line per row**, like the iPhone's Settings: related rows sit together in a rounded card,

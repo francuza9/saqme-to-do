@@ -33,9 +33,9 @@ The people (one person can play several roles on different devices):
       the list appears. A shows C as *joined*.
 - [ ] C checks off a task and adds one: A sees both within seconds. A edits one: C sees it.
 - [ ] Add the page to the Home Screen and open it from there: the list is still there, also offline.
-- [ ] **Settings > Notifications > Enable** (iPhone: in the Home Screen app): **Send test** arrives. The
-      deadline in 20 minutes reminds C about 15 minutes before and at the time, by C's clock (try C in another
-      time zone than A if you can). The daily summary comes at C's **Daily summary at** time and lists only
+- [ ] **Settings > Notifications**, switch on (iPhone: in the Home Screen app): **Send a test notification**
+      arrives. The deadline in 20 minutes reminds C about 15 minutes before and at the time, by C's clock (try C
+      in another time zone than A if you can). The daily summary comes at C's **Daily summary** time and lists only
       tasks of this list. A's own reminders still reach A as before, once.
 - [ ] C's tab menu has **Leave this list** and **Move to my Saqme app**, no Rename or Delete.
 
@@ -43,8 +43,7 @@ The people (one person can play several roles on different devices):
 
 - [ ] Install Saqme with the one-liner from the invite page (no sync needed).
 - [ ] In the browser: **Move to my Saqme app** shows a one-time link (and a QR code on a computer). Open it
-      in Saqme (**Open in Saqme To Do**, or paste it in Settings > Sync > Join a shared list; on Windows
-      Settings > Sync & sharing).
+      in Saqme (**Open in Saqme To Do**, or paste it in Settings > Sync & sharing, under Shared lists).
 - [ ] The list appears in the app with C's edits. The browser says it moved to the app and the list is gone
       there. A still sees one person C, not two. C gets reminders only from the app now, not twice.
 
@@ -53,8 +52,8 @@ The people (one person can play several roles on different devices):
 - [ ] **Computer:** open the invite: the browser offers to open Saqme To Do (Windows, Linux and macOS); the
       app asks before it joins; the list appears as a file `Groceries.md` (or `Groceries (from <A's
       workers.dev name>).md` when B already has a *Groceries*). Editing that file in an editor reaches A.
-- [ ] **Phone (paired with B's sync):** a second invite > **Copy invite** > Saqme > Settings > Sync > Join a
-      shared list > Paste > Join. The list appears; a second phone paired with B's sync gets it too, without
+- [ ] **Phone (paired with B's sync):** a second invite > **Copy invite** > Saqme > Settings > Sync & sharing >
+      Shared lists: Paste, Join. The list appears; a second phone paired with B's sync gets it too, without
       an invite. B's phone reminds B of its deadlines (like B's own tasks, at B's time).
 - [ ] A's list never shows up among B's own synced lists: B's other computers get it only by joining too.
 - [ ] **Leave** on one phone: gone from all of B's phones, still on B's computer (it has its own key).
@@ -63,7 +62,7 @@ The people (one person can play several roles on different devices):
 
 - [ ] Join from the invite (or `saqme join '<link>'` on Linux/macOS): the list syncs with A, nothing else does.
 - [ ] Set up sync on D later: D's own lists upload, the shared one stays out of D's sync and keeps syncing
-      with A. Turn D's sync off again (Settings > Sync; on Windows Settings > Sync & sharing > Advanced): the
+      with A. Turn D's sync off again (Settings > Sync & sharing > Advanced): the
       shared list keeps syncing.
 
 ## 6. Everything at once

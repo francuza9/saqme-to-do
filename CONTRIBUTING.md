@@ -91,7 +91,7 @@ npm run dev         # local Worker + phone app on http://localhost:8787, prints 
 node test/ui/pwa-ui-check.mjs   # optional: scripted touch walkthrough of the phone app, sharing a list with a fresh browser too (needs Playwright, see the file)
 node test/ui/pwa-static-check.mjs   # optional: the app from a static host (sub-folder, export/import, offline, cross-origin pairing)
 node test/ui/pwa-a11y-check.mjs     # optional: axe-core + keyboard / focus / zoom checks (needs axe-core too, see the file)
-node test/ui/local-window-check.mjs # optional: the Linux/macOS window's Settings > Sync > Set up sync (Playwright)
+node test/ui/local-window-check.mjs # optional: the Linux/macOS window's Settings > Sync & sharing > Set up sync (Playwright)
 node ../scripts/dev/screenshots.mjs --out ~/shots   # optional: phone screenshots with the sample lists (Playwright, see the file)
 node ../scripts/dev/readme-images.mjs --shots ~/shots   # optional: rebuilds docs/images (needs the desktop shot, see the file)
 ```

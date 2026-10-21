@@ -92,7 +92,7 @@ device id), `sync\state.json` (sync engine state), `sync\sync.log`, `cloud.json`
   Each list shared with this computer has an engine of its own against its owner's Worker, and the cloud
   engine leaves those files out ([sync.md](sync.md#shared-lists)). The window learns about them (and about its
   own lists others have) from the local server, which also relays the window's sharing to the cloud Worker.
-- **Settings > Sync > Set up sync** runs `scripts/cloud-setup.mjs` (installed with the app; it fetches the
+- **Settings > Sync & sharing > Set up sync** runs `scripts/cloud-setup.mjs` (installed with the app; it fetches the
   Cloudflare tools on first use) from the local server and streams its output to the window; it writes
   `sync/config.json` when it succeeds and the cloud engine starts. On Windows (**Settings > Sync & sharing >
   Set up sync**) the widget runs `setup.ps1 -FromApp` in a console window of its own and reads the result file

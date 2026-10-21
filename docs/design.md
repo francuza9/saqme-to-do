@@ -9,8 +9,8 @@ drops below WCAG AA.
 ## Principles
 
 1. **The list is the document.** Rows are lines of a markdown file. Structure comes from type, indentation
-   and a few hairlines; a row never gets a box or a shadow of its own. On the desktop the lines sit in
-   rounded cards, an inset grouped list like iOS Settings ([Grouped lists](#grouped-lists-windows-widget)).
+   and a few hairlines; a row never gets a box or a shadow of its own. In both apps the lines sit in
+   rounded cards, an inset grouped list like iOS Settings ([Grouped lists](#grouped-lists)).
    Hover and selection tint the whole line, and the selected line gets the 2 px violet edge the widget
    always had.
 2. **Colour means state or time, nothing else.** The status chip is the only coloured thing in a normal
@@ -39,7 +39,7 @@ Derived: *line* = 12 % ink over surface, *hover* = 5 %, *selected* = 14 % violet
 *washes* for deadline pills = 16 % (dark) / 13 % (light) of the colour over the surface. *Alert* (overdue)
 is `#F2877F` / `#A62B25`.
 
-The cards of a grouped list (desktop) are a step lighter than the surface in both themes, and their rows
+The cards of a grouped list (both apps) are a step lighter than the surface in both themes, and their rows
 derive from the card:
 
 | Name | Derived as | Dark | Light |
@@ -52,7 +52,8 @@ derive from the card:
 
 The dark card lifts only 3.5 %: more, and closed (struck-through) text and the status chips on a selected row
 fall under their contrast minimums. The tests check every text colour on the card at rest, hovered, pressed
-and selected, and the chips on all of them.
+and selected, and the chips on all of them. Closed grey itself stays under 4.5 : 1 on the selected tint (3.9 dark,
+4.3 light), so the phone app draws a selected closed task in smoke (the strike-through still says closed).
 
 The tab gradient uses the icon's own endpoints, `#B65CE3 → #F3A14A`, in both themes.
 
@@ -109,11 +110,11 @@ Radius follows hierarchy — bigger containers, rounder corners; content lines, 
 | Element | Radius |
 |---|---|
 | window, bottom sheet | 14 |
-| card of a grouped list (desktop) | 12 |
+| card of a grouped list | 12 |
 | tab (top corners) | 10 |
 | controls: buttons, inputs, deadline pills, menu items | 7 |
 | status chip | 5 |
-| list rows | 0 (they are lines; on the desktop the first and last row of a card carry its corners) |
+| list rows | 0 (they are lines; the card's corners clip its first and last row) |
 
 Shadows: the desktop window and phone sheets only. Sheets sit on a dimmed backdrop with a hairline top
 edge instead of a soft drop shadow.
@@ -131,32 +132,35 @@ The columns are the click/touch targets (phone widths shown; the desktop uses 13
 mouse); the margins around them are kept small so text gets the width. Phone: the chevron stays 24 px wide
 (the minimum target size), the status button is the 18 px chip with 4 px either side.
 
-- **Phone: meta moves under the text** (deadline, subtask progress, notes mark) instead of competing with it on
-  the same line. Rows without metadata stay single-line.
-- **Desktop: meta sits on the right of the first line**, like the value of an iOS row: notes mark, subtask
-  progress, then the deadline at the far right. The task's text wraps only when it must (it is your own
-  words), and in a window narrower than 380 px the meta goes back under the text so the text keeps its line.
-  On hover the row's tools (deadline, notes, subtask, delete) take the meta's place.
+- **Meta sits on the right of the first line**, like the value of an iOS row: notes mark, subtask progress,
+  then the deadline at the far right. The task's text wraps only when it must (it is your own words). Where
+  the text column would get too narrow, the meta goes under the text so the text keeps its line: in a Windows
+  window narrower than 380 px, and in the phone app below 440 px wide, which is every phone held upright
+  (on a 390 px iPhone the text would keep about 120 px beside a deadline pill). The phone app turned sideways,
+  a tablet and the Linux/macOS window get it on the right. Rows without metadata stay single-line.
+- On hover the desktop row's tools (deadline, notes, subtask, delete) take the meta's place; the phone app's
+  "⋯" opens the same tools.
 - **Deadline pill only when it matters:** overdue (alert on alert wash) and today/tomorrow (amber on amber
   wash). Later deadlines are plain smoke text ("Fri", "2 Nov").
 - Minimum row height: **48 px on touch** (phone), **40 px with a mouse** (desktop task rows; Settings rows
   44 px).
 - Grip: shown faintly only on manually ordered rows. Phone: "⋯" at the end opens the task menu
   (long-press works too). Desktop: tools appear on hover over the end of the line, as before.
-- Section breaks are sentence-case small labels: "Postponed", "Completed · 2" (a disclosure you can open). On
-  the phone a hairline runs from them to the right edge; on the desktop they are the headings of the cards
-  under them.
+- Section breaks are sentence-case small labels, the headings of the cards under them: "Postponed",
+  "Completed · 2" (a disclosure you can open, its chevron at the right end).
 - The add bar is drawn like the next line of the list: its "+" sits in the chip column and "Add a task" in
-  the text column (on the desktop in a card of its own at the bottom).
+  the text column, in a card of its own at the bottom (on the phone above the home indicator).
 - The "+" for a new project stays next to the last tab; when there are more projects than fit, the tabs
   scroll sideways and fade out at the clipped edge(s) instead of cutting a tab in half, the current project
   is always scrolled into view, and (desktop) a "⌄" button before the "+" lists every project. The tab area
   ends where the sync and window buttons begin; long project names end in "…" (full name in the tooltip).
 
-## Grouped lists (Windows widget)
+## Grouped lists
 
-The desktop's list and every view of its Settings (with Share, Conflicts, Recently deleted, Pair phone and the
-keyboard shortcuts) use one pattern, the inset grouped list of iOS Settings:
+Both apps draw the list and every view of Settings (with Share, Conflicts, Recently deleted, the keyboard
+shortcuts, and on Windows Pair phone) with one pattern, the inset grouped list of iOS Settings. The phone app is
+also the Linux/macOS window (`local/server.mjs` serves the same files), so the pattern covers the phone, Linux
+and macOS at once:
 
 ```
   Shared lists                                     ← heading: small 12/16 medium, smoke, sentence case
@@ -170,11 +174,11 @@ keyboard shortcuts) use one pattern, the inset grouped list of iOS Settings:
 
 | Token | Value | What |
 |---|---|---|
-| `card.inset` | 12 px | window edge to card (the scrollbar is drawn over this margin) |
-| `radius.card` | 12 px | the card's corners: on its first and last row, so their hover and pressed tints fit them |
+| `card.inset` | 12 px | window edge to card (the scrollbar is drawn over this margin; on an iPhone plus the safe area) |
+| `radius.card` | 12 px | the card's corners: on its first and last row, so their hover and pressed tints fit them (the phone app clips the rows to the card) |
 | `card.padding` | 14 px | card edge to a row's text; an icon takes 16 px + 12 px before the text |
 | `card.gap` | 20 px | between cards (from a card or its footnote to the next heading or card) |
-| `card.rowMin` | 44 px | a Settings row; task rows use `row.minPointer`, 40 px |
+| `card.rowMin` | 44 px | a Settings row; task rows use `row.minPointer`, 40 px (the phone's `row.minTouch`, 48 px, on touch screens) |
 | heading | `small`, smoke | 6 px above its card; the list's headings line up with the status chips |
 | footnote | `meta`, smoke | 6 px under its card |
 | hairline | 1 px *separator* | between two rows; it starts where the lower row's text starts (after the icon, the chip, or a subtask's indent) and runs to the card's right edge; none above the first row or below the last, and none between a task and its open notes |
@@ -185,15 +189,23 @@ or a small text button. A row never has a second line under its label: an explan
 obvious, becomes the value when it is a state, or goes to the footnote under the card when it is really
 needed. Whatever leaves a row stays in its tooltip and in the description a screen reader reads. The violet
 "needs a look" dot sits before the value. Labels and values never wrap (a long one ends in "…", whole in the
-tooltip); only your own words wrap: a task's text, its notes.
+tooltip); only your own words wrap: a task's text, its notes, and the two versions in Conflicts (a phone has no
+tooltip to show what was cut). At 200 % zoom on a phone (under 360 px wide) labels and values wrap too, so
+nothing is cut off.
 
 Rows that do something are whole-row buttons: a page (label, value, chevron), or an action, its label violet
-(red when it is risky: *Turn off sync*, *Delete them*). A row with a switch flips it from anywhere on the row.
-Text boxes are rows themselves (*Paste an invite link to join*), with their button at the end. The whole row
-reacts: *card hover* under the mouse, *card pressed* while pressed. *Advanced* is such a row; open, its rows
-follow it in the same card. In the list, the tasks of a list are one card (a heading or a blank line in the
-file starts another), subtasks are indented inside it, and *Postponed* and *Completed* are cards under their
-own headings (*Completed* opens and closes from its heading).
+(red when it is risky: *Turn off sync*, *Delete them*). A row with a switch flips it from anywhere on the row
+(the phone app makes the whole row the switch). Text boxes are rows themselves (*Paste an invite link to
+join*), with their button at the end. The whole row reacts: *card hover* under the mouse, *card pressed* while
+pressed. *Advanced* is such a row; open, its rows follow it in the same card. In the list, the tasks of a list
+are one card (on Windows a heading or a blank line in the file starts another), subtasks are indented inside
+it, and *Postponed* and *Completed* are cards under their own headings (*Completed* opens and closes from its
+heading). In the phone app's Share sheet, each person is a row that opens the rows under it: when they joined,
+*Can edit* / *Can view* (the current one checked), and *Revoke* (or *Cancel invite*).
+
+A switch that is off has a *smoke* track with a knob of the card's colour, on the phone and in the Linux/macOS
+window: the Windows widget's hairline-grey track is nearly invisible on the light card (the tests hold the
+phone's at ≥ 3 : 1).
 
 - Text contrast ≥ 4.5 : 1 in both themes (tested). Status never relies on colour alone: every chip has a
   shape or glyph, closed tasks are also struck through.
@@ -207,22 +219,25 @@ own headings (*Completed* opens and closes from its heading).
 
 - **Violet is rare.** It marks links, keyboard focus, the selected line's edge and the single primary action
   in a sheet. Other buttons are ink on a faint tint.
-- **No boxes inside boxes, no shadows.** Sheets use the frame colour with a hairline top edge. On the desktop,
-  rows sit in grouped cards: a few rounded shapes on a calm background, hairlines inside, nothing boxed within a
-  card (an open task's notes are quiet text, not a box; buttons in a row are text).
-- **Settings in a narrow window is a list of pages.** On the desktop, Settings shows one row per page in two
-  cards (General, Notifications, Sync & sharing, Your lists; then *App*: Updates, About), each with its icon, a
-  short value and a chevron; each page is short, cards of one-line rows again. Places you go to have a chevron,
-  actions are violet rows. Rare or risky actions sit at the bottom of their page under *Advanced*, a row that
-  opens the rest of its card. A quiet meta line under every Settings view says the version; a violet dot (with
-  words) marks what needs a look: an update, a conflict.
+- **No boxes inside boxes, no shadows.** Sheets use the frame colour with a hairline top edge. Rows sit in
+  grouped cards: a few rounded shapes on a calm background, hairlines inside, nothing boxed within a card (an
+  open task's notes are quiet text, not a box; buttons in a row are text).
+- **Settings is a list of pages.** Settings shows one row per page in two cards (General, Notifications,
+  Sync & sharing, Your lists; then *App*: Updates, About), each with its icon, a short value and a chevron;
+  each page is short, cards of one-line rows again. Places you go to have a chevron, actions are violet rows.
+  Rare or risky actions sit at the bottom of their page under *Advanced*, a row that opens the rest of its card.
+  A quiet meta line under every Settings view says the version; a violet dot (with words) marks what needs a
+  look: an update, a conflict, paused deletions. Back (the header, Esc) goes one level up. The phone app keeps
+  only what it has: no Updates page (it updates with the sync service, so About says the version and that), no
+  start with Windows; Keyboard shortcuts appear where there is a keyboard to use them (the Linux/macOS window, a
+  mouse or trackpad).
 - **Pills only when time is short.** A deadline gets a pill when it is overdue, today or tomorrow; later
   ones are plain text, so the list never looks like a tag cloud.
 - **Status lives in the chip.** Task text is never tinted by status: the coloured chip already says it, and
   several colours of text in one list read as noise.
-- **One line for the task, a quieter one for the rest** (phone). Deadline, progress and the notes marker sit
-  under the title, so short tasks never wrap beside a pill on a phone. The desktop window is wider: there they
-  are the row's value on the right, and a task is one line.
+- **One line for the task, a quieter one for the rest** (phone held upright). Deadline, progress and the notes
+  marker sit under the title, so short tasks never wrap beside a pill on a phone. Wider windows (desktop, the
+  phone sideways, a tablet) have room: there they are the row's value on the right, and a task is one line.
 - **A 4 px grid** keeps phone and desktop aligned; the 12 px chip-to-text gap and the 2 px text-to-meta gap
   group a task's two lines.
 - **Quiet labels and numbers.** Section labels are sentence case (never uppercase and tracked); counts use a

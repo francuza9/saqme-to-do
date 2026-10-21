@@ -5,7 +5,7 @@ part is checked; and what is not verified automatically. Target: WCAG 2.2 level 
 
 | | Phone app (iPhone, Android, browsers, and the window of the Linux/macOS app) | Windows widget |
 |---|---|---|
-| Checked with | `worker/test/ui/pwa-a11y-check.mjs`: axe-core 4 (WCAG 2.2 A/AA + best practices) on every main view in both themes, plus keyboard, focus, announcement, motion and zoom checks in Chromium | `scripts/dev/uia-check.ps1`: reads the UI Automation tree, which is what Narrator and other Windows screen readers use, in the list, Settings and each of its pages, and the shortcuts view |
+| Checked with | `worker/test/ui/pwa-a11y-check.mjs`: axe-core 4 (WCAG 2.2 A/AA + best practices) on every main view and every page of Settings in both themes, plus keyboard, focus, announcement, motion and zoom checks in Chromium | `scripts/dev/uia-check.ps1`: reads the UI Automation tree, which is what Narrator and other Windows screen readers use, in the list, Settings and each of its pages, and the shortcuts view |
 | Result | no serious or critical axe findings; all behaviour checks pass | every control named, operable and focusable; structure and Tab order as below |
 | Colours | `worker/test/node/tokens.test.js` for both apps: text ≥ 4.5 : 1, status chips, their glyphs and the focus ring ≥ 3 : 1 (also on hovered and selected rows), in both themes | |
 
@@ -14,24 +14,42 @@ part is checked; and what is not verified automatically. Target: WCAG 2.2 level 
 - **Structure.** Header (banner) with the project tabs as a navigation landmark (the current one marked
   `aria-current="page"`), the list as the main landmark with a hidden heading naming the project, and one list
   per section (tasks, *Postponed*, *Completed*) under real headings. Each task is a list item with
-  `aria-level` for nesting, so "level 2" tells a subtask apart. Settings, *Recently deleted* and *Conflicts*
-  have a back button and a level-1 heading; their groups have level-2 headings.
+  `aria-level` for nesting, so "level 2" tells a subtask apart. Settings, each of its pages (General,
+  Notifications, Sync & sharing, Your lists, Updates in the Linux/macOS window, About), *Keyboard shortcuts*,
+  *Recently deleted* and *Conflicts* have a Back button that says where it goes ("Back to Settings") and a
+  level-1 heading; their cards have level-2 headings (level 3 in the Share sheet, under its title).
 - **Names and states.** Every icon button has a label (status, task menu, subtasks, sync, new project). The
   status chip says the status in words ("Status: In progress"); deadlines say "Deadline: Today 16:30" and add
   ", overdue" when they are late; "1/3" is read as "1 of 3 subtasks closed". The subtasks button reports
   `aria-expanded`; the theme choice and the *Completed* toggle report their state.
+- **Grouped lists.** The cards and hairlines are drawing only: a screen reader meets each row as one control (a
+  page, an action, a switch, a text box with its buttons) or one line of text, and the headings and footnotes
+  as text in reading order. A row's name is what it shows ("Sync & sharing Synced 2 min ago"), so voice control
+  can say it; what a second line used to say is its description (`aria-description`, also the tooltip) or the
+  footnote under its card. The violet "needs a look" dot is never alone: the value next to it says what it is
+  about. *Notifications* is a switch (`role="switch"`, `aria-checked`); *Advanced* on Sync & sharing and each
+  person in the Share sheet are disclosures (`aria-expanded`); a person's access choices report `aria-pressed`.
+  Rows are rebuilt as sync status changes, so their footnotes are not live regions: what happens (a failed
+  setup, a toast) is announced once, where it happens.
 - **Keyboard.** Everything is a real button, link or field, reachable with Tab. A task's text is a button
   that opens the editor. Up / Down select tasks and move keyboard focus to the task row, which reads as one
   phrase: text, status, deadline, subtasks. Shortcuts (Space done, Ctrl+D deadline, Ctrl+I notes, Ctrl+M menu,
   Alt+Up / Down move) never take Enter or Space away from a focused control.
-- **Focus.** A 2 px violet ring on everything focusable (`:focus-visible`). Sheets (task menu, status,
-  deadline, ...) are named modal dialogs: focus moves in, Tab stays in, Escape closes, and focus returns to the
-  control that opened them. The page is rebuilt after every change; focus stays on the same control.
+- **Focus.** A 2 px violet ring on everything focusable (`:focus-visible`; inside a card it is drawn inset,
+  so the card's corners never cut it). Sheets (task menu, status, deadline, ...) are named modal dialogs: focus
+  moves in, Tab stays in, Escape closes, and focus returns to the control that opened them. The page is rebuilt
+  after every change; focus stays on the same control, and a text box keeps what was typed in it.
+- **Settings by keyboard.** Opening a view puts focus on its Back button, so a screen reader says where you
+  are. Esc goes back one level (a page to Settings, Recently deleted to Your lists, Settings to the list) and
+  focus returns to the row you came from (in the list: the selected task, else the Settings button); Esc in an
+  open sheet only closes the sheet. *Keyboard shortcuts* (Settings > General, where there is a keyboard) lists
+  them all.
 - **Announcements.** Messages ("Task deleted. Undo is available.") go to a live region that is always in the
   page; a message with an action stays while it has focus or the pointer.
 - **Motion and size.** No transitions with *reduce motion*. Touch targets are at least 24 px (most 44 px).
-  At 200 % zoom on a 390 px phone (195 px wide) and at 320 px nothing scrolls sideways or gets cut off; below
-  280 px the drag handle column is dropped and the indent halves.
+  At 200 % zoom on a 390 px phone (195 px wide) and at 320 px nothing scrolls sideways or gets cut off (the
+  list, Settings and Sync & sharing are checked); below 360 px the rows of Settings wrap their labels and values
+  instead of ending them in "…", and below 280 px the drag handle column is dropped and the indent halves.
 - **Dragging** has alternatives for everyone: *Move up / down*, *Make subtask*, *Move out one level* in the task
   menu, and Alt+Up / Down.
 
@@ -83,7 +101,11 @@ milliseconds) and falls back to the old elements if that ever fails.
 All in `design/tokens.json`, shared by both apps and tested on every run:
 
 - Text ≥ 4.5 : 1 on everything it sits on (surface, frame, hovered and selected rows, deadline washes, notes,
-  and the desktop's cards at rest, hovered, pressed and selected).
+  and the cards at rest, hovered, pressed and selected). Closed grey is the exception on a selected row (3.9 : 1
+  dark, 4.3 : 1 light), so the phone app draws a selected closed task in smoke; the Windows widget still uses
+  closed grey there.
+- The phone app's switch: off, a smoke track (≥ 3 : 1 on the card) with a knob of the card's colour; on, a
+  violet track with an on-violet knob (≥ 3 : 1).
 - Status chips (WCAG 1.4.11) ≥ 3 : 1 against the list, a hovered row and the selected row (on the phone's
   surface and on the desktop's cards); the glyphs on filled
   chips ≥ 3 : 1 against the chip; the focus ring ≥ 3 : 1. Six status colours are a little darker or lighter

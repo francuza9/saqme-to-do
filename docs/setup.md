@@ -17,8 +17,8 @@ This page lists every step, including the few clicks only you can do, and what t
 ## Which setup is for you
 
 Every platform works without any account. Sync is an extra you can add at any time from the app
-(**Set up sync**: on Windows in **Settings > Sync & sharing**, in the Linux/macOS window in **Settings > Sync**)
-or with the same setup command; it runs in your own free Cloudflare account.
+(**Set up sync** in **Settings > Sync & sharing**, on Windows and in the Linux/macOS window) or with the same
+setup command; it runs in your own free Cloudflare account.
 
 | Platform | On its own (no account) | With sync | How |
 |---|---|---|---|
@@ -113,7 +113,7 @@ curl -fsSL https://raw.githubusercontent.com/francuza9/saqme-to-do/main/scripts/
 
 From a clone: `scripts/setup.sh`. Options go after the script (`... | bash -s -- --cloud` from the web).
 Without `--cloud` nothing is sent anywhere: the lists stay on this computer. Add sync any time later from the
-window: **Settings > Sync > Set up sync** ([section 3](#3-cloud-sync-cloudflare-account-and-login)), or with
+window: **Settings > Sync & sharing > Set up sync** ([section 3](#3-cloud-sync-cloudflare-account-and-login)), or with
 `scripts/setup.sh --cloud`.
 
 The app is the same phone app, served by a small local program on `127.0.0.1` and shown in its own window,
@@ -171,8 +171,8 @@ again, and it uses that one. (Tested on Alpine 3.22 with its own `nodejs` packag
 
 ## 3. Cloud sync: Cloudflare account and login
 
-**From the app:** **Set up sync**, in **Settings > Sync & sharing** on Windows and in **Settings > Sync** in the
-Linux/macOS window. It creates your own free sync service in your Cloudflare account; your lists stay on this
+**From the app:** **Set up sync**, in **Settings > Sync & sharing** (on Windows and in the Linux/macOS window).
+It creates your own free sync service in your Cloudflare account; your lists stay on this
 computer and are uploaded there, nothing is deleted. You need a free Cloudflare account and one sign-in in the
 browser.
 
@@ -235,8 +235,8 @@ Needs iOS 16.4 or later for notifications (everything else works on older versio
 
 1. **Open the pairing link.** Scan the QR code the computer app showed after setting up sync with the
    **Camera** app and tap the banner. It opens in **Safari**, which shows your lists. The apps show the QR code
-   again under **Pair phone**: on Windows **Settings > Sync & sharing > Pair phone**, on Linux and macOS in the
-   window's **Settings > Sync** (or `saqme pair-phone` in a terminal).
+   again under **Settings > Sync & sharing > Pair phone** (Linux and macOS: **Pair a phone**, or
+   `saqme pair-phone` in a terminal).
 2. **Install.** In Safari tap the **Share** button (square with an arrow), scroll, **Add to Home Screen**,
    **Add**.
 3. **Open Saqme from the Home Screen and type the pairing code.** iOS starts a Home Screen app at its own
@@ -244,12 +244,13 @@ Needs iOS 16.4 or later for notifications (everything else works on older versio
    welcome screen. Type the 8-character code that Safari showed after step 1, or the one under the QR code on
    the computer (**Pair phone**), into *Pairing code or link* and tap **Pair**. A code works once and for 10
    minutes; **Pair phone** shows a new one each time. Pasting the whole pairing link works too.
-4. **Enable notifications:** tap the logo (top left), then **Settings > Notifications > Enable**, **Allow**.
-   **Send test** should show a notification within seconds (only the Home Screen app may send them, not Safari).
+4. **Turn on notifications:** tap the logo (top left), then **Notifications**, switch **Notifications** on and
+   tap **Allow**. **Send a test notification** should show one within seconds (only the Home Screen app may send
+   them, not Safari).
 
 Reminders on the phone come from the Worker's schedule (every 5 minutes) in the phone's time zone:
 15 minutes before a timed deadline, again at the time (or late, if it was missed), and one daily summary
-at the time set in *Daily summary at* (shared with the desktop).
+at the time set in *Daily summary* (Settings > Notifications; shared with the desktop).
 
 Turned notifications off by mistake? iPhone **Settings > Notifications > Saqme > Allow Notifications**.
 
@@ -259,7 +260,7 @@ Turned notifications off by mistake? iPhone **Settings > Notifications > Saqme >
 2. Chrome offers **Install app** (or menu ⋮ > **Add to Home screen** > **Install**). The installed app shares
    Chrome's storage, so it is already paired. (If it shows the welcome screen, type the code from **Pair
    phone** there, as on iPhone.)
-3. Open Saqme from the app drawer, then **Settings > Notifications > Enable**, **Allow**.
+3. Open Saqme from the app drawer, then **Settings > Notifications**: switch **Notifications** on, **Allow**.
 
 Push notifications work on Android the same way as on iPhone. The app is tuned and tested for iPhone, but
 everything it does uses standard web features that Chrome on Android supports.
@@ -270,12 +271,12 @@ The phone app works entirely on the device: open it, tap **Use it on this device
 the browser's storage on that phone (offline, nothing is sent anywhere). Install it to the Home Screen as
 above so the system keeps that storage.
 
-- **Back up and move lists:** **Settings > Data > Export lists** saves a zip of markdown files in the same
+- **Back up and move lists:** **Settings > Your lists > Export lists** saves a zip of markdown files in the same
   format as the desktop apps (one file per list, plus the tab order). Unzipped into a desktop lists folder,
   they just appear. **Import lists** takes such a zip or `.md` files; tasks that are already there (same
   `^id`) are skipped, nothing is deleted, so importing twice is harmless.
 - **Add sync later:** set up the cloud part from a computer, then paste the pairing link into
-  **Settings > Sync** of this copy of the app (pairing codes only work in the copy your sync service serves,
+  **Settings > Sync & sharing** of this copy of the app (pairing codes only work in the copy your sync service serves,
   the one the QR code opens). Your lists are merged with the synced ones (same-name lists
   are combined, not duplicated).
 
@@ -299,13 +300,13 @@ uses them from the invite's own page instead (*Use it in this browser*), at thei
 ## 8. More devices
 
 - **Another iPhone / iPad / Android phone:** same as above. A phone that already syncs can pair the next
-  one too: its **Settings > Sync > Pair a phone** shows the QR code and a code.
+  one too: its **Settings > Sync & sharing > Pair a phone** shows the QR code and a code.
 - **Another Windows PC:** install with `setup.cmd`, then in the app **Settings > Sync & sharing** paste
   the pairing link (from a device that already syncs: its **Pair phone** page, **Copy link**; on Windows that is
   **Settings > Sync & sharing > Pair phone**) into the box and click **Connect**. Lists with the same name are merged. (**Set up sync** on the second PC would
   need the key that only the first one has; it stops and explains this instead of replacing it.)
 - **Another Linux or macOS computer:** install with `scripts/setup.sh`, then paste the pairing link into the
-  window's **Settings > Sync** and click **Connect** (or run `saqme connect '<link>'`). It starts syncing within
+  window's **Settings > Sync & sharing** and click **Connect** (or run `saqme connect '<link>'`). It starts syncing within
   a few seconds; same-name lists are merged.
 
 ## 9. Sharing a list with someone
@@ -320,30 +321,30 @@ your list through their Worker.)
 
 1. Right-click the list's tab (phone: long-press it) and choose **Share…**. On Windows the current tab also
    shows a share icon while the mouse is over it. Without sync of your own, Share is greyed out: a shared list
-   needs your sync service to live on (**Set up sync**: Windows Settings > Sync & sharing, elsewhere Settings > Sync).
+   needs your sync service to live on (**Set up sync**, in Settings > Sync & sharing).
 2. Type a **name** for the person (only you see it, to recognise them later) and pick **Can edit** or **Can
    view**, then **Create invite link**. The link is copied (the desktop also shows it as a QR code).
 3. Send it to them yourself, in a message or an email. It works **once, for 24 hours**: whoever opens it first
    joins, so send it to that person only. One invite covers all their phones that sync with their own
    Worker; each of their computers needs an invite of its own.
-4. The same **Share** view lists everyone the list is shared with. Change their access there, **Revoke**
-   them (their key stops working at once; they keep the list as their own unshared copy), or **Cancel** an
-   invite nobody used yet. Shared tabs show a small people badge.
+4. The same **Share** view lists everyone the list is shared with, one row each (tap a person for their
+   access). Change their access there, **Revoke** them (their key stops working at once; they keep the list as
+   their own unshared copy), or **Cancel** an invite nobody used yet. Shared tabs show a small people badge.
 
 **The other person:**
 
 - **No Saqme (any phone or computer):** tap **Use it in this browser** on the page. The list works right away
   in the browser, from the owner's address: nothing to install, no account, no sync. To keep it on a phone,
-  add that page to the Home Screen; **Settings > Notifications > Enable** there reminds you of its deadlines
+  add that page to the Home Screen; switching on **Settings > Notifications** there reminds you of its deadlines
   (sent by the owner's sync service, at your summary time and in your time zone). The page also has the
   one-line installers, for later.
 - **Windows, macOS or Linux with Saqme installed:** open the link. The page asks the browser to open Saqme To
   Do (allow it); the app asks *Join shared list?* and the list appears as a new tab (a list whose name you
   already have says whose it is: "Groceries (from nuca)"). If nothing opens, copy the link (**Copy invite** on
-  that page) and paste it into **Settings > Sync & sharing > Join a shared list** (Linux/macOS: that field in the
-  window's Settings > Sync, or `saqme join '<link>'`). This works without sync of your own.
+  that page) and paste it into **Settings > Sync & sharing**, under *Shared lists* (Linux/macOS: or run
+  `saqme join '<link>'`). This works without sync of your own.
 - **The phone app, paired with your own sync:** a link from another site cannot open it. Tap **Copy invite**
-  on the page, open Saqme, then **Settings > Sync > Join a shared list > Paste > Join**. Your sync service
+  on the page, open Saqme, then **Settings > Sync & sharing**, under *Shared lists* **Paste**, **Join**. Your sync service
   keeps the list for all your phones and reminds you of its deadlines like of your own.
 - **Started in the browser, installed Saqme later:** in the browser, the list's menu (long-press its tab) has
   **Move to my Saqme app**: open the link it shows in your Saqme (or scan its QR code). The list moves over
@@ -354,7 +355,7 @@ your list through their Worker.)
   assistant), it goes back to the owner's version, and what was typed is kept under **Conflicts** as *Not
   saved*.
 
-Turning your own sync off (Windows: Settings > Sync & sharing > Advanced; elsewhere Settings > Sync) keeps the
+Turning your own sync off (Settings > Sync & sharing > Advanced) keeps the
 lists shared with you on computers; on a phone they wait
 until it is paired again. Something to try with a second person: [testing-shared-lists.md](testing-shared-lists.md).
 
@@ -403,7 +404,7 @@ run from it) does not update itself: `git pull` and run setup.
 | Problem | Fix |
 |---|---|
 | Sync icon shows a red warning | Hover it for the reason. *Token rejected*: run setup's cloud part again (or pair again). *Server error*: wait a minute; it retries on its own. |
-| "N tasks vanished from the lists folder … deletions paused" | A list file was emptied or replaced in one go. Restore it (Recycle Bin, Trash, `lists/.trash`) — or, if it was on purpose, confirm: Windows **Settings > Sync & sharing > Deletions paused > Delete them**; Linux/macOS **Delete them** in the window's settings, or `saqme allow-deletes`. |
+| "N tasks vanished from the lists folder … deletions paused" | A list file was emptied or replaced in one go. Restore it (Recycle Bin, Trash, `lists/.trash`) — or, if it was on purpose, confirm: **Settings > Sync & sharing > Deletions paused > Delete them** (Linux/macOS: or `saqme allow-deletes`). |
 | Phone shows the welcome screen after installing | Expected on iPhone: type the pairing code (**Pair phone** on the computer, or the one Safari showed) into the field on that screen. *Wrong or expired*: show a new one; a code works once, for 10 minutes. Pasting the pairing link works too. |
 | Setup stops: "running inside another app's package" | It was started from a shell that belongs to a Store app (for example an AI assistant in a desktop app); Windows would keep what it installs in that app's private copy of `AppData`. Run the command it prints from File Explorer (double-click `setup.cmd`) or Win+R. In the app: quit Saqme from the tray icon, start it from the Start menu, then **Set up sync**. |
 | Linux/macOS window says it is "not connected" | It was opened from a bookmark. Open Saqme from the menu (or `saqme open`); that hands the window its key. |
@@ -411,7 +412,7 @@ run from it) does not update itself: `git pull` and run setup.
 | Linux: no reminders | Install `libnotify-bin` (Debian/Ubuntu) or `libnotify` (Fedora) for `notify-send`, and check that `saqme status` says it is running. |
 | `npm` fails during setup | Usually network/proxy. Check that `https://registry.npmjs.org` opens in a browser, then re-run. |
 | Setup cannot create the database | The free plan allows 10 D1 databases; delete unused ones in the dashboard (Storage & Databases > D1) or use another Worker name. |
-| Push test says "not subscribed" | Settings > Notifications > Turn off, then Enable again (subscriptions can expire). |
+| Push test says "not subscribed" | Settings > Notifications: switch Notifications off, then on again (subscriptions can expire). |
 | Invite: "already used, has expired or was cancelled" | An invite works once, for 24 hours. Ask the owner for a new one (Share > Create invite link). |
 | Share says "this list is not on your sync service yet" | The list was made a moment ago: wait until it synced (the cloud icon), then open Share again. |
 | A shared list's tab vanished | Its owner deleted the list (it comes back if they restore it), or you left it (on a phone: maybe on another of your phones). If its owner stopped sharing it, it stays as your own list and the app says so. In the browser: it was moved to your Saqme app. |
