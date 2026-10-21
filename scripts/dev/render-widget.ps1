@@ -45,7 +45,7 @@ Write-TextFileAtomic (Proj-Path 'Groceries (from nuca)') "- [ ] Bread ^grgrgr01`
 Save-ShareBindings `$listsDir @(@{ id = 'srender00001'; file = 'Groceries (from nuca)'; server = 'https://saqme.nuca.workers.dev'; project = 'prender01'; access = 'edit'; name = 'Groceries'; joinedAt = 1 })
 `$script:bindSig = `$null
 `$conflict = [pscustomobject]@{ Id = 'crender01'; Task = 'trender01'; Field = 'text'; TaskText = 'Book flights for the offsite'; Current = 'Book flights for the offsite'; Value = 'Book flights and a hotel'; Share = '' }
-`$script:sync = @{ Status = 'synced'; StatusText = ''; LastSync = (Get-Date).AddMinutes(-2); WorkerVersion = `$script:Release.Version; WorkerApi = `$script:SharingApi
+`$script:sync = @{ Status = 'synced'; StatusText = ''; LastSync = (Get-Date).AddMinutes(-2); WorkerVersion = `$script:Release.Version; WorkerApi = `$script:SelfUpdateApi
   Conflicts = @(`$conflict); Notices = @(); Guarded = 3; Shares = @(); SharedByMe = @{}; ProjectIds = @{}; NotifyAt = `$script:cfg.notifyAt
   Wake = (New-Object System.Threading.AutoResetEvent(`$false)); Queue = [System.Collections.Queue]::Synchronized((New-Object System.Collections.Queue)) }
 `$InstallRoot = Join-Path `$DataDir 'render-install'
@@ -53,6 +53,9 @@ Save-ShareBindings `$listsDir @(@{ id = 'srender00001'; file = 'Groceries (from 
 [void](New-Item -ItemType Directory -Path (Join-Path `$InstallRoot 'update') -Force)
 Write-TextFileAtomic (Join-Path `$InstallRoot 'update\result.json') (ConvertTo-JsonText @{ ok = `$false; held = `$true; needsLogin = `$true; version = `$nextV; message = 'Sign in to Cloudflare to finish the update.'; next = 'Your lists and sync keep working meanwhile.'; at = 1 })
 `$script:upd.Latest = @{ version = `$nextV }; `$script:upd.CheckedAt = Get-NowMs
+`$script:svc.Status = @{ version = `$script:Release.Version; knowsItself = `$true; token = `$true; auto = `$true; latest = `$nextV; checkedAt = (Get-NowMs) - 3600000
+  last = @{ ok = `$true; message = "Up to date (`$(`$script:Release.Version))." }; log = @(@{ at = (Get-NowMs) - 3600000; text = "`$nextV is out; installing it (by itself)" }) }
+`$script:svc.At = Get-NowMs
 Add-DeletedEntry (Read-Items "- [ ] Old draft of the Q4 roadmap ^drender01``n  - [ ] Outline ^drender02``n  - [ ] Numbers ^drender03``n") '' 'Work'
 Add-DeletedEntry (Read-Items "- [ ] Water the plants ^drender04``n") '' 'Home'
 `$day = [long]86400000; `$now = Get-NowMs
