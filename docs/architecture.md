@@ -53,12 +53,12 @@
   ([sync.md](sync.md#shared-lists)); it also makes every change to `lists\.remotes.json` (join, leave, a
   rename by the owner, a share that ended), so they never cross.
 - **Hand-over:** the loop puts the plan in a shared, synchronized hashtable; the UI's 800 ms timer picks it
-  up **only when you are not typing, editing notes, renaming a tab or dragging**, re-checks that every file
+  up **only when you are not typing, editing notes, renaming a list or dragging**, re-checks that every file
   still has exactly the content the plan was computed from, writes them all, reloads the open list and
   repaints. If anything changed meanwhile, the plan is dropped and recomputed in the next cycle — files are
   never overwritten with stale content.
 - Status (synced / syncing / offline / error), conflicts and the "deletions paused" guard flow back the same
-  way and show up as the small cloud glyph and badge in the tab strip.
+  way and show up as the small cloud glyph and badge in the header.
 - **No silent loss:** moves inside a list (drag and drop, Alt+Up/Down) are `Move-ListBlock` / `Step-ListBlock`
   in `sync-core.ps1`. Every save is checked by `Get-UnexplainedLoss`: only an explicit delete, a move to
   another list or Ctrl+Z may remove a task, and a save that would lose any other task is refused

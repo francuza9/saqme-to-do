@@ -1,6 +1,6 @@
 # The list files
 
-Each project is one markdown file in the `lists` folder; the list's name in the apps (a tab on Windows) is the
+Each project is one markdown file in the `lists` folder; the list's name in the apps is the
 file name. Project names leave
 out what file names cannot hold everywhere (`\ / : * ? " < > |`, control characters, dots and spaces at the
 end) and stop at 100 characters; names Windows reserves for devices (`con`, `nul`, `lpt1`, …) get the file
@@ -98,7 +98,7 @@ Windows (`%APPDATA%\SaqmeToDo`):
 
 | File | What |
 |---|---|
-| `lists\.order` | the lists' order (the tabs on Windows, the lists menu elsewhere), one project name per line |
+| `lists\.order` | the lists' order (the lists menu), one project name per line |
 | `lists\.remotes.json` | lists shared with this PC: which file syncs with whose server (`id`, `file`, `server`, `project`, `access`, `name`, `joinedAt`; no keys). Changed only by the app ([shared lists](sync.md#shared-lists)) |
 | `lists\.state` | which tasks are open or closed (per device, not synced) |
 | `lists\.notified` | reminders already shown on this PC (dedupe, last 7 days) |

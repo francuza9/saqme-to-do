@@ -319,9 +319,8 @@ your list through their Worker.)
 
 **You (the owner):**
 
-1. On Windows right-click the list's tab; on a phone, Linux and macOS long-press (or right-click) the list's name
-   at the top, or the list in the lists menu that name opens. Choose **Share…**. On Windows the current tab also
-   shows a share icon while the mouse is over it. Without sync of your own, Share is greyed out: a shared list
+1. Right-click (on a phone long-press) the list's name at the top, or the list in the lists menu that name opens.
+   Choose **Share…**. Without sync of your own, Share is greyed out: a shared list
    needs your sync service to live on (**Set up sync**, in Settings > Sync & sharing).
 2. Type a **name** for the person (only you see it, to recognise them later) and pick **Can edit** or **Can
    view**, then **Create invite link**. The link is copied (the desktop also shows it as a QR code).
@@ -331,7 +330,7 @@ your list through their Worker.)
 4. The same **Share** view lists everyone the list is shared with, one row each (tap a person for their
    access). Change their access there, **Revoke** them (their key stops working at once; they keep the list as
    their own unshared copy), or **Cancel** an invite nobody used yet. A shared list shows a small people badge
-   after its name (its tab on Windows; the title and the lists menu elsewhere).
+   after its name (in the title and the lists menu).
 
 **The other person:**
 
@@ -351,7 +350,7 @@ your list through their Worker.)
 - **Started in the browser, installed Saqme later:** in the browser, the list's menu (long-press its name at the
   top) has **Move to my Saqme app**: open the link it shows in your Saqme (or scan its QR code). The list moves
   over with no new invite, and the browser copy stops.
-- **Leave** a list from its menu (its tab's on Windows, its name's elsewhere; Leave replaces Delete there): it
+- **Leave** a list from its menu (the list's name's, at the top or in the lists menu; Leave replaces Delete there): it
   goes from your device (to `lists/.trash`
   on a computer; from all your paired phones at once); the owner's list is not touched.
 - A **view-only** list cannot be changed in the apps. Edited in its file anyway (an editor, an AI

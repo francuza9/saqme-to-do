@@ -16,10 +16,9 @@ drops below WCAG AA.
 2. **Colour means state or time, nothing else.** The status chip is the only coloured thing in a normal
    row. Task text stays ink while a task is open, turns quiet when postponed, and quiet + struck through
    when closed. Red and amber appear only when a deadline is overdue or close.
-3. **One bold place: where you are.** On Windows the tab strip: the deep frame colour, the projects as real
-   tabs, and the active tab marked with the icon's own violet-to-amber gradient (that gradient appears nowhere
-   else). In the phone app (also the Linux/macOS window) the current list's name as a large title on the
-   frame-coloured header, which opens the lists menu ([The list switcher](#the-list-switcher)).
+3. **One bold place: where you are.** The current list's name as a large title on the frame-coloured header,
+   which opens the lists menu ([The list switcher](#the-list-switcher)), on every platform. (The icon's
+   violet-to-amber gradient, once the Windows active tab's, now appears only in the icon.)
 4. **Georgian is a first-class script.** The typeface covers Mkhedruli natively (no fallback seam in the
    middle of a list), and line heights leave room for its taller ascenders and descenders.
 
@@ -31,9 +30,9 @@ mixing, in the generator, so both platforms get identical values.
 | Name | Role | Dark ("night") | Light ("paper") |
 |---|---|---|---|
 | **Surface** | the list | `#1E1A23` plum | `#F6F2EA` warm paper |
-| **Frame** | tab strip (Windows), the phone app's header, sheets, menus | `#15121A` aubergine | `#E9E2D4` linen |
+| **Frame** | the header (all apps), sheets, menus | `#15121A` aubergine | `#E9E2D4` linen |
 | **Ink** | task text, titles | `#EFEAF4` | `#25211C` |
-| **Smoke** | metadata, hints, inactive tabs, the title's ⌄ | `#A39BAE` | `#675F52` |
+| **Smoke** | metadata, hints, the title's ⌄ | `#A39BAE` | `#675F52` |
 | **Violet** | links, focus, active edge, primary action | `#C688EE` | `#8930B6` |
 | **Amber** | due soon, in progress | `#F2B45A` | `#7F5100` |
 
@@ -56,8 +55,6 @@ The dark card lifts only 3.5 %: more, and closed (struck-through) text and the s
 fall under their contrast minimums. The tests check every text colour on the card at rest, hovered, pressed
 and selected, and the chips on all of them. Closed grey itself stays under 4.5 : 1 on the selected tint (3.9 dark,
 4.3 light), so the phone app draws a selected closed task in smoke (the strike-through still says closed).
-
-The tab gradient (Windows) uses the icon's own endpoints, `#B65CE3 → #F3A14A`, in both themes.
 
 **Status chips** keep their meanings and colours: to do = outlined, in progress = amber half-fill,
 done = grey with a check, postponed = blue with a clock, blocked = indigo with "!", failed / rejected =
@@ -95,9 +92,9 @@ Same numbers on both platforms (CSS px = WPF device-independent px).
 | display | 22 / 28 | 600 | welcome title, the list's name in the phone app's header |
 | title | 18 / 24 | 600 | view headers (Settings, Conflicts) |
 | body | 15 / 22 | 400 | task text, inputs, setting names, the lists menu's rows |
-| label | 14 / 20 | 500 | tabs (Windows), buttons, menu items |
+| label | 14 / 20 | 500 | buttons, menu items |
 | meta | 13 / 18 | 400, tnum | deadlines, subtask counts, hints |
-| small | 12 / 16 | 500, tnum | section labels, tab counts (Windows) |
+| small | 12 / 16 | 500, tnum | section labels |
 
 No uppercase anywhere; hierarchy comes from size and weight. On touch screens the text editor uses 16 px
 so iOS does not zoom into it.
@@ -113,7 +110,6 @@ Radius follows hierarchy — bigger containers, rounder corners; content lines, 
 |---|---|
 | window, bottom sheet | 14 |
 | card of a grouped list (also the lists menu's cards) | 12 |
-| tab (top corners, Windows) | 10 |
 | controls: buttons, inputs, deadline pills, menu items | 7 |
 | status chip | 5 |
 | list rows | 0 (they are lines; the card's corners clip its first and last row) |
@@ -152,13 +148,9 @@ mouse); the margins around them are kept small so text gets the width. Phone: th
   "Completed · 2" (a disclosure you can open, its chevron at the right end).
 - The add bar is drawn like the next line of the list: its "+" sits in the chip column and "Add a task" in
   the text column, in a card of its own at the bottom (on the phone above the home indicator).
-- Windows: the "+" for a new project stays next to the last tab; when there are more projects than fit, the
-  tabs scroll sideways and fade out at the clipped edge(s) instead of cutting a tab in half, the current
-  project is always scrolled into view, and a "⌄" button before the "+" lists every project. The tab area
-  ends where the sync and window buttons begin; long project names end in "…" (full name in the tooltip).
-- Phone, Linux, macOS: the header is Settings (the logo) on the left, the current list's name with its ⌄, and
-  on the right conflicts (when there are some) and sync; lists are switched, added and managed from that name
-  ([The list switcher](#the-list-switcher)).
+- The header is Settings (the logo) on the left, the current list's name with its ⌄, and on the right
+  conflicts (when there are some) and sync (on Windows also the window buttons); lists are switched, added and
+  managed from that name ([The list switcher](#the-list-switcher)).
 
 ## Grouped lists
 
@@ -222,8 +214,9 @@ phone's at ≥ 3 : 1).
 
 ## The list switcher
 
-The phone app (and the Linux/macOS window, the same app) has no tab strip: the header's title is the current
-list's name, and it opens the lists menu. The Windows widget keeps its tabs.
+No app has a tab strip: the header's title is the current list's name, and it opens the lists menu. The phone
+app (and the Linux/macOS window, the same app) draws it as below; the Windows widget (`desktop/widget.ps1`) does
+the same in its own controls, see the end of this section.
 
 ```
  [logo]  Work ⌄ •                              [cloud]    ← display 22/28 ink, ⌄ smoke, • violet
@@ -260,10 +253,26 @@ list's name, and it opens the lists menu. The Windows widget keeps its tabs.
   handle a drag, a long press its menu, and nothing starts in a text box or at the screen's edges (the
   system's back gesture). The list follows the finger and the next one slides in from that side; with *reduce
   motion* nothing moves, the list just changes.
-- **Keyboard:** Left / Right on the title go to the previous / next list, as on the Windows tabs; Enter, Space
+- **Keyboard:** Left / Right on the title go to the previous / next list (Windows too); Enter, Space
   or Down open the menu on the current list. In it Up / Down (round at the ends), Home / End and a typed letter
   move, Enter switches, Esc closes it, Tab closes it and goes on; Ctrl+M (also Shift+F10, the menu key) opens
   the focused list's own menu. Focus goes back to the title.
+- **Windows** (`desktop/widget.ps1`) has the same switcher in WPF, on the frame-coloured header between the
+  logo and the sync and window buttons:
+  - The title is the list's name in *title* type (18 / 24, semibold) with a small ⌄ in smoke (it turns while
+    the menu is open), a shared list's badge, and the violet dot; one button (UI Automation: a button with
+    Invoke and ExpandCollapse, so Narrator says "collapsed" / "expanded"). Its tooltip says which lists are due.
+    A long name ends in "…".
+  - The lists menu is a popup under the title (the shadow of the other popups, the menu colour), with the grouped
+    cards inside: a row per list (the check, the name, which wraps, a shared list's badge, the open tasks or "N
+    due" in red / amber), then a gap and *New list* in violet in a card of its own. A click outside it or Esc
+    closes it. A row is a radio button for UI Automation, the current one selected.
+  - A list's own menu (Share, Rename, Delete; Leave for a list shared with you) is the right-click menu of a row
+    or of the title, and Shift+F10 on the title or on a row in the menu. New list and Rename edit the name in
+    place of the title.
+  - Keys: Left / Right (and Ctrl+Tab, Ctrl+Shift+Tab, Ctrl+PageUp / PageDown) switch lists, Down opens the menu;
+    in it Up / Down (round at the ends), Home / End, Enter, Esc, Tab, and focus goes back to the title.
+  - The task menu has *Move to list...*, which opens the other lists.
 
 ## Design decisions
 
@@ -281,10 +290,10 @@ list's name, and it opens the lists menu. The Windows widget keeps its tabs.
   only what it has: no Updates page (it updates with the sync service, so About says the version and that), no
   start with Windows; Keyboard shortcuts appear where there is a keyboard to use them (the Linux/macOS window, a
   mouse or trackpad).
-- **A title instead of tabs on the phone.** A phone shows three or four tabs at most, and a strip that scrolls
-  sideways hides the rest. The list's name as the title says where you are in large type; one tap shows every
-  list with what is open or due in it, and a swipe goes to the next one. The Windows widget, wider and used with
-  a mouse, keeps its tabs.
+- **A title instead of tabs.** A phone shows three or four tabs at most, and a strip that scrolls sideways
+  hides the rest (the Windows widget's did too, with a "more" button for the overflow). The list's name as the
+  title says where you are in large type; one tap shows every list with what is open or due in it, and on the
+  phone a swipe goes to the next one. The same title does it on every platform.
 - **Pills only when time is short.** A deadline gets a pill when it is overdue, today or tomorrow; later
   ones are plain text, so the list never looks like a tag cloud.
 - **Status lives in the chip.** Task text is never tinted by status: the coloured chip already says it, and

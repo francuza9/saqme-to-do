@@ -11,8 +11,9 @@
 #                the current list shared with three people
 #     -Advanced  with the Advanced part of the Settings pages open
 #     -Open      the list as it looks in use: every task with notes open, and Completed shown
+#     -Menu      also the lists menu (opened under the title), as <Prefix>-menu-<theme>.png
 param([Parameter(Mandatory)][string]$Out, [string]$Prefix = 'desktop', [string]$Project = 'Work', [int]$Width = 440, [int]$Height = 660,
-  [string]$View = 'list', [string]$Sample = '', [switch]$Full, [switch]$Busy, [switch]$Advanced, [switch]$Open)
+  [string]$View = 'list', [string]$Sample = '', [switch]$Full, [switch]$Busy, [switch]$Advanced, [switch]$Open, [switch]$Menu)
 $ErrorActionPreference = 'Stop'
 $root = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
 $tmp = Join-Path ([IO.Path]::GetTempPath()) ('saqme-render-' + [guid]::NewGuid().ToString('N').Substring(0, 6))
@@ -88,6 +89,15 @@ foreach (`$th in 'dark', 'light') {
   `$enc.Frames.Add([System.Windows.Media.Imaging.BitmapFrame]::Create(`$rtb))
   # not `$fs: PowerShell names are case-insensitive and the widget has a `$FS-like table of its own
   `$pngFile = [IO.File]::Create('$((Join-Path $Out $Prefix).Replace("'", "''"))-' + `$th + '.png'); try { `$enc.Save(`$pngFile) } finally { `$pngFile.Close() }
+  if (`$$([bool]$Menu)) {
+    Show-ListsMenu; `$mc = `$script:listsPopup.Child; `$w.UpdateLayout(); `$mc.UpdateLayout()
+    `$mrtb = New-Object System.Windows.Media.Imaging.RenderTargetBitmap([int](`$mc.ActualWidth * 2), [int](`$mc.ActualHeight * 2), 192, 192, [System.Windows.Media.PixelFormats]::Pbgra32)
+    `$mrtb.Render(`$mc)
+    `$menc = New-Object System.Windows.Media.Imaging.PngBitmapEncoder
+    `$menc.Frames.Add([System.Windows.Media.Imaging.BitmapFrame]::Create(`$mrtb))
+    `$mFile = [IO.File]::Create('$((Join-Path $Out $Prefix).Replace("'", "''"))-menu-' + `$th + '.png'); try { `$menc.Save(`$mFile) } finally { `$mFile.Close() }
+    Close-ListsMenu `$false
+  }
 }
 `$script:quitting = `$true; `$w.Close(); try { `$tray.Dispose() } catch {}
 exit 0

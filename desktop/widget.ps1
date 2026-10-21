@@ -336,12 +336,6 @@ function Set-Palette([string]$name) {
       @('GroupBg','Group'), @('GroupHover','GroupHover'), @('GroupPress','GroupPress'), @('GroupSel','GroupSel'), @('GroupLine','GroupLine'))) {
     Set-Variable -Scope Script -Name $pair[0] -Value (Brush $T[$pair[1]])
   }
-  # the one gradient in the app: the icon's violet-to-amber, on the active tab (docs/design.md)
-  $g = New-Object System.Windows.Media.LinearGradientBrush
-  $g.StartPoint = New-Object System.Windows.Point(0, 0); $g.EndPoint = New-Object System.Windows.Point(1, 0)
-  $g.GradientStops.Add((New-Object System.Windows.Media.GradientStop([System.Windows.Media.ColorConverter]::ConvertFromString($T.GradA), 0)))
-  $g.GradientStops.Add((New-Object System.Windows.Media.GradientStop([System.Windows.Media.ColorConverter]::ConvertFromString($T.GradB), 1)))
-  $g.Freeze(); $script:TabGradient = $g
   $script:Clear = [System.Windows.Media.Brushes]::Transparent
   $x = $script:stylesTemplate
   foreach ($k in 'MenuBg', 'Edge', 'Ink', 'MenuHover', 'Line', 'TipBg', 'TipFg', 'Thumb') { $x = $x.Replace("{$k}", $T[$k]) }
@@ -441,6 +435,7 @@ function Open-Count([string]$name) {
 function Tab-Signature {
   $parts = @(Get-ChildItem -LiteralPath $listsDir -Filter *.md -File | ForEach-Object { "$($_.Name):$($_.LastWriteTimeUtc.Ticks)" })
   foreach ($f in @($orderFile, (Join-Path $listsDir '.remotes.json'))) { if (Test-Path -LiteralPath $f) { $parts += (Get-Item -LiteralPath $f).LastWriteTimeUtc.Ticks } }
+  $parts += (Get-Date).ToString('yyyy-MM-dd')   # (what is due today changes at midnight)
   if ($script:sync -and $script:sync.SharedByMe) { $parts += (@($script:sync.SharedByMe.Keys) | Sort-Object) -join ',' }   # badges of lists shared by this PC
   return ($parts -join '|')
 }
@@ -1149,7 +1144,7 @@ function Nudge-Task($it, [int]$dir) {
   $script:sel = $it; Save-Items; Render
 }
 
-# ---------------------------------------------------------------- row menu (right-click / Ctrl+M) + move to project
+# ---------------------------------------------------------------- row menu (right-click / Ctrl+M) + move to list
 function Show-RowMenu($target, $it) {
   Commit-Edit
   $script:sel = $it
@@ -1168,11 +1163,9 @@ function Show-RowMenu($target, $it) {
   $others = @(Get-ProjectNames | Where-Object { $_ -ne $script:proj } | Where-Object { $sb = Get-ShareOf $_; -not ($sb -and [string]$sb['access'] -ne 'edit') })
   if ($others.Count) {
     [void]$m.Items.Add((New-Separator))
-    foreach ($p in $others) {
-      $mi = New-MenuItem "Move to $p"; $mi.Tag = @{ It = $it; P = $p }
-      $mi.Add_Click({ param($s, $e) Move-ToProject $s.Tag.It $s.Tag.P })
-      [void]$m.Items.Add($mi)
-    }
+    $mv = New-MenuItem 'Move to list...'; $mv.Tag = @{ It = $it; T = $target; Others = $others }
+    $mv.Add_Click({ param($s, $e) Show-MoveMenu $s.Tag.T $s.Tag.It $s.Tag.Others })
+    [void]$m.Items.Add($mv)
   }
   [void]$m.Items.Add((New-Separator))
   $del = New-MenuItem 'Delete'; $del.Tag = $it; $del.Add_Click({ param($s, $e) Delete-Task $s.Tag })
@@ -1180,6 +1173,16 @@ function Show-RowMenu($target, $it) {
   $m.PlacementTarget = $target; $m.Placement = 'MousePoint'
   if ($target -ne $null -and -not $target.IsMouseOver) { $m.Placement = 'Bottom' }
   $m.IsOpen = $true
+  $script:openPopup = $m
+}
+function Show-MoveMenu($target, $it, $lists) {
+  $m = New-Menu
+  foreach ($p in $lists) {
+    $mi = New-MenuItem $p; $mi.Tag = @{ It = $it; P = $p }
+    $mi.Add_Click({ param($s, $e) Move-ToProject $s.Tag.It $s.Tag.P })
+    [void]$m.Items.Add($mi)
+  }
+  $m.PlacementTarget = $target; $m.Placement = 'Bottom'; $m.IsOpen = $true
   $script:openPopup = $m
 }
 function Serialize-Block($block, [string]$eol = "`n") { return (ConvertTo-MarkdownText $block $block[0].Level $eol) }   # ids move along
@@ -1492,68 +1495,82 @@ function Switch-Project([string]$name) {
   Render
 }
 
-function New-Tab([string]$name) {
-  $active = ($name -eq $script:proj)
-  $b = New-Control 'tab' $name 'Left / Right switch projects; Shift+F10 to rename or delete' { param($s, $e) if ($s.Tag -ne $script:proj) { Switch-Project $s.Tag } }
-  if ($script:HasA11y) { $b.IsSelected = $active }
-  [System.Windows.Input.KeyboardNavigation]::SetIsTabStop($b, $active)   # one Tab stop: the current project
-  $b.CornerRadius = New-Object System.Windows.CornerRadius($Tokens.Radius.tab, $Tokens.Radius.tab, 0, 0)
-  $b.Padding = '9,7,9,8'; $b.Margin = '0,0,2,0'; $b.Cursor = 'Hand'; $b.Tag = $name; $b.VerticalAlignment = 'Bottom'
-  $sp = New-Object System.Windows.Controls.StackPanel; $sp.Orientation = 'Horizontal'
-  $t = New-Object System.Windows.Controls.TextBlock
-  $t.Text = $name; $t.FontFamily = $UI; $t.FontSize = $TypeSize.label; $t.FontWeight = 'Medium'
-  if ($active) {
-    # the one bold place: the active tab carries the icon's violet-to-amber gradient
-    $b.Background = $Card; $b.BorderBrush = $script:TabGradient; $b.BorderThickness = '0,3,0,0'; $b.Padding = '9,4,9,8'
-    $t.FontWeight = 'SemiBold'; $t.Foreground = $Ink
-  } else { $b.Background = $Clear; $t.Foreground = $TabInk }
-  # a long name ends in an ellipsis so one project can't push the others out; the tooltip has it in full
-  $t.Measure((New-Object System.Windows.Size([double]::PositiveInfinity, [double]::PositiveInfinity)))
-  if ($t.DesiredSize.Width -gt 150) { $t.MaxWidth = 150; $t.TextTrimming = 'CharacterEllipsis'; $b.ToolTip = $name }
-  [void]$sp.Children.Add($t)
-  # shared: a small badge (people; an eye for a list that is view-only here)
-  $share = Get-ShareOf $name
-  $byMe = (-not $share) -and (Test-SharedByMe $name)
-  $label = $name
-  if ($share -or $byMe) {
-    $bd = New-Object System.Windows.Controls.TextBlock
-    $bd.Text = $(if ($share -and [string]$share['access'] -ne 'edit') { G 0xE7B3 } else { G 0xE716 }); $bd.FontFamily = $MDL2; $bd.FontSize = 10.5
-    $bd.Foreground = $(if ($active) { $Accent } else { $Faint }); $bd.Margin = '6,1,0,0'; $bd.VerticalAlignment = 'Center'
-    $what = $(if ($share) { "Shared with you from $(Get-ShareHost $share): $($script:AccessText[[string]$share['access']][0].ToLower())" } else { 'Shared with others' })
-    $bd.ToolTip = $what
-    [void]$sp.Children.Add($bd)
-    $label = "$name, $($what.Split(':')[0].ToLower())"
-  }
-  $cnt = Open-Count $name
-  if ($cnt -gt 0) {
-    $c = New-Object System.Windows.Controls.TextBlock
-    $c.Text = "$cnt"; $c.FontFamily = $UI; $c.FontSize = $TypeSize.small; $c.FontWeight = 'Medium'; $c.Foreground = $Faint
-    $c.Margin = '6,0,0,0'; $c.VerticalAlignment = 'Center'; Set-Tabular $c
-    [void]$sp.Children.Add($c)
-    $label += ", $cnt open"
-  }
-  Set-Name $b $label
-  # the current tab of one of this PC's own lists: a share button, shown while the mouse is over the tab
-  if ($active -and -not $share) {
-    $shb = New-Object System.Windows.Controls.Border
-    $shb.Background = $Clear; $shb.Padding = '3,0,0,0'; $shb.Margin = '4,0,-2,0'; $shb.Cursor = 'Hand'; $shb.VerticalAlignment = 'Center'; $shb.Visibility = 'Hidden'
-    $shb.ToolTip = $(if ($script:ownSync) { 'Share...' } else { $script:ShareNeedsSync })
-    $sg = New-Object System.Windows.Controls.TextBlock; $sg.Text = G 0xE72D; $sg.FontFamily = $MDL2; $sg.FontSize = 10.5; $sg.Foreground = $TabInk
-    $shb.Child = $sg; $shb.Tag = $name
-    $shb.Add_MouseLeftButtonDown({ param($s, $e) $e.Handled = $true; Show-Share $s.Tag })
-    [void]$sp.Children.Add($shb)
-    $b.Add_MouseEnter({ param($s, $e) $s.Child.Children[$s.Child.Children.Count - 1].Visibility = 'Visible' })
-    $b.Add_MouseLeave({ param($s, $e) $s.Child.Children[$s.Child.Children.Count - 1].Visibility = 'Hidden' })
-  }
-  $b.Child = $sp
-  if (-not $active) {
-    $b.Add_MouseEnter({ param($s, $e) $s.Background = $TabHover })
-    $b.Add_MouseLeave({ param($s, $e) $s.Background = $Clear })
-  }
-  $b.Add_MouseLeftButtonDown({ param($s, $e)
-    $e.Handled = $true
-    if ($e.ClickCount -ge 2) { if (-not (Get-ShareOf $s.Tag)) { Begin-TabEdit $s } } elseif ($s.Tag -ne $script:proj) { Switch-Project $s.Tag } })
+# ---------------------------------------------------------------- the list switcher (docs/design.md, "The list switcher")
+# The title at the top is the current list's name with a small chevron: one menu button that opens the lists menu
+# (a popup under it: a row per list, then New list). A list's own menu (the old tab menu) is the right-click menu
+# of a row, or of the title for the current list.
+$script:listNames = @(); $script:listInfo = @{}; $script:titleBtn = $null; $script:titleChev = $null
+$script:listsPopup = $null; $script:listsClosedAt = [datetime]::MinValue; $script:listsRefocus = $false
+$script:listsRows = New-Object System.Collections.ArrayList
 
+# open tasks of a list, how many of them are due today or earlier, and how many of those are overdue
+function Get-ListInfo([string]$name) {
+  $r = @{ Open = 0; Due = 0; Over = 0 }
+  $now = Get-Date
+  foreach ($l in (Read-Lines (Proj-Path $name))) {
+    if ($l -notmatch '^\s*[-*]\s+\[[ /!]\]\s*\S') { continue }
+    $r.Open++
+    if ($l -match '(?i)\sdue:(\d{4}-\d{2}-\d{2})(?:T(\d{1,2}:\d{2}))?(?=\s|$)') {
+      try {
+        $d = [datetime]::ParseExact($matches[1], 'yyyy-MM-dd', $CI)
+        if ((Get-DueTone $matches[1] $matches[2] $false $now) -eq 'over') { $r.Over++; $r.Due++ }
+        elseif (($d - $now.Date).Days -le 0) { $r.Due++ }
+      } catch {}
+    }
+  }
+  return $r
+}
+
+# the little badge of a shared list (people; an eye for a list that is view-only here); its Tag says what it means
+function New-ShareBadge([string]$name, $ink) {
+  $share = Get-ShareOf $name
+  if (-not $share -and -not (Test-SharedByMe $name)) { return $null }
+  $bd = New-Object System.Windows.Controls.TextBlock
+  $bd.Text = $(if ($share -and [string]$share['access'] -ne 'edit') { G 0xE7B3 } else { G 0xE716 }); $bd.FontFamily = $MDL2; $bd.FontSize = 10.5
+  $bd.Foreground = $ink; $bd.VerticalAlignment = 'Center'
+  $what = $(if ($share) { "Shared with you from $(Get-ShareHost $share): $($script:AccessText[[string]$share['access']][0].ToLower())" } else { 'Shared with others' })
+  $bd.ToolTip = $what; $bd.Tag = $what
+  return $bd
+}
+
+function New-TitleButton {
+  $name = [string]$script:proj
+  $open = [bool]($script:listsPopup -and $script:listsPopup.IsOpen)
+  $other = @($script:listNames | Where-Object { $_ -ne $name -and $script:listInfo[$_] -and $script:listInfo[$_].Due -gt 0 })
+  $b = New-Control 'disclosure' $name 'Shows your lists' { param($s, $e) Toggle-ListsMenu }
+  if ($script:HasA11y) { $b.IsExpanded = $open }
+  $b.CornerRadius = New-Object System.Windows.CornerRadius($Tokens.Radius.control); $b.Padding = '8,4,8,4'; $b.Cursor = 'Hand'; $b.Background = $Clear
+  $dp = New-Object System.Windows.Controls.DockPanel
+  $chev = New-Object System.Windows.Controls.TextBlock
+  $chev.Text = G 0xE70D; $chev.FontFamily = $MDL2; $chev.FontSize = 9; $chev.Foreground = $TabInk; $chev.VerticalAlignment = 'Center'; $chev.Margin = '8,2,0,0'
+  $chev.RenderTransformOrigin = New-Object System.Windows.Point(0.5, 0.5)
+  $chev.RenderTransform = New-Object System.Windows.Media.RotateTransform($(if ($open) { 180 } else { 0 }))
+  [System.Windows.Controls.DockPanel]::SetDock($chev, 'Right'); [void]$dp.Children.Add($chev)
+  $script:titleChev = $chev
+  $tip = $name; $help = 'Shows your lists'
+  if ($other.Count) {
+    $dot = New-Object System.Windows.Shapes.Ellipse; $dot.Width = 7; $dot.Height = 7; $dot.Fill = $Accent; $dot.VerticalAlignment = 'Center'; $dot.Margin = '8,2,0,0'
+    [System.Windows.Controls.DockPanel]::SetDock($dot, 'Right'); [void]$dp.Children.Add($dot)
+    $tip += "`nDue today or earlier in: " + ($other -join ', '); $help = 'Shows your lists. Something is due in ' + ($other -join ', ')
+  }
+  $label = $name
+  $bd = New-ShareBadge $name $Faint
+  if ($bd) { $bd.Margin = '8,2,0,0'; [System.Windows.Controls.DockPanel]::SetDock($bd, 'Right'); [void]$dp.Children.Add($bd); $label += ', ' + ([string]$bd.Tag).Split(':')[0].ToLower() }
+  $t = New-Object System.Windows.Controls.TextBlock
+  $t.Text = $name; $t.FontFamily = $UI; $t.FontSize = $TypeSize.title; $t.FontWeight = 'SemiBold'; $t.Foreground = $Ink
+  $t.TextTrimming = 'CharacterEllipsis'; $t.TextWrapping = 'NoWrap'; $t.VerticalAlignment = 'Center'
+  [void]$dp.Children.Add($t)
+  $b.Child = $dp; $b.ToolTip = $tip; Set-Name $b $label $help
+  $b.Add_MouseEnter({ param($s, $e) $s.Background = $TabHover })
+  $b.Add_MouseLeave({ param($s, $e) $s.Background = $Clear })
+  $b.Add_MouseLeftButtonDown({ param($s, $e) $e.Handled = $true; Toggle-ListsMenu })
+  $b.ContextMenu = New-ListContextMenu $name
+  return $b
+}
+
+# a list's own menu: share, rename, delete; for a list shared with you, where it comes from and leaving it
+function New-ListContextMenu([string]$name) {
+  $share = Get-ShareOf $name
   $m = New-Menu
   if ($share) {
     # someone else's list: its name and its deletion are theirs; leaving takes it off this PC only
@@ -1567,31 +1584,165 @@ function New-Tab([string]$name) {
     $mi0 = New-MenuItem 'Share...'; $mi0.Tag = $name
     $mi0.Add_Click({ param($s, $e) Show-Share $s.Tag })
     if (-not $script:ownSync) { $mi0.IsEnabled = $false; $mi0.ToolTip = $script:ShareNeedsSync; [System.Windows.Controls.ToolTipService]::SetShowOnDisabled($mi0, $true) }
-    $mi1 = New-MenuItem 'Rename'; $mi1.Tag = $b
+    $mi1 = New-MenuItem 'Rename'; $mi1.Tag = $name
     $mi1.Add_Click({ param($s, $e) Begin-TabEdit $s.Tag })
-    $mi2 = New-MenuItem 'Delete project'; $mi2.Tag = $name
+    $mi2 = New-MenuItem 'Delete list'; $mi2.Tag = $name
     $mi2.Add_Click({ param($s, $e) Delete-Project $s.Tag })
     foreach ($x in @($mi0, $mi1, $mi2)) { [void]$m.Items.Add($x) }
   }
-  $b.ContextMenu = $m
+  return $m
+}
+function Show-ListMenu([string]$name, [bool]$below) {
+  $m = New-ListContextMenu $name
+  $m.PlacementTarget = $script:titleBtn; $m.Placement = $(if ($below) { 'Bottom' } else { 'MousePoint' })
+  $m.IsOpen = $true
+  $script:openPopup = $m
+}
+
+# the title after the menu closed (by a key or a choice at once, by a click outside when its Closed event comes)
+function Reset-ListsTitle {
+  $script:listsClosedAt = [datetime]::UtcNow
+  if ($script:titleBtn) { if ($script:HasA11y) { $script:titleBtn.IsExpanded = $false }; if ($script:titleChev) { $script:titleChev.RenderTransform = New-Object System.Windows.Media.RotateTransform(0) } }
+  if ($script:listsRefocus) { $script:listsRefocus = $false; if ($script:titleBtn) { [void]$script:titleBtn.Focus() } }
+}
+function Close-ListsMenu([bool]$refocus) {
+  $script:listsRefocus = $refocus
+  if ($script:listsPopup) { $script:listsPopup.IsOpen = $false }
+  Reset-ListsTitle
+}
+function Toggle-ListsMenu {
+  if ($script:listsPopup -and $script:listsPopup.IsOpen) { Close-ListsMenu $true; return }
+  if (([datetime]::UtcNow - $script:listsClosedAt).TotalMilliseconds -lt 250) { return }   # the click that just closed it
+  Show-ListsMenu
+}
+function Choose-List([string]$name) {
+  Close-ListsMenu $true
+  if ($name -ne $script:proj) { Switch-Project $name }
+}
+
+function New-ListRow([string]$name) {
+  $cur = ($name -eq $script:proj)
+  $info = $script:listInfo[$name]
+  $label = $name
+  $b = New-Control 'radio' $name '' { param($s, $e) Choose-List ([string]$s.Tag) }
+  if ($script:HasA11y) { $b.IsSelected = $cur }
+  $b.Tag = $name; $b.CornerRadius = New-Object System.Windows.CornerRadius($Tokens.Radius.control); $b.Padding = '10,9,12,9'; $b.Cursor = 'Hand'; $b.Background = $Clear
+  $g = New-Object System.Windows.Controls.Grid
+  foreach ($wd in @('22', '*', 'Auto', 'Auto')) { $cd = New-Object System.Windows.Controls.ColumnDefinition; $cd.Width = $wd; $g.ColumnDefinitions.Add($cd) }
+  if ($cur) {
+    $ck = New-Object System.Windows.Controls.TextBlock; $ck.Text = G 0xE73E; $ck.FontFamily = $MDL2; $ck.FontSize = 11; $ck.Foreground = $Accent
+    $ck.VerticalAlignment = 'Top'; $ck.Margin = '0,4,0,0'
+    [void]$g.Children.Add($ck)
+  }
+  $t = New-Object System.Windows.Controls.TextBlock
+  $t.Text = $name; $t.FontFamily = $UI; $t.FontSize = $TypeSize.label; $t.Foreground = $Ink; $t.TextWrapping = 'Wrap'
+  if ($cur) { $t.FontWeight = 'SemiBold' }
+  [System.Windows.Controls.Grid]::SetColumn($t, 1); [void]$g.Children.Add($t)
+  $bd = New-ShareBadge $name $Faint
+  if ($bd) {
+    $bd.Margin = '8,4,0,0'; $bd.VerticalAlignment = 'Top'; [System.Windows.Controls.Grid]::SetColumn($bd, 2); [void]$g.Children.Add($bd)
+    $label += ', ' + ([string]$bd.Tag).Split(':')[0].ToLower()
+  }
+  $v = $null
+  if ($info.Due -gt 0) {
+    $v = "$($info.Due) due"; $ink = $(if ($info.Over -gt 0) { $Red } else { $Amber })
+    $label += ", $($info.Due) due" + $(if ($info.Over -gt 0) { ", $($info.Over) overdue" })
+  } elseif ($info.Open -gt 0) { $v = "$($info.Open)"; $ink = $Faint; $label += ", $($info.Open) open" }
+  if ($v) {
+    $vt = New-Object System.Windows.Controls.TextBlock
+    $vt.Text = $v; $vt.FontFamily = $UI; $vt.FontSize = $TypeSize.meta; $vt.Foreground = $ink; $vt.Margin = '12,2,0,0'; $vt.VerticalAlignment = 'Top'; Set-Tabular $vt
+    [System.Windows.Controls.Grid]::SetColumn($vt, 3); [void]$g.Children.Add($vt)
+  }
+  $b.Child = $g; Set-Name $b $label
+  $b.Add_MouseEnter({ param($s, $e) $s.Background = $MenuHover })
+  $b.Add_MouseLeave({ param($s, $e) $s.Background = $Clear })
+  $b.Add_MouseLeftButtonUp({ param($s, $e) $e.Handled = $true; Choose-List ([string]$s.Tag) })
+  $b.Add_MouseRightButtonUp({ param($s, $e) $e.Handled = $true; $n = [string]$s.Tag; Close-ListsMenu $false; Show-ListMenu $n $false })
   return $b
+}
+
+function Show-ListsMenu {
+  Commit-Edit
+  if ($script:tabEditing) { return }
+  $script:listNames = @(Get-ProjectNames)
+  foreach ($n in $script:listNames) { $script:listInfo[$n] = Get-ListInfo $n }   # (fresh: the dot may be a minute old)
+  $p = New-Object System.Windows.Controls.Primitives.Popup
+  $p.AllowsTransparency = $true; $p.StaysOpen = $false; $p.PlacementTarget = $script:titleBtn; $p.Placement = 'Bottom'
+  $outer = New-Object System.Windows.Controls.Border
+  $outer.Background = $MenuBg; $outer.BorderBrush = $Edge; $outer.BorderThickness = '1'; $outer.CornerRadius = 10; $outer.Padding = '4'; $outer.Margin = '0,0,10,10'
+  $outer.Effect = New-Object System.Windows.Media.Effects.DropShadowEffect -Property @{ BlurRadius = 14; ShadowDepth = 3; Opacity = 0.3 }
+  $col = New-Object System.Windows.Controls.StackPanel
+  $col.Width = [math]::Min(320, [math]::Max(200, $w.ActualWidth - 50))
+  $script:listsRows.Clear()
+  $sp = New-Object System.Windows.Controls.StackPanel
+  $first = $true
+  foreach ($n in $script:listNames) {
+    if (-not $first) {
+      $hl = New-Object System.Windows.Controls.Border; $hl.Height = 1; $hl.Background = $GroupLine; $hl.Margin = '32,0,8,0'; [void]$sp.Children.Add($hl)
+    }
+    $first = $false
+    $row = New-ListRow $n
+    [void]$script:listsRows.Add($row); [void]$sp.Children.Add($row)
+  }
+  $sv = New-Object System.Windows.Controls.ScrollViewer
+  $sv.VerticalScrollBarVisibility = 'Auto'; $sv.HorizontalScrollBarVisibility = 'Disabled'; $sv.Focusable = $false
+  $sv.MaxHeight = [math]::Max(120, $w.ActualHeight - 150); $sv.Content = $sp
+  $card = New-Object System.Windows.Controls.Border
+  $card.Background = $GroupBg; $card.CornerRadius = New-Object System.Windows.CornerRadius($CardRadius); $card.Padding = '2'; $card.Child = $sv
+  [void]$col.Children.Add($card)
+  # New list: a card of its own after a small gap, in the accent colour
+  $nb = New-Control 'button' 'New list' '' { param($s, $e) Close-ListsMenu $false; Begin-TabEdit $null }
+  $nb.CornerRadius = New-Object System.Windows.CornerRadius($Tokens.Radius.control); $nb.Padding = '10,9,12,9'; $nb.Cursor = 'Hand'; $nb.Background = $Clear
+  $ng = New-Object System.Windows.Controls.StackPanel; $ng.Orientation = 'Horizontal'
+  $np = New-Object System.Windows.Controls.TextBlock; $np.Text = G 0xE710; $np.FontFamily = $MDL2; $np.FontSize = 11; $np.Foreground = $Accent; $np.Width = 22; $np.VerticalAlignment = 'Center'
+  $nt = New-Object System.Windows.Controls.TextBlock; $nt.Text = 'New list'; $nt.FontFamily = $UI; $nt.FontSize = $TypeSize.label; $nt.FontWeight = 'Medium'; $nt.Foreground = $Accent; $nt.VerticalAlignment = 'Center'
+  [void]$ng.Children.Add($np); [void]$ng.Children.Add($nt); $nb.Child = $ng
+  $nb.Add_MouseEnter({ param($s, $e) $s.Background = $MenuHover })
+  $nb.Add_MouseLeave({ param($s, $e) $s.Background = $Clear })
+  $nb.Add_MouseLeftButtonUp({ param($s, $e) $e.Handled = $true; Close-ListsMenu $false; Begin-TabEdit $null })
+  $nc = New-Object System.Windows.Controls.Border
+  $nc.Background = $GroupBg; $nc.CornerRadius = New-Object System.Windows.CornerRadius($CardRadius); $nc.Padding = '2'; $nc.Margin = '0,8,0,0'; $nc.Child = $nb
+  [void]$col.Children.Add($nc)
+  [void]$script:listsRows.Add($nb)
+  $outer.Child = $col
+  $outer.Add_PreviewKeyDown({ param($s, $e)
+    $k = "$($(if ($e.Key -eq 'System') { $e.SystemKey } else { $e.Key }))"
+    $shift = ([System.Windows.Input.Keyboard]::Modifiers -band [System.Windows.Input.ModifierKeys]::Shift) -ne 0
+    $rows = $script:listsRows; $f = [System.Windows.Input.Keyboard]::FocusedElement; $i = $rows.IndexOf($f)
+    if ($k -eq 'Down') { $e.Handled = $true; [void]$rows[($i + 1) % $rows.Count].Focus() }
+    elseif ($k -eq 'Up') { $e.Handled = $true; [void]$rows[$(if ($i -le 0) { $rows.Count - 1 } else { $i - 1 })].Focus() }
+    elseif ($k -eq 'Home') { $e.Handled = $true; [void]$rows[0].Focus() }
+    elseif ($k -eq 'End') { $e.Handled = $true; [void]$rows[$rows.Count - 1].Focus() }
+    elseif ($k -eq 'Escape' -or $k -eq 'Tab') { $e.Handled = $true; Close-ListsMenu $true }
+    elseif (($k -eq 'Apps' -or ($k -eq 'F10' -and $shift)) -and $i -ge 0 -and $f.Tag) { $e.Handled = $true; $n = [string]$f.Tag; Close-ListsMenu $false; Show-ListMenu $n $true }
+  })
+  $p.Child = $outer
+  $p.Add_Closed({ param($s, $e) Reset-ListsTitle })
+  $script:listsPopup = $p
+  $script:listsRefocus = $false
+  if ($script:HasA11y) { $script:titleBtn.IsExpanded = $true }
+  $script:titleChev.RenderTransform = New-Object System.Windows.Media.RotateTransform(180)
+  $p.IsOpen = $true
+  $script:openPopup = $p
+  $cur = $null; foreach ($r in $script:listsRows) { if ($r.Tag -eq $script:proj) { $cur = $r } }
+  if (-not $cur) { $cur = $script:listsRows[0] }
+  [void]$cur.Focus()
 }
 
 function Render-Tabs {
   if ($script:tabEditing) { return }
+  if ($script:listsPopup -and $script:listsPopup.IsOpen) { return }   # (the timer comes back for it when the menu is closed)
   Update-Bindings
   $script:ownSync = [bool](Read-SyncConfigUi)   # (sharing needs this PC's own sync)
   foreach ($n in @($script:leaving.Keys)) { if (-not (Test-Path -LiteralPath (Proj-Path $n))) { $script:leaving.Remove($n) } }
-  $hadFocus = $tabs.IsKeyboardFocusWithin
-  $tabs.Children.Clear()
-  foreach ($n in @(Get-ProjectNames)) { [void]$tabs.Children.Add((New-Tab $n)) }
-  if ($hadFocus) { foreach ($c in $tabs.Children) { if ($c.Tag -eq $script:proj) { [void]$c.Focus() } } }   # keyboard users keep their place
-  $plus = New-IconButton 0xE710 'New project' { param($s, $e) Begin-TabEdit $null }
-  $plus.Padding = '9,6,9,11'; $plus.Margin = '2,0,0,0'; $plus.Child.Foreground = $Faint; $plus.VerticalAlignment = 'Bottom'
-  $plus.Add_MouseLeftButtonDown({ param($s, $e) $e.Handled = $true; Begin-TabEdit $null })
-  $tabPlusHost.Child = $plus   # outside the scrolling tabs, so it never scrolls out of reach
+  $hadFocus = $titleHost.IsKeyboardFocusWithin
+  $script:listNames = @(Get-ProjectNames)
+  $script:listInfo = @{}
+  foreach ($n in $script:listNames) { $script:listInfo[$n] = Get-ListInfo $n }
+  $script:titleBtn = New-TitleButton
+  $titleHost.Child = $script:titleBtn
+  if ($hadFocus) { [void]$script:titleBtn.Focus() }   # keyboard users keep their place
   $script:tabSig = Tab-Signature
-  Queue-ShowActiveTab
 }
 function Cycle-Project([int]$dir) {
   $names = @(Get-ProjectNames); if ($names.Count -lt 2) { return }
@@ -1599,24 +1750,25 @@ function Cycle-Project([int]$dir) {
   Switch-Project $names[(($i + $dir) % $names.Count + $names.Count) % $names.Count]
 }
 
-function Begin-TabEdit($tabBorder) {
+function Begin-TabEdit($name) {   # a list's name (rename), or $null for a new list
   Commit-Edit
   if ($script:tabEditing) { return }
-  if ($tabBorder -and (Get-ShareOf ([string]$tabBorder.Tag))) { Show-Notice 'Only its owner can rename a shared list.'; return }
+  if ($name -and (Get-ShareOf ([string]$name))) { Show-Notice 'Only its owner can rename a shared list.'; return }
   $script:tabEditing = $true
   $box = New-Object System.Windows.Controls.TextBox
-  Set-Name $box 'Project name' 'Enter saves, Esc cancels'
-  $box.FontFamily = $UI; $box.FontSize = $TypeSize.label; $box.MinWidth = 80; $box.Padding = '4,3,4,3'
-  $box.Margin = '0,0,2,4'; $box.VerticalAlignment = 'Bottom'; $box.Background = $Card; $box.Foreground = $Ink
+  Set-Name $box $(if ($name) { 'List name' } else { 'New list name' }) 'Enter saves, Esc cancels'
+  $box.FontFamily = $UI; $box.FontSize = $TypeSize.label; $box.MinWidth = 160; $box.Padding = '4,3,4,3'
+  $box.VerticalAlignment = 'Center'; $box.Background = $StripBg; $box.Foreground = $Ink
   $box.BorderThickness = '0,0,0,1.5'; $box.BorderBrush = $Accent; $box.CaretBrush = $Accent
-  if ($tabBorder) {
-    $old = [string]$tabBorder.Tag; $box.Text = $old; $box.Tag = $old
-    $idx = $tabs.Children.IndexOf($tabBorder)
-    $tabs.Children.RemoveAt($idx); $tabs.Children.Insert($idx, $box)
-  } else {
-    $box.Tag = ''
-    [void]$tabs.Children.Add($box); $box.BringIntoView()
-  }
+  $old = [string]$name; $box.Text = $old; $box.Tag = $old
+  $hint = New-Object System.Windows.Controls.TextBlock
+  $hint.Text = 'New list'; $hint.FontFamily = $UI; $hint.FontSize = $TypeSize.label; $hint.Foreground = $Faint; $hint.IsHitTestVisible = $false
+  $hint.VerticalAlignment = 'Center'; $hint.Margin = '5,0,0,0'; $hint.Visibility = $(if ($old) { 'Collapsed' } else { 'Visible' })
+  $script:tabHint = $hint
+  $box.Add_TextChanged({ param($s, $e) $script:tabHint.Visibility = $(if ($s.Text) { 'Collapsed' } else { 'Visible' }) })
+  $g = New-Object System.Windows.Controls.Grid
+  [void]$g.Children.Add($box); [void]$g.Children.Add((Hide-Decoration $hint))
+  $titleHost.Child = $g
   $box.Add_PreviewKeyDown({ param($s, $e)
     if ($e.Key -eq 'Return') { $e.Handled = $true; Finish-TabEdit $s $true }
     elseif ($e.Key -eq 'Escape') { $e.Handled = $true; Finish-TabEdit $s $false } })
@@ -1656,7 +1808,7 @@ function Delete-Project([string]$name) {
   if (Get-ShareOf $name) { Leave-SharedList $name; return }   # someone else's list: leave it instead
   $names = @(Get-ProjectNames)
   if ($names.Count -le 1) { return }
-  $r = [System.Windows.MessageBox]::Show($w, "Delete project '$name'?`nIts list is moved to lists\.trash, not erased.", 'Saqme To Do', 'YesNo', 'Warning')
+  $r = [System.Windows.MessageBox]::Show($w, "Delete list '$name'?`nIt is moved to lists\.trash, not erased.", 'Saqme To Do', 'YesNo', 'Warning')
   if ("$r" -ne 'Yes') { return }
   $trash = Join-Path $listsDir '.trash'
   if (-not (Test-Path -LiteralPath $trash)) { [void](New-Item -ItemType Directory -Path $trash) }
@@ -1725,98 +1877,12 @@ if ($logoBmp) {
   $logo.Add_MouseLeftButtonDown({ param($s, $e) $e.Handled = $true; Toggle-Settings })
   [void]$stripGrid.Children.Add($logo)
 }
-$tabs = New-AccessibleList 'tablist' 'Projects'
-$tabs.Orientation = 'Horizontal'; $tabs.VerticalAlignment = 'Bottom'
-[System.Windows.Shell.WindowChrome]::SetIsHitTestVisibleInChrome($tabs, $true)
-# one line like browser tabs: overflow scrolls sideways (mouse wheel / Shift+wheel over the tabs)
-$tabScroll = New-Object System.Windows.Controls.ScrollViewer
-$tabScroll.HorizontalScrollBarVisibility = 'Hidden'; $tabScroll.VerticalScrollBarVisibility = 'Disabled'; $tabScroll.Focusable = $false
-$tabScroll.VerticalAlignment = 'Bottom'; $tabScroll.Content = $tabs
-$tabScroll.Add_PreviewMouseWheel({ param($s, $e) $e.Handled = $true; $s.ScrollToHorizontalOffset($s.HorizontalOffset - $e.Delta / 2) })
-# The tabs take what they need and the "+" follows them. When they don't fit they scroll sideways, fade out
-# at the clipped edge(s), and a "more" button appears that lists every project. The tab area clips, so a tab
-# never draws under the sync and window buttons to its right, and the current project is always scrolled
-# into view (after switching, renaming, adding, resizing).
-$tabHost = New-Object System.Windows.Controls.Grid; $tabHost.VerticalAlignment = 'Bottom'; $tabHost.ClipToBounds = $true
-foreach ($wd in @('Auto', 'Auto', 'Auto', '*')) { $cd = New-Object System.Windows.Controls.ColumnDefinition; $cd.Width = $wd; $tabHost.ColumnDefinitions.Add($cd) }
-$tabMore = New-IconButton 0xE70D 'All projects' { param($s, $e) Show-ProjectMenu $s }
-$tabMore.Width = 26; $tabMore.Margin = '0'; $tabMore.Padding = '0,7,0,11'; $tabMore.VerticalAlignment = 'Bottom'; $tabMore.Visibility = 'Collapsed'
-$tabMore.Child.FontSize = 9; $tabMore.Child.Foreground = $TabInk; $tabMore.Child.HorizontalAlignment = 'Center'
-$tabMore.Add_MouseLeftButtonDown({ param($s, $e) $e.Handled = $true; Show-ProjectMenu $s })
-$tabPlusHost = New-Object System.Windows.Controls.Border; $tabPlusHost.VerticalAlignment = 'Bottom'
-foreach ($x in @($tabMore, $tabPlusHost)) { [System.Windows.Shell.WindowChrome]::SetIsHitTestVisibleInChrome($x, $true) }
-[System.Windows.Controls.Grid]::SetColumn($tabMore, 1); [System.Windows.Controls.Grid]::SetColumn($tabPlusHost, 2)
-[void]$tabHost.Children.Add($tabScroll); [void]$tabHost.Children.Add($tabMore); [void]$tabHost.Children.Add($tabPlusHost)
-# an empty stand-in in the same grid cell measures the room the strip gives the tabs (the tab area itself is
-# laid out at the width it asks for and clipped, so its own ActualWidth can be wider than the room)
-$tabSlot = New-Object System.Windows.Controls.Border
-$TabFade = 24   # px of fade at a clipped edge; a tab scrolled into view clears it
-function Fit-Tabs {
-  # the tabs may take the width the "+" (and, when they overflow, the "more" button) leave them
-  $room = $tabSlot.ActualWidth - $tabPlusHost.ActualWidth
-  if ($room -le 0) { return }
-  $over = $tabs.ActualWidth -gt $room + 0.5
-  $tabMore.Visibility = $(if ($over) { 'Visible' } else { 'Collapsed' })
-  if ($over) { $room -= $tabMore.Width }
-  $tabScroll.MaxWidth = [math]::Max(0, $room)
-  Queue-ShowActiveTab
-}
-function Queue-ShowActiveTab {
-  if ($script:tabShowQueued) { return }
-  $script:tabShowQueued = $true
-  [void]$tabs.Dispatcher.BeginInvoke([action]{ $script:tabShowQueued = $false; Show-ActiveTab }, [System.Windows.Threading.DispatcherPriority]::Loaded)
-}
-function Show-ActiveTab {
-  # the project name being typed, else the current project's tab
-  $target = $null
-  foreach ($c in $tabs.Children) {
-    if ($c -is [System.Windows.Controls.TextBox]) { $target = $c; break }
-    if ($c.Tag -eq $script:proj) { $target = $c }
-  }
-  $vw = $tabScroll.ViewportWidth
-  if (-not $target -or $vw -le 0) { return }
-  try { $x = $target.TransformToAncestor($tabs).Transform((New-Object System.Windows.Point(0, 0))).X } catch { return }
-  $left = $x - $TabFade; $right = $x + $target.ActualWidth + $TabFade - $vw
-  if ($left -lt $tabScroll.HorizontalOffset) { $tabScroll.ScrollToHorizontalOffset([math]::Max(0, $left)) }
-  elseif ($right -gt $tabScroll.HorizontalOffset) { $tabScroll.ScrollToHorizontalOffset([math]::Min($left, $right)) }
-}
-function Update-TabFade {
-  $vw = $tabScroll.ViewportWidth; $off = $tabScroll.HorizontalOffset
-  $l = $off -gt 0.5; $r = $off + $vw -lt $tabScroll.ExtentWidth - 0.5
-  if ($vw -le 2 * $TabFade -or -not ($l -or $r)) { $tabScroll.OpacityMask = $null; return }
-  $m = New-Object System.Windows.Media.LinearGradientBrush
-  $m.StartPoint = New-Object System.Windows.Point(0, 0); $m.EndPoint = New-Object System.Windows.Point(1, 0)
-  $f = $TabFade / $vw
-  # transparent at a clipped edge, opaque everywhere else
-  foreach ($st in @(@($l, 0), @($false, $f), @($false, (1 - $f)), @($r, 1))) {
-    $m.GradientStops.Add((New-Object System.Windows.Media.GradientStop($(if ($st[0]) { [System.Windows.Media.Colors]::Transparent } else { [System.Windows.Media.Colors]::Black }), $st[1])))
-  }
-  $tabScroll.OpacityMask = $m
-}
-function Show-ProjectMenu($s) {
-  Commit-Edit
-  $m = New-Menu
-  foreach ($n in @(Get-ProjectNames)) {
-    $mi = New-MenuItem $null; $mi.Tag = $n
-    $hd = New-Object System.Windows.Controls.StackPanel; $hd.Orientation = 'Horizontal'
-    $t = New-Object System.Windows.Controls.TextBlock; $t.Text = $n
-    if ($n -eq $script:proj) { $t.FontWeight = 'SemiBold' }
-    [void]$hd.Children.Add($t)
-    $cnt = Open-Count $n
-    if ($cnt -gt 0) {
-      $c = New-Object System.Windows.Controls.TextBlock; $c.Text = "$cnt"; $c.Foreground = $Faint; $c.Margin = '8,0,0,0'; Set-Tabular $c
-      [void]$hd.Children.Add($c)
-    }
-    $mi.Header = $hd
-    Set-Name $mi ($n + $(if ($cnt -gt 0) { ", $cnt open" }) + $(if ($n -eq $script:proj) { ', current' }))
-    $mi.Add_Click({ param($x, $e) if ($x.Tag -ne $script:proj) { Switch-Project $x.Tag } })
-    [void]$m.Items.Add($mi)
-  }
-  $m.PlacementTarget = $s; $m.Placement = 'Bottom'; $m.IsOpen = $true
-}
-$tabScroll.Add_ScrollChanged({ Update-TabFade })
-foreach ($x in @($tabSlot, $tabs, $tabPlusHost)) { $x.Add_SizeChanged({ Fit-Tabs }) }
-foreach ($x in @($tabSlot, $tabHost)) { [System.Windows.Controls.Grid]::SetColumn($x, 1); [void]$stripGrid.Children.Add($x) }
+# the title: the current list's name, which opens the lists menu (Render-Tabs fills it); it takes the room the
+# buttons on its right leave, and a long name ends in an ellipsis
+$titleHost = New-Object System.Windows.Controls.Border
+$titleHost.VerticalAlignment = 'Center'; $titleHost.HorizontalAlignment = 'Left'; $titleHost.Margin = '0,0,4,6'
+[System.Windows.Shell.WindowChrome]::SetIsHitTestVisibleInChrome($titleHost, $true)
+[System.Windows.Controls.Grid]::SetColumn($titleHost, 1); [void]$stripGrid.Children.Add($titleHost)
 $countText = New-Object System.Windows.Controls.TextBlock
 $countText.FontFamily = $UI; $countText.FontSize = $TypeSize.small; $countText.Foreground = $Faint; Set-Tabular $countText
 $countText.VerticalAlignment = 'Center'; $countText.Margin = '6,0,4,5'
@@ -2252,16 +2318,17 @@ $script:Keybinds = @(
   @('Tab / Shift+Tab', 'Subtask / back out'),
   @('Esc', 'Cancel'),
   @('Ctrl+Enter', 'Save the notes'),
-  @('', 'Projects and app'),
+  @('', 'Lists and app'),
   @('Tab / Shift+Tab', 'Move around the window'),
-  @('Left / Right', 'Switch projects (on a tab)'),
+  @('Left / Right', 'Switch lists (on the title)'),
+  @('Down', 'Open the lists menu (on the title)'),
   @('Enter / Space', 'Use the focused button'),
-  @('Shift+F10', 'Menu of the tab or task'),
-  @('Ctrl+Tab / Ctrl+Shift+Tab', 'Next / previous project'),
-  @('Wheel', 'Scroll the tabs (over them)'),
+  @('Shift+F10', 'Menu of the list or task'),
+  @('Ctrl+Tab / Ctrl+Shift+Tab', 'Next / previous list'),
+  @('Up / Down / Home / End', 'Move in the lists menu (Enter chooses, Esc closes)'),
   @('Ctrl+,', 'Settings, and back'),
   @('Esc', 'Back one level'),
-  @('#', 'Tab goes through the tabs, the window buttons, the list (one stop: the selected task) and the new-task box. Esc goes from a Settings page to Settings, and from Settings to the list.')
+  @('#', 'Tab goes through the title, the window buttons, the list (one stop: the selected task) and the new-task box. Esc goes from a Settings page to Settings, and from Settings to the list.')
 )
 
 function Toggle-Settings {
@@ -3704,9 +3771,10 @@ $w.Add_PreviewKeyDown({
   $f = [System.Windows.Input.Keyboard]::FocusedElement
   if ($script:HasA11y -and $f -is [Saqme.AccessibleBorder] -and $f.Role -ne 'listitem' -and -not $ctrl -and -not $alt) {
     if ($key -eq 'Return' -or $key -eq 'Space') { return }   # the focused button's own action (its KeyDown)
-    if ($f.Role -eq 'tab' -and ($key -eq 'Left' -or $key -eq 'Right')) {
+    if ($f -eq $script:titleBtn -and ($key -eq 'Left' -or $key -eq 'Right')) {
       $e.Handled = $true; Commit-Edit; Cycle-Project $(if ($key -eq 'Left') { -1 } else { 1 }); return
     }
+    if ($f -eq $script:titleBtn -and $key -eq 'Down') { $e.Handled = $true; Show-ListsMenu; return }
     if ($key -eq 'Tab') { return }
   }
   if ($key -eq 'Tab' -and -not $ctrl) { return }   # moves keyboard focus through the window (WPF)
@@ -4226,7 +4294,7 @@ if ($SmokeTest) {
     Render
     Write-Output 'DRAG OK'
     # a list shared with this PC (bound in lists\.remotes.json): view-only, it renders read-only and is never written;
-    # its tab offers Leave, not Delete or Rename; an own list's Share view says it needs sync (none here)
+    # its list menu offers Leave, not Delete or Rename; an own list's Share view says it needs sync (none here)
     Write-TextFileAtomic (Proj-Path 'Shared check') "- [ ] owner's task ^shshsh01`n  - [ ] owner's subtask ^shshsh02`n"
     Save-ShareBindings $listsDir @(@{ id = 'ssmoke000001'; file = 'Shared check'; server = 'https://owner.example'; project = 'pshared01'; access = 'view'; name = 'Shared check'; joinedAt = 1 })
     $script:bindSig = $null
@@ -4237,8 +4305,9 @@ if ($SmokeTest) {
     if ([IO.File]::ReadAllText($script:todo) -cne $t0 -or $script:items[0].Text -ne "owner's task") { throw 'a view-only list was written' }
     Delete-Task $script:items[0]; Begin-Notes $script:items[0]
     if ([IO.File]::ReadAllText($script:todo) -cne $t0) { throw 'a view-only list was changed' }
-    $tab = @($tabs.Children | Where-Object { $_.Tag -eq 'Shared check' })[0]
-    if (@($tab.ContextMenu.Items | Where-Object { $_.Header -eq 'Leave this list' }).Count -ne 1 -or @($tab.ContextMenu.Items | Where-Object { $_.Header -eq 'Delete project' }).Count) { throw 'shared tab menu' }
+    $lm = New-ListContextMenu 'Shared check'
+    if (@($lm.Items | Where-Object { $_.Header -eq 'Leave this list' }).Count -ne 1 -or @($lm.Items | Where-Object { $_.Header -eq 'Delete list' }).Count) { throw 'shared list menu' }
+    if ($script:titleBtn.ContextMenu.Items.Count -ne 4 -or (Get-ListInfo 'Shared check').Open -ne 2) { throw 'the title of a shared list' }
     Show-Share $homeList; Render-Settings
     foreach ($v in 'settings', 'sync', 'conflicts', 'list') { $script:view = $v; Render }
     if (-not (Get-InviteLink 'https://owner.example/join#code=AAAAAAAAAAAAAAAAAAAAAA')) { throw 'invite link' }
@@ -4247,6 +4316,49 @@ if ($SmokeTest) {
     Remove-Item -LiteralPath (Proj-Path 'Shared check') -Force
     Render
     Write-Output 'SHARED OK'
+    # the list switcher: the title is a menu button with a dot for another list that has something due; its menu has
+    # a row per list (the current one selected) and New list; closing it and a choice work
+    $swHome = $script:proj
+    Write-TextFileAtomic (Proj-Path 'Switch check') ("- [ ] S one due:$((Get-Date).AddDays(-1).ToString('yyyy-MM-dd')) ^swswsw01`n- [ ] S two due:$((Get-Date).ToString('yyyy-MM-dd')) ^swswsw02`n- [ ] S three ^swswsw03`n- [x] S done due:$((Get-Date).AddDays(-3).ToString('yyyy-MM-dd')) ^swswsw04`n")
+    $swInfo = Get-ListInfo 'Switch check'
+    if ($swInfo.Open -ne 3 -or $swInfo.Due -ne 2 -or $swInfo.Over -ne 1) { throw "list counts: $($swInfo | ConvertTo-Json -Compress)" }
+    Render-Tabs
+    $tb = $script:titleBtn
+    $dotOf = { param($b) @($b.Child.Children | Where-Object { $_ -is [System.Windows.Shapes.Ellipse] }).Count }
+    if ([System.Windows.Automation.AutomationProperties]::GetName($tb) -ne $swHome -or $tb.Child.Children[$tb.Child.Children.Count - 1].Text -ne $swHome) { throw 'the title is not the current list' }
+    if ($script:HasA11y -and ($tb.Role -ne 'disclosure' -or $tb.IsExpanded)) { throw 'the title is not a closed menu button' }
+    if ((& $dotOf $tb) -ne 1 -or ([string]$tb.ToolTip) -notlike '*Switch check*') { throw 'no dot for a list with something due' }
+    Show-ListsMenu
+    $swNames = @(Get-ProjectNames)
+    if (-not $script:listsPopup.IsOpen -or $script:listsRows.Count -ne $swNames.Count + 1) { throw "the lists menu has $($script:listsRows.Count) rows for $($swNames.Count) lists" }
+    if ($script:HasA11y -and (-not $tb.IsExpanded -or -not @($script:listsRows | Where-Object { $_.Role -eq 'radio' -and $_.IsSelected -and $_.Tag -eq $swHome }).Count)) { throw 'the menu is not expanded or does not select the current list' }
+    $swRow = @($script:listsRows | Where-Object { $_.Tag -eq 'Switch check' })[0]
+    if ([System.Windows.Automation.AutomationProperties]::GetName($swRow) -ne 'Switch check, 2 due, 1 overdue') { throw "the row says: $([System.Windows.Automation.AutomationProperties]::GetName($swRow))" }
+    $swSrc = New-Object System.Windows.Interop.HwndSource(0, 0, 0, 0, 0, 'swkeys', [IntPtr]::Zero)   # (a source for the key events)
+    $swKey = {   # a key as the menu's root sees it: whether the menu took it
+        param([string]$key)
+        $root = $script:listsPopup.Child
+        $ke = New-Object System.Windows.Input.KeyEventArgs([System.Windows.Input.Keyboard]::PrimaryDevice, $swSrc, 0, [System.Windows.Input.Key]$key)
+        $ke.RoutedEvent = [System.Windows.UIElement]::PreviewKeyDownEvent
+        $root.RaiseEvent($ke)
+        return $ke.Handled
+    }
+    foreach ($k in 'Down', 'Up', 'Home', 'End') { if (-not (& $swKey $k)) { throw "the lists menu ignored $k" } }
+    if (& $swKey 'A') { throw 'the lists menu took a letter' }
+    if (-not (& $swKey 'Escape') -or $script:listsPopup.IsOpen) { throw 'Esc did not close the lists menu' }
+    $swSrc.Dispose()
+    Show-ListsMenu
+    Close-ListsMenu $true
+    if ($script:listsPopup.IsOpen) { throw 'the lists menu did not close' }
+    if ($script:HasA11y -and $tb.IsExpanded) { throw 'the title still says it is expanded' }
+    Choose-List 'Switch check'
+    if ($script:proj -ne 'Switch check') { throw 'choosing a list did not switch to it' }
+    if (([string]$script:titleBtn.ToolTip) -like '*earlier in:*Switch check*') { throw 'the dot names the current list' }
+    $script:openPopup = $null
+    Switch-Project $swHome
+    Remove-Item -LiteralPath (Proj-Path 'Switch check') -Force
+    Render
+    Write-Output 'SWITCHER OK'
     $first = @($script:items | Where-Object { $_.Kind -eq 'task' -and $_.Text -eq 'smoke task one' })[0]
     if ($script:sync) {
       # with a sync config in the data dir: the real loop must push our task, and a change made on

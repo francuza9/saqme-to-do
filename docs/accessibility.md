@@ -77,7 +77,16 @@ keyboard-focusable, activated with Enter / Space, and reported with a role and t
 compiles it once with the .NET Framework's own compiler (about 0.2 s; later starts load the cached DLL in
 milliseconds) and falls back to the old elements if that ever fails.
 
-- **Roles.** Project tabs are a tab list with selectable tabs ("Work, 7 open", selected). Tasks are a list of
+- **The list switcher.** The title is a button with Invoke and ExpandCollapse (a menu button: Narrator says
+  "Work, collapsed" and "expanded" while the menu is open), named by the list (", shared" for a shared one);
+  its description says it shows your lists and, with the violet dot, which other list has something due, so the
+  dot is never colour alone. The lists menu is a popup of radio buttons, one per list, the current one selected,
+  named like "Home, 2 due, 1 overdue" or "Home, 3 open", and *New list* a button after them. Up / Down, Home /
+  End, Enter, Esc and Tab work in it, and focus goes back to the title; Left / Right on the title switch lists
+  and Down opens the menu. A list's own menu (Share, Rename, Delete, Leave) is the context menu of a row and of
+  the title (Shift+F10). `scripts/dev/uia-check.ps1` expands and collapses the title through UI Automation and
+  reads the rows.
+- **Roles.** Tasks are a list of
   items named with their text, status in words, deadline (with "overdue"), subtasks and notes; the selected one
   is reported as selected. Status chips, chevrons and deadlines inside a task are buttons ("Status: Blocked /
   waiting", "Expand subtasks and notes", "Deadline: 17 Oct, overdue"). The theme choice is three radio buttons;

@@ -4,9 +4,9 @@
 # reads its automation tree from outside, like a screen reader would:
 #   - every button, tab, list item, check box, radio button, link and text box has a name
 #   - each offers the action a screen reader uses (Invoke, SelectionItem, Toggle) and is keyboard-focusable
-#   - the tasks are a list of items whose names include their status in words; the projects are a tab list
+#   - the tasks are a list of items whose names include their status in words; the list's name is a menu button that opens the lists
 #   - no icon-font glyphs leak out as text
-#   - the Tab order (WPF's: focusable tab stops in visual order) goes header, tabs, window buttons, list, add box
+#   - the Tab order (WPF's: focusable tab stops in visual order) goes header, list title, window buttons, list, add box
 # It also opens Settings, each of its pages and Keyboard shortcuts through UI Automation (Invoke, Expand), and checks
 # those too: the pages are a list of buttons, each page has what belongs on it, Back returns, Advanced is a
 # disclosure that says whether it is expanded, and the version line is read out. The grouped look (cards, hairlines)
@@ -147,9 +147,21 @@ try {
   Check (@($items | Where-Object { $_.Name -notmatch $statusWords }).Count -eq 0) "every task's name says its status in words (e.g. '$($items[0].Name)')"
   Check (@($items | Where-Object { $_.State -eq ' [selected]' }).Count -eq 1) 'the selected task is reported as selected'
   Check (@($acc | Where-Object { $_.Type -eq 'ListItem' -and $_.Name -match 'overdue' }).Count -ge 1) 'an overdue deadline is said in words, not only in red'
-  $tabs = @($acc | Where-Object { $_.Type -eq 'TabItem' })
-  Check (@($acc | Where-Object { $_.Type -eq 'Tab' -and $_.Name -eq 'Projects' }).Count -eq 1 -and $tabs.Count -eq 3) "the projects are a tab list ($(($tabs | ForEach-Object { $_.Name }) -join ' | '))"
-  Check (@($tabs | Where-Object { $_.State -eq ' [selected]' }).Count -eq 1) 'the current project is the selected tab'
+  $title = @($acc | Where-Object { $_.Type -eq 'Button' -and $_.Patterns -contains 'ExpandCollapse' -and $_.Name -notmatch '^Completed' })
+  Check ($title.Count -eq 1 -and $title[0].Name -eq 'Work' -and $title[0].State -eq ' [Collapsed]' -and $title[0].Patterns -contains 'Invoke') "the title is a menu button named by the current list, collapsed ('$(($title | ForEach-Object { $_.Name + $_.State }) -join ' | ')')"
+  Check (@($acc | Where-Object { $_.Type -eq 'TabItem' }).Count -eq 0) 'no tab strip any more'
+  if ($title.Count -eq 1) {
+    $ec = $title[0].El.GetCurrentPattern([System.Windows.Automation.ExpandCollapsePattern]::Pattern)
+    $ec.Expand(); Start-Sleep -Milliseconds 900
+    $ofApp = New-Object System.Windows.Automation.PropertyCondition($A::ProcessIdProperty, $win.Current.ProcessId)
+    $radios = $A::RootElement.FindAll([System.Windows.Automation.TreeScope]::Descendants, (New-Object System.Windows.Automation.AndCondition($ofApp, (New-Object System.Windows.Automation.PropertyCondition($A::ControlTypeProperty, $CT::RadioButton)))))
+    $rbs = @($radios | ForEach-Object { [pscustomobject]@{ Name = $_.Current.Name; Sel = $_.GetCurrentPattern([System.Windows.Automation.SelectionItemPattern]::Pattern).Current.IsSelected } })
+    $newList = $A::RootElement.FindFirst([System.Windows.Automation.TreeScope]::Descendants, (New-Object System.Windows.Automation.AndCondition($ofApp, (New-Object System.Windows.Automation.PropertyCondition($A::NameProperty, 'New list')))))
+    Check ($rbs.Count -eq 3 -and @($rbs | Where-Object { $_.Sel }).Count -eq 1 -and ($rbs | Where-Object { $_.Sel }).Name -like 'Work*' -and $null -ne $newList) "Expand opens the lists menu: a radio item per list, the current one selected, and New list ($(($rbs | ForEach-Object { $_.Name + $(if ($_.Sel) { ' [selected]' } else { '' }) }) -join ' | '))"
+    Check ($ec.Current.ExpandCollapseState -eq 'Expanded') 'the title says it is expanded while the menu is open'
+    $ec.Collapse(); Start-Sleep -Milliseconds 600
+    Check ($ec.Current.ExpandCollapseState -eq 'Collapsed') 'Collapse closes it, and the title says so'
+  }
   Check (@($acc | Where-Object { $_.Type -eq 'Button' -and $_.Name -like 'Status: *' }).Count -ge 5) 'status chips are buttons named by their status'
   Check (@($acc | Where-Object { $_.Type -eq 'Edit' -and $_.Name -eq 'Add a task' }).Count -eq 1) 'the new-task box is labelled'
   $done = @($acc | Where-Object { $_.Type -eq 'Button' -and $_.Name -match '^Completed, \d+ tasks?$' })
@@ -196,7 +208,7 @@ try {
     Check (@($acc | Where-Object { $_.Type -eq 'Button' -and $_.Name -eq 'General - back to Settings' }).Count -eq 1) 'the page header is a Back button that names the page'
     if (& $invoke (& $byId 'open-keys') 'the Keyboard shortcuts row') {
       $acc = Test-View 'keyboard shortcuts view' $win
-      Check (@($acc | Where-Object { $_.Name -eq 'Move around the window' }).Count -ge 1 -and @($acc | Where-Object { $_.Name -like 'Tab goes through the tabs*' }).Count -ge 1) 'the shortcuts list explains Tab'
+      Check (@($acc | Where-Object { $_.Name -eq 'Move around the window' }).Count -ge 1 -and @($acc | Where-Object { $_.Name -like 'Tab goes through the title*' }).Count -ge 1) 'the shortcuts list explains Tab'
       [void](& $invoke (& $byId 'back') 'Back')
       Check ($null -ne (& $byId 'open-keys')) 'Back from Keyboard shortcuts returns to General'
     }

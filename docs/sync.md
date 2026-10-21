@@ -143,7 +143,7 @@ One cycle:
    are not in S yet):
    in-place line edits, removed lines (subtasks move up a level), moves and new tasks placed among their
    siblings by `pos` (after the previous sibling's subtree, so a task stays in its heading's section),
-   new/renamed/deleted (→ `lists\.trash`, only if the list still holds what the plan saw) list files, tab
+   new/renamed/deleted (→ `lists\.trash`, only if the list still holds what the plan saw) list files, list
    order. Only the fields the server changed are
    written into a line. Moved and arriving tasks are placed parents first, each after the already-placed
    sibling with the next smaller `(pos, id)`. All files are staged first; lists that gain tasks are
@@ -158,7 +158,7 @@ overwriting it; if the list was renamed meanwhile, it follows the rename. It wri
 content it merged with: a list another program holds or changes meanwhile waits, and is merged again. A save
 that keeps failing is retried and reported, never silently dropped; quitting or switching lists then leaves a
 copy in `lists\.recovery`. A list changed by another program is reloaded once it has not changed for 1.5 s
-(it may still be being written), and one that cannot be read when its tab opens shows as busy and is never
+(it may still be being written), and one that cannot be read when its list opens shows as busy and is never
 written over.
 
 **Tasks leave a list only on purpose.** Before every write the widget checks that each task that was in the
@@ -228,9 +228,8 @@ reaches nothing else, next to (or without) their own sync.
 
 ### The owner's side
 
-The owner shares a list from its menu (**Share…**): on Windows a right-click on its tab, or the share icon that
-shows on the current tab while the mouse is over it; on a phone, Linux and macOS a long press or a right-click on
-the list's name at the top, or on the list in the lists menu. Sharing needs the owner's own sync, since the
+The owner shares a list from its menu (**Share…**): a right-click (on a phone a long press) on the list's name at the
+top, or on the list in the lists menu. Sharing needs the owner's own sync, since the
 list must be on their Worker; without it the item is there but disabled, and says why.
 
 - **A name for the person** ("Nuca"), only ever shown to the owner, to recognise and revoke them later.
@@ -241,7 +240,7 @@ list must be on their Worker; without it the item is there but disabled, and say
   until claimed or cancelled.
 - The same view lists everyone the list is shared with: name, access (changeable), joined or invited and
   when. **Revoke** ends a person's key at once; **Cancel invite** voids an unclaimed invite. Shared lists show
-  a small badge after their name (on their tab on Windows), for the owner and for the people they are shared
+  a small badge after their name, for the owner and for the people they are shared
   with.
 
 Owner routes (owner's key): `POST /api/shares/invite { projectId, alias, access }`, `GET /api/shares?project=`,
