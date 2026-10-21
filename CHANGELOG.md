@@ -1,6 +1,6 @@
 # Changes
 
-## Unreleased
+## 1.2.1
 
 **Deletions paused: Restore them.** When many tasks vanish from the lists folder at once, deleting them
 everywhere is paused, but until now the only way out was *Delete them* or putting the file back by hand.
