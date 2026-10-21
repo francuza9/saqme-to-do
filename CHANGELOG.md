@@ -2,14 +2,37 @@
 
 ## Unreleased
 
+**Windows: a calmer, grouped look for the list and Settings.**
+
+- **Grouped cards, one line per row**, like the iPhone's Settings: related rows sit together in a rounded card,
+  a shade lighter than the window in both themes, with hairlines between them that start where the text starts.
+  A row is one line: an optional icon, its name, and on the right a short value ("Off", "10:00", "Synced 2 min
+  ago", "1.1.0"), a chevron, a switch or a small button. The explanations that sat under each setting are now a
+  short note under the card, the value on the right, or the tooltip (and what a screen reader reads).
+- **The list:** each list's tasks are a card; subtasks are indented inside it with their hairlines indented too.
+  The deadline, the subtask count and the notes mark are on the right of the task's line (under it in a window
+  narrower than 380 px, so the text keeps its line); open notes are quiet text under the task. *Postponed* and
+  *Completed* are cards under their headings, and *Completed* opens and closes from its heading. The add line is
+  a card of its own at the bottom. Statuses, drag and drop, Alt+Up / Down, editing, Ctrl+Z and the notices work
+  as before; selecting with the arrow keys is quicker in long lists.
+- **Settings** is two cards of pages (*General*, *Notifications*, *Sync & sharing*, *Your lists*; then *App*:
+  *Updates*, *About*), each with an icon and how it stands. On every page actions are rows (*Sync now*, *Set up
+  sync*, *Open the lists folder*; *Turn off sync* in red), the link boxes are rows with their button, and
+  *Advanced* is a row that opens the rest of its card. *Share*, *Conflicts*, *Recently deleted* (now grouped by
+  list), *Pair phone* and *Keyboard shortcuts* look the same way; in *Share*, each person is one row whose menu
+  changes their access or revokes it.
+- The design tokens have the card colours and sizes (`design/tokens.json`; docs/design.md, "Grouped lists"), and
+  the tests check their contrast in both themes. The self-check now also checks the cards (corners, hairlines,
+  one line per row), and `scripts/dev/uia-check.ps1` what a screen reader meets in them;
+  `scripts/dev/render-widget.ps1 -Open` renders the list as it looks in use (notes open, Completed shown).
+
 **Windows: Settings is easier to read, and the version is easy to find.**
 
 - **Settings is a short list of pages** instead of one long page: *General* (theme, start with Windows,
   keyboard shortcuts), *Notifications* (daily summary, test notification), *Sync & sharing* (set up sync or how
-  it stands, pair phone, conflicts, join and leave shared lists), *Updates*, *Your lists* (lists folder,
-  recently deleted) and *About*. Each row says what is on its page or how it stands, with a violet dot when
-  something needs a look (an update, a conflict, paused deletions). Esc goes back one level; the cloud icon opens
-  Sync & sharing directly. Shorter hints, one line under each setting that needs one.
+  it stands, pair phone, conflicts, join and leave shared lists), *Your lists* (lists folder, recently deleted),
+  *Updates* and *About*. Each row shows how it stands, with a violet dot when something needs a look (an update,
+  a conflict, paused deletions). Esc goes back one level; the cloud icon opens Sync & sharing directly.
 - **Rare and risky actions moved down:** *Turn off sync* is under **Advanced** at the bottom of Sync & sharing,
   next to how to get a new sync key and (new) a button that opens the sync log. *Deletions paused* shows below
   the everyday rows when it happens.

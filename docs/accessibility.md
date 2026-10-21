@@ -52,12 +52,17 @@ milliseconds) and falls back to the old elements if that ever fails.
   not labels). Decorative glyphs and placeholders are hidden from screen readers; hidden hover tools are not
   in the tree.
 - **Settings.** A list of pages, each a button whose name says the page and how it stands ("Sync & sharing,
-  Synced 2 min ago, 1 conflict"). Every view's title is its Back button and names where it goes ("General -
-  back to Settings"). *Advanced* on Sync & sharing is a disclosure: a button that reports expanded or collapsed
-  (UI Automation's ExpandCollapse) and says in its hint what is inside. The version line under the Settings views
-  is read as text; when an update needs a look it becomes a link that says so ("Saqme To Do 1.1.0. Update
-  available: 1.2.0") and opens Updates. The violet "needs a look" dot is never alone: the words next to it say
-  what it is about.
+  Synced 2 min ago, 1 conflict") and whose description says what is on it. Every view's title is its Back button
+  and names where it goes ("General - back to Settings"). *Advanced* on Sync & sharing is a disclosure: a button
+  that reports expanded or collapsed (UI Automation's ExpandCollapse) and says in its hint what is inside. The
+  version line under the Settings views is read as text; when an update needs a look it becomes a link that says
+  so ("Saqme To Do 1.1.0. Update available: 1.2.0") and opens Updates. The violet "needs a look" dot is never
+  alone: the words next to it say what it is about.
+- **Grouped lists.** The cards and hairlines of the desktop's look are drawing only: a screen reader meets each
+  row as one control (a page, an action, a switch, a text box) or one line of text, and the card headings and
+  footnotes as text in reading order. What a row used to say on a second line is in its control's description
+  (and tooltip) or in the footnote under the card. *Completed* in the list is a disclosure that reports whether
+  the completed tasks are shown.
 - **Keyboard and Tab order.** Tab moves through the window: Settings, the current project tab (Left / Right
   switch projects), New project, sync and conflicts when shown, Options, Minimize, Fullscreen, Close, the task
   list (one stop: the selected task), the *Completed* toggle, the new-task box. Enter / Space use the focused
@@ -77,8 +82,10 @@ milliseconds) and falls back to the old elements if that ever fails.
 
 All in `design/tokens.json`, shared by both apps and tested on every run:
 
-- Text ≥ 4.5 : 1 on everything it sits on (surface, frame, hovered and selected rows, deadline washes, notes).
-- Status chips (WCAG 1.4.11) ≥ 3 : 1 against the list, a hovered row and the selected row; the glyphs on filled
+- Text ≥ 4.5 : 1 on everything it sits on (surface, frame, hovered and selected rows, deadline washes, notes,
+  and the desktop's cards at rest, hovered, pressed and selected).
+- Status chips (WCAG 1.4.11) ≥ 3 : 1 against the list, a hovered row and the selected row (on the phone's
+  surface and on the desktop's cards); the glyphs on filled
   chips ≥ 3 : 1 against the chip; the focus ring ≥ 3 : 1. Six status colours are a little darker or lighter
   than their first versions to get there, with the same hue and meaning:
 

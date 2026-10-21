@@ -27,15 +27,30 @@ describe('design tokens', () => {
       expect(contrast(p.onDanger, p.danger), 'close button glyph on its red hover').toBeGreaterThanOrEqual(3);
       expect(contrast(p.onViolet, p.violet), 'the knob of a switch that is on').toBeGreaterThanOrEqual(3);
     });
+    it(`${name}: the cards of a grouped list keep text at AA (4.5:1), at rest, hovered, pressed and selected`, () => {
+      for (const k of ['ink', 'smoke', 'violet', 'amber', 'alert', 'closed', 'noteInk']) {
+        expect(contrast(p[k], p.card), `${k} on a card`).toBeGreaterThanOrEqual(4.5);
+      }
+      for (const k of ['smoke', 'violet', 'alert']) {
+        expect(contrast(p[k], p.cardHover), `${k} on a hovered row`).toBeGreaterThanOrEqual(4.5);
+        expect(contrast(p[k], p.cardPressed), `${k} on a pressed row`).toBeGreaterThanOrEqual(4.5);
+      }
+      for (const k of ['ink', 'smoke']) expect(contrast(p[k], p.cardSelected), `${k} on the selected row`).toBeGreaterThanOrEqual(4.5);
+      // a card stands apart from the window, and its rows' hairlines from the card, without being boxes
+      expect(p.card, 'card colour').not.toBe(p.surface);
+      expect(contrast(p.separator, p.card), 'hairline').toBeGreaterThan(1.1);
+    });
     it(`${name}: status chips and their glyphs meet WCAG 1.4.11 (3:1), also on hovered and selected rows`, () => {
       const p = palette(theme);
       for (const k of ['Todo', 'Prog', 'Done', 'Post', 'Block', 'Rej', 'Aband']) {
-        for (const bg of ['surface', 'hover', 'selected']) expect(contrast(p[`status${k}`], p[bg]), `${k} chip on ${bg}`).toBeGreaterThanOrEqual(3);
+        for (const bg of ['surface', 'hover', 'selected', 'card', 'cardHover', 'cardSelected']) expect(contrast(p[`status${k}`], p[bg]), `${k} chip on ${bg}`).toBeGreaterThanOrEqual(3);
         if (p[`status${k}Glyph`]) expect(contrast(p[`status${k}Glyph`], p[`status${k}`]), `${k} glyph`).toBeGreaterThanOrEqual(3);
       }
       // the focus ring and the selected row's edge are violet: visible against the list and the row tint
       expect(contrast(p.violet, p.surface), 'focus ring on surface').toBeGreaterThanOrEqual(3);
       expect(contrast(p.violet, p.selected), 'focus ring on the selected row').toBeGreaterThanOrEqual(3);
+      expect(contrast(p.violet, p.card), 'focus ring on a card').toBeGreaterThanOrEqual(3);
+      expect(contrast(p.violet, p.cardSelected), 'focus ring on a card\'s selected row').toBeGreaterThanOrEqual(3);
     });
   }
 
@@ -80,7 +95,7 @@ describe('design tokens', () => {
     // every brush the widget uses is one Set-Palette defines (a missing one draws nothing, silently)
     const ps = read('desktop/widget.ps1');
     const defined = new Set([...ps.matchAll(/@\('(\w+)',\s*'\w+'\)/g)].map((m) => m[1]));
-    const tokenBrushes = /\$(Paper|White|Black|CloseGlyph|CloseHover|OnAccent|Accent|Card|StripBg|Edge|Hover|TabHover|TabInk|Ink|Faint|Line|NoteBg|NoteInk|MenuBg|MenuHover|Red|RedSoft|Amber|AmberSoft|Selected|ButtonBg|Closed)\b/g;
+    const tokenBrushes = /\$(Paper|White|Black|CloseGlyph|CloseHover|OnAccent|Accent|Card|StripBg|Edge|Hover|TabHover|TabInk|Ink|Faint|Line|NoteBg|NoteInk|MenuBg|MenuHover|Red|RedSoft|Amber|AmberSoft|Selected|ButtonBg|Closed|GroupBg|GroupHover|GroupPress|GroupSel|GroupLine)\b/g;
     const used = new Set([...ps.matchAll(tokenBrushes)].map((m) => m[1]));
     expect([...used].filter((n) => !defined.has(n)), 'brushes used but never defined').toEqual([]);
     // Colors.Black appears only as the opaque part of an opacity mask

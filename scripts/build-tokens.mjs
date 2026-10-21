@@ -32,6 +32,8 @@ export function contrast(a, b) {
 export function palette(theme) {
   const { surface, frame, ink, smoke, violet, amber } = theme.named;
   const s = theme.status;
+  // the cards of a grouped list (the desktop's list and Settings): a step lighter than the surface in both themes
+  const card = mix(theme.card.toward === 'ink' ? ink : theme.card.toward, surface, theme.card.amount);
   return {
     surface, frame, ink, smoke, violet, amber,
     alert: theme.alert,
@@ -47,6 +49,11 @@ export function palette(theme) {
     buttonBg: mix(ink, surface, 0.07),
     alertWash: mix(theme.alert, surface, theme.wash),
     amberWash: mix(amber, surface, theme.wash),
+    card,
+    cardHover: mix(ink, card, 0.05),
+    cardPressed: mix(ink, card, 0.09),
+    cardSelected: mix(violet, card, theme.card.selected),
+    separator: mix(ink, card, 0.11),   // the hairline between two rows of a card
     danger: '#D94B45',
     onDanger: '#FFFFFF',   // the close button's glyph while it is red (hover)
     paper: '#FFFFFF',      // behind QR codes (scanners want dark on light) and the knob of a switch that is off
@@ -78,6 +85,7 @@ export function buildCss(t) {
   out.push(`  ${t.space.map((v, i) => `--space-${i + 1}: ${v}px;`).join(' ')}`);
   out.push(`  ${Object.entries(t.radius).map(([k, v]) => `--r-${k}: ${v}px;`).join(' ')}`);
   out.push(`  ${Object.entries(t.row).map(([k, v]) => `--row-${kebab(k)}: ${v}px;`).join(' ')}`);
+  out.push(`  ${Object.entries(t.card).map(([k, v]) => `--card-${kebab(k)}: ${v}px;`).join(' ')}`);
   out.push(`  --grad-a: ${t.gradient[0]}; --grad-b: ${t.gradient[1]};`);
   out.push('}');
   for (const [name, theme] of Object.entries(t.themes)) {
@@ -103,6 +111,7 @@ export function buildPs1(t) {
     `  Space = @(${t.space.join(', ')})`,
     `  Radius = @{ ${Object.entries(t.radius).map(([k, v]) => `${k} = ${v}`).join('; ')} }`,
     `  Row = @{ ${Object.entries(t.row).map(([k, v]) => `${k} = ${v}`).join('; ')} }`,
+    `  Card = @{ ${Object.entries(t.card).map(([k, v]) => `${k} = ${v}`).join('; ')} }`,
     '}',
     '$Themes = @{',
   ];
@@ -115,6 +124,7 @@ export function buildPs1(t) {
       MenuBg: p.frame, MenuHover: p.menuHover, Selected: p.selected, ButtonBg: p.buttonBg, OnAccent: p.onViolet,
       Red: p.alert, RedSoft: p.alertWash, AmberSoft: p.amberWash, CloseHover: p.danger, CloseGlyph: p.onDanger, Paper: p.paper, Closed: p.closed,
       GradA: t.gradient[0], GradB: t.gradient[1],
+      Group: p.card, GroupHover: p.cardHover, GroupPress: p.cardPressed, GroupSel: p.cardSelected, GroupLine: p.separator,
       S_todo_edge: p.statusTodo, S_todo_text: p.ink,
       S_prog_chip: p.statusProg, S_prog_text: p.ink,
       S_done_chip: p.statusDone, S_done_text: p.closed, S_done_glyph: p.statusDoneGlyph,

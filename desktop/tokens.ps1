@@ -4,8 +4,9 @@ $Tokens = @{
   Font = @{ Family = 'FiraGO'; Fallback = 'Segoe UI Variable Text, Segoe UI'; Files = @('FiraGO-Regular.ttf', 'FiraGO-Italic.ttf', 'FiraGO-Medium.ttf', 'FiraGO-SemiBold.ttf') }
   Type = @{ display = @{ Size = 22; Line = 28; Weight = 600 }; title = @{ Size = 18; Line = 24; Weight = 600 }; body = @{ Size = 15; Line = 22; Weight = 400 }; label = @{ Size = 14; Line = 20; Weight = 500 }; meta = @{ Size = 13; Line = 18; Weight = 400 }; small = @{ Size = 12; Line = 16; Weight = 500 } }
   Space = @(2, 4, 8, 12, 16, 24, 32)
-  Radius = @{ container = 14; tab = 10; control = 7; chip = 5 }
-  Row = @{ minTouch = 48; minPointer = 34; indent = 20; chipGap = 12; metaGap = 2 }
+  Radius = @{ container = 14; card = 12; tab = 10; control = 7; chip = 5 }
+  Row = @{ minTouch = 48; minPointer = 40; indent = 20; chipGap = 12; metaGap = 2 }
+  Card = @{ inset = 12; padding = 14; gap = 20; rowMin = 44 }
 }
 $Themes = @{
   dark = @{
@@ -36,6 +37,11 @@ $Themes = @{
     Closed = '#FF8F8799'
     GradA = '#FFB65CE3'
     GradB = '#FFF3A14A'
+    Group = '#FF25212A'
+    GroupHover = '#FF2F2B34'
+    GroupPress = '#FF37333C'
+    GroupSel = '#FF352B3E'
+    GroupLine = '#FF3B3740'
     S_todo_edge = '#FF7C7589'
     S_todo_text = '#FFEFEAF4'
     S_prog_chip = '#FFE8A23A'
@@ -85,6 +91,11 @@ $Themes = @{
     Closed = '#FF6F685B'
     GradA = '#FFB65CE3'
     GradB = '#FFF3A14A'
+    Group = '#FFFDFCFA'
+    GroupHover = '#FFF2F1EF'
+    GroupPress = '#FFEAE8E6'
+    GroupSel = '#FFEDDFF0'
+    GroupLine = '#FFE5E4E2'
     S_todo_edge = '#FF827A69'
     S_todo_text = '#FF25211C'
     S_prog_chip = '#FFA86E16'

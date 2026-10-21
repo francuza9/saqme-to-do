@@ -87,16 +87,17 @@ a pairing link from a device that already syncs there. `setup.cmd -Cloud` does t
 `-CloudOnly` redoes only the cloud part.
 
 **Settings in the Windows app** (the logo at the top left, *Options > Settings*, or Ctrl+,) is a short list of
-pages; each row says what is on it or how it stands. Esc (or the title) goes back one level.
+pages in two groups; each row shows how it stands on the right (the theme, the time, *Synced 2 min ago*, the
+version). Esc (or the title) goes back one level.
 
 | Page | What is on it |
 |---|---|
 | **General** | Theme (Dark / Light / Auto), *Start with Windows*, *Keyboard shortcuts* |
-| **Notifications** | *Daily summary at* (shared with your phone), *Send test* |
-| **Sync & sharing** | *Set up sync* or how sync stands, *Sync now*, *Pair phone*, conflicts; *Join a shared list* and the lists shared with this PC (*Leave*); *Deletions paused* when that happens; under **Advanced**: *Turn off sync*, a new sync key, the sync log |
-| **Updates** | the version, *Check now* / *Update now* / *Sign in*, *Install updates automatically* |
-| **Your lists** | the lists folder (*Open folder*), *Recently deleted* |
-| **About** | the version and where it is installed, your data folder (*Open folder*) |
+| **Notifications** | *Daily summary* time (shared with your phone), *Send a test notification* |
+| **Sync & sharing** | *Set up sync* or how sync stands, *Sync now*, *Pair phone*, conflicts; a pairing link from another device; joining a shared list (paste its invite link) and the lists shared with this PC (*Leave*); *Deletions paused* when that happens; under **Advanced**: *Turn off sync*, the sync log (and how to get a new sync key) |
+| **Your lists** | *Open the lists folder*, *Recently deleted* |
+| **Updates** (under *App*) | the version, *Check now* / *Update now* / *Sign in to Cloudflare*, *Install updates automatically* |
+| **About** (under *App*) | the version, *Open the data folder*, where the app and your data are |
 
 The line at the bottom of every Settings page says *Saqme To Do* and its version. When an update is available,
 or one waits for you to sign in to Cloudflare, it adds a violet dot and says so; click it to open **Updates**.

@@ -332,7 +332,8 @@ function Set-Palette([string]$name) {
       @('Ink','Ink'), @('Faint','Faint'), @('Line','Line'), @('Accent','Accent'), @('NoteBg','NoteBg'), @('NoteInk','NoteInk'),
       @('MenuBg','MenuBg'), @('MenuHover','MenuHover'), @('Red','Red'), @('RedSoft','RedSoft'), @('Amber','Amber'),
       @('AmberSoft','AmberSoft'), @('CloseHover','CloseHover'), @('CloseGlyph','CloseGlyph'), @('Paper','Paper'), @('Selected','Selected'), @('ButtonBg','ButtonBg'),
-      @('OnAccent','OnAccent'), @('Closed','Closed'))) {
+      @('OnAccent','OnAccent'), @('Closed','Closed'),
+      @('GroupBg','Group'), @('GroupHover','GroupHover'), @('GroupPress','GroupPress'), @('GroupSel','GroupSel'), @('GroupLine','GroupLine'))) {
     Set-Variable -Scope Script -Name $pair[0] -Value (Brush $T[$pair[1]])
   }
   # the one gradient in the app: the icon's violet-to-amber, on the active tab (docs/design.md)
@@ -363,7 +364,7 @@ function Apply-Theme([string]$name) {
   $strip.Background = $StripBg; $strip.BorderBrush = $Line
   $countText.Foreground = $Faint
   foreach ($b in @($menuBtn, $minBtn, $maxBtn, $clsBtn)) { $b.Child.Foreground = $TabInk }
-  $addBorder.BorderBrush = $Line; $addBox.Foreground = $Ink; $addBox.CaretBrush = $Accent; $verBar.BorderBrush = $Line
+  $addBorder.Background = $GroupBg; $addBox.Foreground = $Ink; $addBox.CaretBrush = $Accent
   $ph.Foreground = $Accent; $phText.Foreground = $Faint
   $conflictBadge.Background = $AmberSoft; $cbText.Foreground = $Amber
   if ($notice) { Update-NoticeColors }   # (defined further down; not yet at the first theme)
@@ -445,13 +446,20 @@ function Tab-Signature {
 }
 
 # ---------------------------------------------------------------- row geometry
-# A task row: [2 px selection edge][drag handle][chevron][status chip][gap][text]. The handle and chevron
-# columns are their click targets; the empty space around them is what was trimmed (BUGS #9). Everything
-# that lines up with the rows (notes, section labels, the add line) is derived from these.
+# A task row: [2 px selection edge][drag handle][chevron][status chip][gap][text ...][deadline etc.]. The handle
+# and chevron columns are their click targets; the empty space around them is what was trimmed (BUGS #9).
+# Everything that lines up with the rows (notes, hairlines, section headings, the add line) is derived from
+# these, measured from the left edge of the card the rows sit in.
 $RowGripW = 13   # six dots, 7 px wide, 3 px on each side
 $RowChevW = 16   # an 8 pt chevron with room to click it
 $RowChipX = $RowGripW + $RowChevW                    # where the chip column starts (after the 2 px edge)
 $RowTextX = 2 + $RowChipX + 17 + $Tokens.Row.chipGap   # where the text starts: edge, columns, chip, gap
+# the cards of a grouped list (docs/design.md, "Grouped lists"): inset from the window, rounded, spaced apart
+$CardInset = $Tokens.Card.inset     # window edge to card
+$CardPad = $Tokens.Card.padding     # card edge to a row's text (rows without an icon)
+$CardGap = $Tokens.Card.gap         # between two cards (or a footnote and the next card)
+$CardRadius = $Tokens.Radius.card
+$RowMinH = $Tokens.Card.rowMin      # a Settings row
 
 # ---------------------------------------------------------------- model
 # parsing / writing is shared with the sync engine (sync-core.ps1: Read-Items, ConvertTo-MarkdownText)
@@ -702,7 +710,7 @@ function New-DuePill($it) {
   $late = $over -and (Rank $it.Mark) -ne 2
   $b = New-Control 'button' ("Deadline: $label" + $(if ($late) { ', overdue' } else { '' })) 'Change the deadline' { param($s, $e) Show-DuePopup $s.Tag $s }
   [System.Windows.Input.KeyboardNavigation]::SetIsTabStop($b, $false)   # in the list, Ctrl+D does this
-  $b.CornerRadius = New-Object System.Windows.CornerRadius($Tokens.Radius.control); $b.Padding = '0,1,0,1'; $b.Margin = '0,0,12,0'
+  $b.CornerRadius = New-Object System.Windows.CornerRadius($Tokens.Radius.control); $b.Padding = '0,1,0,1'; $b.Margin = '10,0,0,0'
   $b.Cursor = 'Hand'; $b.VerticalAlignment = 'Center'; $b.Tag = $it
   $b.ToolTip = 'Deadline: ' + $d.ToString('dddd, d MMMM yyyy', $CI) + $(if ($it.DueTime) { ', ' + $it.DueTime } else { '' })
   $t = New-Object System.Windows.Controls.TextBlock
@@ -749,19 +757,21 @@ function New-Row($node) {
   if ($script:HasA11y) { $row.IsSelected = ($it -eq $script:sel) }
   [System.Windows.Input.KeyboardNavigation]::SetIsTabStop($row, ($it -eq $script:sel))   # one Tab stop for the list (the selected task)
   $row.Add_GotKeyboardFocus({ param($s, $e) if ($e.NewFocus -eq $s -and $script:sel -ne $s.Tag) { Set-Sel $s.Tag } })
-  $row.Margin = "$($it.Level * $Tokens.Row.indent),0,0,0"; $row.Padding = '0,6,4,6'; $row.MinHeight = $Tokens.Row.minPointer
-  $row.Background = $Clear   # rows are lines, not cards: no rounded corners
-  $row.BorderThickness = '2,0,0,0'; $row.BorderBrush = $Clear
-  if ($it -eq $script:sel) { $row.Background = $Selected; $row.BorderBrush = $Accent }
+  # a row of the list's card, as wide as the card: a subtask is indented inside it. Its notes, when open, follow
+  # right under the text (Render-Node), so the row keeps little room below it then.
+  $notesBelow = ($open -or $script:notesEditing -eq $it) -and ($it.Notes -or $script:notesEditing -eq $it)
+  $row.Padding = "$($it.Level * $Tokens.Row.indent),9,8,$(if ($notesBelow) { 3 } else { 9 })"; $row.MinHeight = $Tokens.Row.minPointer
+  $row.BorderThickness = '2,0,0,0'
+  $row.Tag = $it
+  Paint-TaskRow $row ($it -eq $script:sel)
   $g = New-Object System.Windows.Controls.Grid
-  # columns: 0 grip | 1 chevron | 2 chip | 3 text over meta | 4 (spare) | 5 actions
-  # (children order: chev, chip, text, meta, acts, grip - other code relies on these indices)
+  # columns: 0 grip | 1 chevron | 2 chip | 3 text | 4 deadline, subtask count, notes mark | 5 (spare); the hover
+  # actions float over 3-5. (children order: chev, chip, text, meta, acts, grip - other code relies on these indices)
   foreach ($wd in @("$RowGripW", "$RowChevW", 'Auto', '*', 'Auto', 'Auto')) {
     $cd = New-Object System.Windows.Controls.ColumnDefinition; $cd.Width = $wd; $g.ColumnDefinitions.Add($cd)
   }
   foreach ($ht in @('Auto', 'Auto')) { $rd = New-Object System.Windows.Controls.RowDefinition; $rd.Height = $ht; $g.RowDefinitions.Add($rd) }
   $row.Child = $g
-  $row.Tag = $it
   $row.Add_MouseRightButtonUp({ param($s, $e) $e.Handled = $true; Show-RowMenu $s $s.Tag })
 
   # chevron (only when there is something to open)
@@ -798,32 +808,36 @@ function New-Row($node) {
   $tb.Add_MouseLeftButtonUp({ param($s, $e) $e.Handled = $true; Begin-Edit $s })
   [System.Windows.Controls.Grid]::SetColumn($tb, 3); [void]$g.Children.Add($tb)
 
-  # 3: meta line under the text - deadline, subtask progress, notes mark (same order as the phone)
+  # 3: on the right of the first line, the row's value: notes mark, subtask progress, deadline (rightmost)
   $meta = New-Object System.Windows.Controls.StackPanel
-  $meta.Orientation = 'Horizontal'; $meta.VerticalAlignment = 'Top'; $meta.Margin = "0,$($Tokens.Row.metaGap),0,0"
-  if ($it.Due) { try { [void]$meta.Children.Add((New-DuePill $it)) } catch {} }
+  $meta.Orientation = 'Horizontal'; $meta.VerticalAlignment = 'Top'; $meta.Height = $Tokens.Type.body.Line
+  if ($it.Notes -and -not $open) {
+    $n = New-Object System.Windows.Controls.TextBlock
+    $n.Text = G 0xE71B; $n.FontFamily = $MDL2; $n.FontSize = 11; $n.Foreground = $Faint; $n.Margin = '10,1,0,0'
+    $n.ToolTip = 'Has notes or links'; $n.VerticalAlignment = 'Center'; Set-Name $n 'Has notes or links'
+    [void]$meta.Children.Add($n)
+  }
   if ($hasKids) {
     $dn = @($node.Kids | Where-Object { (Rank $_.Item.Mark) -eq 2 }).Count
     $p = New-Object System.Windows.Controls.TextBlock
-    $p.Text = "$dn/$($node.Kids.Count)"; $p.FontFamily = $UI; $p.FontSize = $TypeSize.meta; $p.Foreground = $Faint; $p.Margin = '0,1,12,0'
+    $p.Text = "$dn/$($node.Kids.Count)"; $p.FontFamily = $UI; $p.FontSize = $TypeSize.meta; $p.Foreground = $Faint; $p.Margin = '10,0,0,0'
     $p.ToolTip = "$dn of $($node.Kids.Count) subtasks closed"; $p.VerticalAlignment = 'Center'
     Set-Name $p "$dn of $($node.Kids.Count) subtasks closed"
     Set-Tabular $p
     [void]$meta.Children.Add($p)
   }
-  if ($it.Notes -and -not $open) {
-    $n = New-Object System.Windows.Controls.TextBlock
-    $n.Text = G 0xE71B; $n.FontFamily = $MDL2; $n.FontSize = 11; $n.Foreground = $Faint; $n.Margin = '0,2,0,0'
-    $n.ToolTip = 'Has notes or links'; $n.VerticalAlignment = 'Center'; Set-Name $n 'Has notes or links'
-    [void]$meta.Children.Add($n)
-  }
+  if ($it.Due) { try { [void]$meta.Children.Add((New-DuePill $it)) } catch {} }
   if ($meta.Children.Count -eq 0) { $meta.Visibility = 'Collapsed' }
-  [System.Windows.Controls.Grid]::SetColumn($meta, 3); [System.Windows.Controls.Grid]::SetRow($meta, 1); [void]$g.Children.Add($meta)
+  if ($script:metaBelow) {   # (a narrow window: under the text, so the text keeps its line)
+    $meta.Margin = '-10,1,0,0'; $meta.Height = [double]::NaN
+    [System.Windows.Controls.Grid]::SetColumn($meta, 3); [System.Windows.Controls.Grid]::SetRow($meta, 1)
+  } else { [System.Windows.Controls.Grid]::SetColumn($meta, 4) }
+  [void]$g.Children.Add($meta)
 
   # 4: hover actions
   $acts = New-Object System.Windows.Controls.StackPanel
   $acts.Orientation = 'Horizontal'; $acts.Visibility = 'Collapsed'; $acts.Opacity = 0.85; $acts.VerticalAlignment = 'Top'
-  $acts.HorizontalAlignment = 'Right'; $acts.Background = $Hover; $acts.Margin = '6,-1,0,0'
+  $acts.HorizontalAlignment = 'Right'; $acts.Background = $GroupHover; $acts.Margin = '6,1,0,0'
   # (shown on mouse hover; the same actions are in the row menu, Ctrl+M, for keyboards and screen readers)
   $cal = New-IconButton 0xE787 'Deadline' { param($s, $e) Show-DuePopup $s.Tag $s }; $cal.Tag = $it
   $cal.Add_MouseLeftButtonUp({ param($s, $e) $e.Handled = $true; Show-DuePopup $s.Tag $s })
@@ -857,14 +871,24 @@ function New-Row($node) {
   }
   [System.Windows.Controls.Grid]::SetColumn($grip, 0); [void]$g.Children.Add($grip)
 
+  # on hover the tools take the place of the value on the right (the deadline is one of the tools too)
   $row.Add_MouseEnter({ param($s, $e)
-    $s.Background = $(if ($s.Tag -eq $script:sel) { $Selected } else { $Hover })
+    Paint-TaskRow $s ($s.Tag -eq $script:sel)
     $s.Child.Children[4].Background = $s.Background; $s.Child.Children[4].Visibility = 'Visible'
+    if ($s.Child.Children[4].Children.Count -and [System.Windows.Controls.Grid]::GetColumn($s.Child.Children[3]) -eq 4) { $s.Child.Children[3].Visibility = 'Hidden' }
     if ($s.Child.Children[5].Child) { $s.Child.Children[5].Opacity = 0.9 } })
   $row.Add_MouseLeave({ param($s, $e)
-    $s.Background = $(if ($s.Tag -eq $script:sel) { $Selected } else { $Clear })
+    Paint-TaskRow $s ($s.Tag -eq $script:sel)
+    if ($s.Child.Children[3].Visibility -eq 'Hidden') { $s.Child.Children[3].Visibility = 'Visible' }
     $s.Child.Children[4].Visibility = 'Collapsed'; $s.Child.Children[5].Opacity = 0.35 })
   return $row
+}
+# a task row's colours: the card's, a shade darker under the mouse, violet-tinted with the violet edge when selected.
+# (The edge is the row's left border; at rest it has the row's own colour, so the card shows no seam.)
+function Paint-TaskRow($row, [bool]$sel) {
+  $bg = $(if ($sel) { $GroupSel } elseif ($row.IsMouseOver) { $GroupHover } else { $GroupBg })
+  $row.Background = $bg
+  $row.BorderBrush = $(if ($sel) { $Accent } else { $bg })
 }
 
 # ---------------------------------------------------------------- drag to reorder
@@ -879,10 +903,13 @@ function Start-Drag($grip) {
   $live = $null
   foreach ($c in $list.Children) { if ((Is-TaskRow $c) -and $c.Tag -eq $it) { $live = $c; break } }
   if (-not $live) { return }
+  # the drop line: 2 px of violet drawn over the hairline where the task would go. It takes no room (negative
+  # margins, drawn on top), so the rows and the card stay where they are while dragging.
   $ph = New-Object System.Windows.Controls.Border
-  $ph.Height = 2; $ph.Background = $Accent; $ph.Margin = '14,1,8,1'; $ph.CornerRadius = 1; $ph.Visibility = 'Collapsed'
+  $ph.Height = 2; $ph.Background = $Accent; $ph.Margin = "$RowTextX,-1,8,-1"; $ph.CornerRadius = 1; $ph.Visibility = 'Collapsed'
+  $ph.IsHitTestVisible = $false; [System.Windows.Controls.Panel]::SetZIndex($ph, 10)
   [void]$list.Children.Add($ph)
-  $live.Opacity = 0.45
+  $live.Child.Opacity = 0.45
   $script:drag = @{ Item = $it; Row = $live; Ph = $ph; Target = $null; End = $false }
   [void]$live.Child.Children[5].CaptureMouse()
 }
@@ -903,7 +930,7 @@ function Drag-Move($e) {
   $d.Target = $target
   if ($insertAt -lt 0) { $insertAt = 0 }
   $lvl = $(if ($target) { $target.Level } else { 0 })
-  $d.Ph.Margin = "$(11 + $lvl * 18),1,8,1"; $d.Ph.Visibility = 'Visible'
+  $d.Ph.Margin = "$($RowTextX + $lvl * $Tokens.Row.indent),-1,8,-1"; $d.Ph.Visibility = 'Visible'
   $list.Children.Insert([Math]::Min($insertAt, $list.Children.Count), $d.Ph)
 }
 function End-Drag([bool]$apply) {
@@ -1093,19 +1120,26 @@ function Format-Deleted([long]$ms) {
   if ($t.Date -eq (Get-Date).Date.AddDays(-1)) { return 'yesterday ' + $t.ToString('H:mm', $CI) }
   return $t.ToString('d MMM H:mm', $CI)
 }
+# one card per list, newest first; a row is the task (with its subtasks), when it was deleted, and Restore
 function Render-TrashView {
   [void]$list.Children.Add((New-SettingsHeader 'Recently deleted'))
   $entries = @(Get-DeletedEntries)
-  if (-not $entries.Count) { $t = New-Text 'Nothing deleted in the last 30 days.' $TypeSize.body $Faint; $t.Margin = '8,6,8,6'; [void]$list.Children.Add($t) }
-  foreach ($en in $entries) {
-    $hint = $(if ($en.List) { "$($en.List), $(Format-Deleted $en.At)" } else { Format-Deleted $en.At })
-    if ($en.Count -gt 1) { $hint += $(if ($en.Count -eq 2) { ', with its subtask' } else { ", with $($en.Count - 1) subtasks" }) }
-    $b = New-SmallButton 'Restore' { param($x) Restore-Deleted $x } $null $en
-    Set-Name $b "Restore $($en.First)"
-    [void]$list.Children.Add((New-SettingRow $en.First $hint $b))
+  $about = 'Deleted tasks stay here for 30 days' + $(if (Read-SyncConfigUi) { ', also those deleted on your other devices' } else { '' }) + '. Right after a change, Ctrl+Z undoes it.'
+  if (-not $entries.Count) { Add-Note 'Nothing deleted in the last 30 days.' $Ink; Add-Note $about; return }
+  $lists = New-Object System.Collections.ArrayList
+  foreach ($en in $entries) { if (-not $lists.Contains($en.List)) { [void]$lists.Add($en.List) } }
+  foreach ($ln in $lists) {
+    Add-Heading $(if ($ln) { $ln } else { 'Other lists' })
+    foreach ($en in @($entries | Where-Object { $_.List -eq $ln })) {
+      $more = $(if ($en.Count -eq 2) { ', with its subtask' } elseif ($en.Count -gt 2) { ", with $($en.Count - 1) subtasks" } else { '' })
+      $when = Format-Deleted $en.At
+      $b = New-TextButton 'Restore' { param($x) Restore-Deleted $x } $Accent $en
+      Set-Name $b "Restore $($en.First)" ("From $(if ($en.List) { $en.List } else { 'a list that is gone' }), deleted $when$more")
+      $label = $en.First + $(if ($en.Count -gt 1) { " (+$($en.Count - 1))" } else { '' })
+      Add-CardRow (New-InfoRow $label $when $b -Tip "$($en.First)$more. Deleted $when$(if ($en.List) { " from $($en.List)" })")
+    }
   }
-  $note = New-Text ("Deleted tasks stay here for 30 days" + $(if (Read-SyncConfigUi) { ', also those deleted on your other devices' } else { '' }) + '. Right after a change, Ctrl+Z undoes it.') $TypeSize.meta $Faint
-  $note.Margin = '8,10,8,8'; [void]$list.Children.Add($note)
+  Add-Footnote $about
 }
 
 # Alt+Up / Alt+Down: swap with the previous / next sibling
@@ -1264,18 +1298,17 @@ function Show-DuePopup($it, $target) {
 # ---------------------------------------------------------------- notes / links
 $script:notesEditing = $null; $script:notesBox = $null
 
+# a task's notes when it is open: quiet text in the task's card, right under the task's text (no box of its own)
 function New-Notes($it) {
   $wrap = New-Object System.Windows.Controls.Border
-  $wrap.Margin = "$($it.Level * $Tokens.Row.indent + $RowTextX),0,8,8"; $wrap.Padding = '12,8,12,9'
-  $wrap.CornerRadius = New-Object System.Windows.CornerRadius($Tokens.Radius.control); $wrap.Background = $NoteBg
-  $wrap.BorderBrush = $Accent; $wrap.BorderThickness = '2,0,0,0'
+  $wrap.Background = $GroupBg; $wrap.Padding = "$($it.Level * $Tokens.Row.indent + $RowTextX),0,12,10"
   if ($script:notesEditing -eq $it) {
     $gr = New-Object System.Windows.Controls.Grid
     $box = New-Object System.Windows.Controls.TextBox
     Set-Name $box 'Notes and links' 'Ctrl+Enter saves, Esc cancels'
     $box.Text = $it.Notes; $box.Tag = $it; $box.AcceptsReturn = $true; $box.TextWrapping = 'Wrap'
     $box.FontFamily = $UI; $box.FontSize = $TypeSize.meta; $box.Background = $Clear; $box.Foreground = $Ink
-    $box.BorderThickness = '0'; $box.CaretBrush = $Accent; $box.MinHeight = 20; $box.Padding = '0'
+    $box.BorderThickness = '0,0,0,1.5'; $box.BorderBrush = $Accent; $box.CaretBrush = $Accent; $box.MinHeight = 20; $box.Padding = '0,0,0,2'
     $hint = New-Object System.Windows.Controls.TextBlock
     $hint.Text = 'Links, notes, context (Ctrl+Enter saves)'; $hint.FontFamily = $UI; $hint.FontSize = $TypeSize.meta
     $hint.Foreground = $Faint; $hint.IsHitTestVisible = $false; $hint.Margin = '2,0,0,0'
@@ -1343,6 +1376,7 @@ function Commit-Notes([switch]$Cancel) {
 # ---------------------------------------------------------------- task editing
 $script:editItem = $null; $script:editBox = $null; $script:tabEditing = $false
 $script:sel = $null; $script:visible = New-Object System.Collections.ArrayList
+$script:rows = New-Object System.Collections.ArrayList; $script:tabRow = $null   # the task rows Render made (Set-Sel)
 
 function Begin-Edit($tb) {
   Commit-Edit
@@ -1897,32 +1931,33 @@ function Show-AppMenu($s) {
   $m.PlacementTarget = $s; $m.Placement = 'Bottom'; $m.IsOpen = $true
 }
 
-# add-task line
+# add-task line: a card of its own at the bottom, drawn like one more row of the list ("+" in the chip column)
 $addGrid = New-Object System.Windows.Controls.Grid
 $addBorder = New-Object System.Windows.Controls.Border
-$addBorder.BorderBrush = $Line; $addBorder.BorderThickness = '0,1,0,0'; $addBorder.Padding = '6,9,6,10'; $addBorder.Margin = '8,6,8,0'
+$addBorder.Background = $GroupBg; $addBorder.CornerRadius = New-Object System.Windows.CornerRadius($CardRadius)
+$addBorder.Padding = '0,10,8,10'; $addBorder.Margin = "$CardInset,8,$CardInset,$CardInset"
 $addBox = New-Object System.Windows.Controls.TextBox
 Set-Name $addBox 'Add a task' 'Enter adds it at the end of the list'
 $addBox.FontFamily = $UI; $addBox.FontSize = $TypeSize.body; $addBox.Background = $Clear; $addBox.Foreground = $Ink
-$addBox.BorderThickness = '0'; $addBox.Padding = "$($RowTextX - 14),0,0,0"; $addBox.CaretBrush = $Accent
+$addBox.BorderThickness = '0'; $addBox.Padding = "$($RowTextX - 2),0,0,0"; $addBox.CaretBrush = $Accent
 $ph = New-Object System.Windows.Controls.TextBlock
 $ph.Text = (G 0xE710); $ph.FontFamily = $MDL2; $ph.FontSize = 11; $ph.Foreground = $Accent
-$ph.IsHitTestVisible = $false; $ph.VerticalAlignment = 'Center'; $ph.Margin = "$($RowChipX - 7),0,0,0"
+$ph.IsHitTestVisible = $false; $ph.VerticalAlignment = 'Center'; $ph.Margin = "$(2 + $RowChipX + 3),0,0,0"
 $phText = New-Object System.Windows.Controls.TextBlock
 $phText.Text = 'Add a task'; $phText.FontFamily = $UI; $phText.FontSize = $TypeSize.body; $phText.Foreground = $Faint
-$phText.IsHitTestVisible = $false; $phText.VerticalAlignment = 'Center'; $phText.Margin = "$($RowTextX - 12),0,0,0"
+$phText.IsHitTestVisible = $false; $phText.VerticalAlignment = 'Center'; $phText.Margin = "$RowTextX,0,0,0"
 [void]$addGrid.Children.Add($addBox); [void]$addGrid.Children.Add((Hide-Decoration $ph)); [void]$addGrid.Children.Add((Hide-Decoration $phText))
 $addBorder.Child = $addGrid
 [System.Windows.Controls.DockPanel]::SetDock($addBorder, 'Bottom'); [void]$dock.Children.Add($addBorder)
 # the Settings views' bottom line, where the add-task line is in the list: the version (Update-VersionDisplay)
 $verBar = New-Object System.Windows.Controls.Border
-$verBar.BorderBrush = $Line; $verBar.BorderThickness = '0,1,0,0'; $verBar.Padding = '0,5,0,6'; $verBar.Margin = '8,4,8,0'; $verBar.Visibility = 'Collapsed'
+$verBar.Margin = "$CardInset,2,$CardInset,10"; $verBar.Visibility = 'Collapsed'
 [System.Windows.Controls.DockPanel]::SetDock($verBar, 'Bottom'); [void]$dock.Children.Add($verBar)
 
 # a short message above the add line ("Deleted ...  Undo", "Not saved ..."); it goes away by itself
 $notice = New-Object System.Windows.Controls.Border
-$notice.Margin = '8,6,8,0'; $notice.Padding = '12,6,6,6'; $notice.Visibility = 'Collapsed'
-$notice.CornerRadius = New-Object System.Windows.CornerRadius($Tokens.Radius.control)
+$notice.Margin = "$CardInset,8,$CardInset,0"; $notice.Padding = "$CardPad,8,8,8"; $notice.Visibility = 'Collapsed'
+$notice.CornerRadius = New-Object System.Windows.CornerRadius($CardRadius)
 $noticeGrid = New-Object System.Windows.Controls.Grid
 foreach ($wd in @('*', 'Auto')) { $cd = New-Object System.Windows.Controls.ColumnDefinition; $cd.Width = $wd; $noticeGrid.ColumnDefinitions.Add($cd) }
 $noticeText = New-Object System.Windows.Controls.TextBlock
@@ -1936,14 +1971,14 @@ $noticeTimer.Interval = [TimeSpan]::FromSeconds(8)
 $noticeTimer.Add_Tick({ $noticeTimer.Stop(); $notice.Visibility = 'Collapsed' })
 function Update-NoticeColors {
   $notice.Background = $ButtonBg; $noticeText.Foreground = $Ink
-  if ($noticeGrid.Children.Count -gt 1) { $noticeGrid.Children[1].Background = $ButtonBg; $noticeGrid.Children[1].Child.Foreground = $Ink }
+  if ($noticeGrid.Children.Count -gt 1) { $noticeGrid.Children[1].Child.Foreground = $Accent }
 }
 function Show-Notice([string]$text, [switch]$Undo) {
   $noticeText.Text = $text
   if ($noticeGrid.Children.Count -gt 1) { $noticeGrid.Children.RemoveAt(1) }
   if ($Undo) {
-    $b = New-SmallButton 'Undo' { $notice.Visibility = 'Collapsed'; Undo-Last }
-    $b.ToolTip = 'Ctrl+Z'; [System.Windows.Controls.Grid]::SetColumn($b, 1); [void]$noticeGrid.Children.Add($b)
+    $b = New-TextButton 'Undo' { $notice.Visibility = 'Collapsed'; Undo-Last }
+    $b.ToolTip = 'Ctrl+Z'; $b.Margin = '8,-4,0,-4'; [System.Windows.Controls.Grid]::SetColumn($b, 1); [void]$noticeGrid.Children.Add($b)
   }
   Update-NoticeColors
   $notice.Visibility = 'Visible'
@@ -1963,12 +1998,25 @@ $addBox.Add_PreviewKeyDown({
   }
 })
 
-# task list
+# task list (and the Settings views): the cards are inset from the window by the list's margin; the scrollbar is
+# drawn over that margin instead of taking a column of its own, so the cards stay centred whether it shows or not
 $scroll = New-Object System.Windows.Controls.ScrollViewer
-$scroll.VerticalScrollBarVisibility = 'Auto'; $scroll.HorizontalScrollBarVisibility = 'Disabled'; $scroll.Margin = '2,8,6,0'
+$scroll.VerticalScrollBarVisibility = 'Auto'; $scroll.HorizontalScrollBarVisibility = 'Disabled'; $scroll.Margin = '0,4,0,0'
 $scroll.Focusable = $false   # not a Tab stop of its own (the rows are)
+$scroll.Template = [Windows.Markup.XamlReader]::Parse(@'
+<ControlTemplate xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation" xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml" TargetType="ScrollViewer">
+  <Grid Background="{TemplateBinding Background}">
+    <ScrollContentPresenter x:Name="PART_ScrollContentPresenter" Margin="{TemplateBinding Padding}" CanContentScroll="{TemplateBinding CanContentScroll}"/>
+    <ScrollBar x:Name="PART_VerticalScrollBar" HorizontalAlignment="Right" Margin="0,2,3,4" Cursor="Arrow"
+               Maximum="{TemplateBinding ScrollableHeight}" ViewportSize="{TemplateBinding ViewportHeight}"
+               Value="{Binding VerticalOffset, Mode=OneWay, RelativeSource={RelativeSource TemplatedParent}}"
+               Visibility="{TemplateBinding ComputedVerticalScrollBarVisibility}"/>
+  </Grid>
+</ControlTemplate>
+'@)
 $list = New-AccessibleList 'list' 'Tasks'
-$list.Margin = '0,0,4,0'
+$list.Margin = "$CardInset,0,$CardInset,4"
+$list.UseLayoutRounding = $true   # (the hairlines stay one crisp pixel)
 $scroll.Content = $list
 [void]$dock.Children.Add($scroll)
 $tabGroup = 0
@@ -1992,35 +2040,57 @@ function Build-Tree {
 
 function Node-Rank($it) { if ($it.Text -eq '') { return 0 } else { return (Rank $it.Mark) } }
 
-# a task, then (when open) its notes and subtasks: active first, then postponed, then closed
+# a task, then (when open) its notes and subtasks: active first, then postponed, then closed. All in the open card;
+# the hairline above a row starts at its text, so a subtask's hairlines are indented with it.
 function Render-Node($node) {
   [void]$script:visible.Add($node.Item)
-  [void]$list.Children.Add((New-Row $node))
+  $row = New-Row $node; [void]$script:rows.Add($row)
+  Add-CardRow $row ($RowTextX + $node.Item.Level * $Tokens.Row.indent)
   $open = Is-Open $node
   if ($script:notesEditing -eq $node.Item) { $open = $true }
   if (-not $open) { return }
-  if ($node.Item.Notes -or $script:notesEditing -eq $node.Item) { [void]$list.Children.Add((New-Notes $node.Item)) }
+  if ($node.Item.Notes -or $script:notesEditing -eq $node.Item) { Add-CardRow (New-Notes $node.Item) -Joined }
   foreach ($r in 0, 1, 2) {
     foreach ($c in $node.Kids) { if ((Node-Rank $c.Item) -eq $r) { Render-Node $c } }
   }
 }
 
-# section break: a sentence-case small label with a hairline running to the right edge
-function New-SectionLabel([string]$text, [double]$indent = 8) {
-  $g = New-Object System.Windows.Controls.Grid; $g.Margin = "$indent,18,8,4"
-  foreach ($wd in @('Auto', '*')) { $cd = New-Object System.Windows.Controls.ColumnDefinition; $cd.Width = $wd; $g.ColumnDefinitions.Add($cd) }
-  $tb = New-Object System.Windows.Controls.TextBlock
-  $tb.Text = $text; $tb.FontFamily = $UI; $tb.FontSize = $TypeSize.small; $tb.FontWeight = 'Medium'; $tb.Foreground = $Faint
-  $tb.VerticalAlignment = 'Center'
-  $rule = New-Object System.Windows.Controls.Border; $rule.Height = 1; $rule.Background = $Line
-  $rule.VerticalAlignment = 'Center'; $rule.Margin = '12,1,0,0'
-  [System.Windows.Controls.Grid]::SetColumn($rule, 1)
-  [void]$g.Children.Add($tb); [void]$g.Children.Add($rule)
-  return $g
+# the headings of the list's cards line up with the status chips
+$ListHeadX = 2 + $RowChipX
+
+function Toggle-Completed {
+  Commit-Edit
+  $script:cfg.showCompleted = $(if ($script:cfg.showCompleted -eq '1') { '0' } else { '1' })
+  Save-Settings; Render
+}
+# the Completed heading: "Completed · 2" with a chevron at the right end; it shows or hides the card under it
+function New-CompletedHeading([int]$count, [bool]$show) {
+  $h = New-Control 'disclosure' ("Completed, $count " + $(if ($count -eq 1) { 'task' } else { 'tasks' })) 'Shows or hides the completed tasks' { param($s, $e) Toggle-Completed }
+  if ($script:HasA11y) { $h.IsExpanded = $show }
+  $h.Padding = "$ListHeadX,3,$($CardPad - 2),3"; $h.Cursor = 'Hand'; $h.Background = $Clear
+  $h.CornerRadius = New-Object System.Windows.CornerRadius($Tokens.Radius.control)
+  $g = New-Object System.Windows.Controls.Grid
+  foreach ($wd in @('Auto', 'Auto', '*', 'Auto')) { $cd = New-Object System.Windows.Controls.ColumnDefinition; $cd.Width = $wd; $g.ColumnDefinitions.Add($cd) }
+  $lbl = New-Text 'Completed' $TypeSize.small $Faint; $lbl.FontWeight = 'Medium'; $lbl.VerticalAlignment = 'Center'
+  $num = New-Text " $([char]0x00B7) $count" $TypeSize.small $Faint; $num.VerticalAlignment = 'Center'; Set-Tabular $num
+  $chev = New-Text $(if ($show) { G 0xE70D } else { G 0xE76C }) 9 $Faint; $chev.FontFamily = $MDL2; $chev.VerticalAlignment = 'Center'
+  [System.Windows.Controls.Grid]::SetColumn($num, 1); [System.Windows.Controls.Grid]::SetColumn($chev, 3)
+  foreach ($x in @($lbl, $num, $chev)) { [void]$g.Children.Add($x) }
+  $h.Child = $g
+  $h.Add_MouseEnter({ param($s, $e) $s.Child.Children[0].Foreground = $Ink })
+  $h.Add_MouseLeave({ param($s, $e) $s.Child.Children[0].Foreground = $Faint })
+  $h.Add_MouseLeftButtonUp({ param($s, $e) $e.Handled = $true; Toggle-Completed })
+  return $h
 }
 
+# The list: its tasks in a card (a heading line or a blank line in the file starts a new one), then Postponed and
+# Completed, each a card under its own heading. Done, postponed and the other states look as they always did.
+# Below this window width a task's deadline, subtask count and notes mark go under its text rather than beside it:
+# the text column would get too narrow for one line otherwise.
+$MetaBelowW = 380; $script:metaBelow = $false
 function Render {
   if ($script:editItem -or $script:notesBox) { return }
+  $script:metaBelow = $w.Width -lt $MetaBelowW
   Render-Tabs
   Update-ReadOnly
   if ($script:view -ne 'list') { Render-Settings; return }
@@ -2028,7 +2098,7 @@ function Render {
   $fromSettings = $script:renderedView -ne 'list'; $script:renderedView = 'list'
   $hadFocus = $list.IsKeyboardFocusWithin -or ($fromSettings -and $verBar.IsKeyboardFocusWithin)
   $verBar.Visibility = 'Collapsed'
-  $list.Children.Clear()
+  $list.Children.Clear(); Reset-Groups
   if ($script:HasA11y) { $list.Role = 'list' }
   Set-Name $list "$($script:proj) tasks"
   $share = Get-ShareOf $script:proj
@@ -2038,13 +2108,12 @@ function Render {
     $trouble = $(if ($sst -and @('offline', 'error') -contains $sst.State) { " Not synced right now: $($sst.Message)" } else { '' })
     if ($script:readOnly -or $trouble) {
       $txt = $(if ($script:readOnly) { "View only. Shared with you from $(Get-ShareHost $share): you see the changes as they are made, but can't change it." } else { "Shared with you from $(Get-ShareHost $share)." }) + $trouble
-      $note = New-Text $txt $TypeSize.meta $NoteInk
-      $box = New-Object System.Windows.Controls.Border; $box.Background = $NoteBg; $box.BorderBrush = $Accent; $box.BorderThickness = '2,0,0,0'
-      $box.Padding = '10,6,10,6'; $box.Margin = "$RowChipX,2,8,8"; $box.CornerRadius = New-Object System.Windows.CornerRadius($Tokens.Radius.control); $box.Child = $note
-      [void]$list.Children.Add($box)
+      $note = New-Text $txt $TypeSize.meta $(if ($trouble) { $Ink } else { $Faint }); $note.Margin = "$ListHeadX,2,$CardPad,2"
+      [void]$list.Children.Add($note)
     }
   }
-  $script:visible = New-Object System.Collections.ArrayList
+  $before = $list.Children.Count
+  $script:visible = New-Object System.Collections.ArrayList; $script:rows = New-Object System.Collections.ArrayList
   $titleTaken = $false; $total = 0; $done = 0
   foreach ($it in $script:items) {
     if ($it.Kind -eq 'task' -and $it.Text -ne '' -and $it.Mark -ne '-' -and $it.Mark -ne '~') { $total++; if ($it.Mark -eq 'x') { $done++ } }
@@ -2055,15 +2124,9 @@ function Render {
     $it = $n.Item
     if ($it.Kind -eq 'raw') {
       if (-not $titleTaken -and $it.Raw -match '^#\s+(.*)$') { $titleTaken = $true; continue }
-      if ($it.Raw -match '^\s*$') {
-        if ($list.Children.Count -gt 0) { $sp = New-Object System.Windows.Controls.Border; $sp.Height = 6; [void]$list.Children.Add($sp) }
-        continue
-      }
-      if ($it.Raw -match '^#+\s*(.*)$') { [void]$list.Children.Add((New-SectionLabel $matches[1] $RowChipX)); continue }
-      $tb = New-Object System.Windows.Controls.TextBlock
-      $tb.FontFamily = $UI; $tb.TextWrapping = 'Wrap'; $tb.Foreground = $Ink
-      $tb.Text = $it.Raw; $tb.FontSize = $TypeSize.meta; $tb.Margin = "$RowChipX,2,0,2"
-      [void]$list.Children.Add($tb)
+      if ($it.Raw -match '^\s*$') { Close-Card; continue }   # a blank line ends a card
+      if ($it.Raw -match '^#+\s*(.*)$') { Add-Heading $matches[1] $ListHeadX; continue }
+      Add-Footnote $it.Raw $Ink $ListHeadX
       continue
     }
     $r = Node-Rank $it
@@ -2073,49 +2136,23 @@ function Render {
   }
 
   if ($postponed.Count) {
-    [void]$list.Children.Add((New-SectionLabel 'Postponed' $RowChipX))
+    Add-Heading 'Postponed' $ListHeadX
     $script:renderSection = 'postponed'; foreach ($n in $postponed) { Render-Node $n }
   }
 
   if ($closed.Count) {
     $show = $script:cfg.showCompleted -eq '1'
-    $h = New-Control 'button' ("Completed, $($closed.Count) " + $(if ($closed.Count -eq 1) { 'task' } else { 'tasks' }) + $(if ($show) { ', shown' } else { ', hidden' })) 'Show or hide the completed tasks' {
-      param($s, $e) Commit-Edit; $script:cfg.showCompleted = $(if ($script:cfg.showCompleted -eq '1') { '0' } else { '1' }); Save-Settings; Render }
-    $h.Margin = '0,14,0,2'; $h.Padding = "$($RowGripW + 4),7,8,7"; $h.Cursor = 'Hand'; $h.Background = $Clear
-    $hp = New-Object System.Windows.Controls.Grid
-    foreach ($wd in @('16', 'Auto', 'Auto', '*')) { $cd = New-Object System.Windows.Controls.ColumnDefinition; $cd.Width = $wd; $hp.ColumnDefinitions.Add($cd) }
-    $chev = New-Object System.Windows.Controls.TextBlock
-    $chev.Text = $(if ($show) { G 0xE70D } else { G 0xE76C })
-    $chev.FontFamily = $MDL2; $chev.FontSize = 8; $chev.Foreground = $Faint; $chev.VerticalAlignment = 'Center'
-    $lbl = New-Object System.Windows.Controls.TextBlock
-    $lbl.Text = 'Completed'; $lbl.FontFamily = $UI; $lbl.FontSize = $TypeSize.small
-    $lbl.FontWeight = 'Medium'; $lbl.Foreground = $Faint; $lbl.VerticalAlignment = 'Center'
-    $num = New-Object System.Windows.Controls.TextBlock
-    $num.Text = " $([char]0x00B7) $($closed.Count)"; $num.FontFamily = $UI; $num.FontSize = $TypeSize.small
-    $num.Foreground = $Faint; $num.VerticalAlignment = 'Center'; Set-Tabular $num
-    $rule = New-Object System.Windows.Controls.Border; $rule.Height = 1; $rule.Background = $Line
-    $rule.VerticalAlignment = 'Center'; $rule.Margin = '12,1,0,0'
-    [System.Windows.Controls.Grid]::SetColumn($lbl, 1); [System.Windows.Controls.Grid]::SetColumn($num, 2); [System.Windows.Controls.Grid]::SetColumn($rule, 3)
-    foreach ($x in @($chev, $lbl, $num, $rule)) { [void]$hp.Children.Add($x) }
-    $h.Child = $hp
-    $h.Add_MouseEnter({ param($s, $e) $s.Child.Children[1].Foreground = $Ink })
-    $h.Add_MouseLeave({ param($s, $e) $s.Child.Children[1].Foreground = $Faint })
-    $h.Add_MouseLeftButtonUp({ param($s, $e)
-      $e.Handled = $true; Commit-Edit
-      $script:cfg.showCompleted = $(if ($script:cfg.showCompleted -eq '1') { '0' } else { '1' })
-      Save-Settings; Render })
-    [void]$list.Children.Add($h)
+    Add-Heading (New-CompletedHeading $closed.Count $show)
     $script:renderSection = 'closed'; if ($show) { foreach ($n in $closed) { Render-Node $n } }
   }
+  Close-Card
 
   if ($script:listBusy) { $addBorder.Visibility = 'Collapsed' }
-  if ($list.Children.Count -eq [int][bool]($share -and ($script:readOnly -or $trouble))) {   # (nothing but the shared-list note)
-    $e = New-Object System.Windows.Controls.TextBlock
-    $e.Text = $(if ($script:listBusy) { "'$($script:proj)' is busy: another program is writing it. It shows here as soon as it is free." }
-                elseif ($share -and -not (Test-Path -LiteralPath $script:todo)) { 'Getting the list from its owner...' }
-                elseif ($script:readOnly) { 'No tasks here yet.' } else { 'No tasks here yet. Add one below.' })
-    $e.FontFamily = $UI; $e.FontSize = $TypeSize.body; $e.Foreground = $Faint
-    $e.Margin = "$RowChipX,24,8,8"; $e.TextWrapping = 'Wrap'
+  if ($list.Children.Count -eq $before) {   # (nothing but the shared-list note)
+    $e = New-Text $(if ($script:listBusy) { "'$($script:proj)' is busy: another program is writing it. It shows here as soon as it is free." }
+                    elseif ($share -and -not (Test-Path -LiteralPath $script:todo)) { 'Getting the list from its owner...' }
+                    elseif ($script:readOnly) { 'No tasks here yet.' } else { 'No tasks here yet. Add one below.' }) $TypeSize.body $Faint
+    $e.Margin = "$ListHeadX,24,$CardPad,8"
     [void]$list.Children.Add($e)
   }
 
@@ -2130,11 +2167,13 @@ function Render {
 
 # ---------------------------------------------------------------- settings view (logo / ... > Settings / Ctrl+,)
 # Settings is a short list of sections, each a page of its own, so a narrow window stays easy to scan (docs/setup.md
-# names them). On a page, actions are buttons and places to go have a chevron; rare and risky actions sit at the
-# bottom, under Advanced. A quiet line under every Settings view says the version, with a dot when an update needs
-# a look (it opens Updates); the tray icon's tooltip says it too.
+# names them). Every view is a grouped list (docs/design.md): cards of one-line rows, where places to go have a
+# chevron, actions are rows in violet (red when risky) and explanations are footnotes under the card. Rare and risky
+# actions sit at the bottom, under Advanced. A quiet line under every Settings view says the version, with a dot when
+# an update needs a look (it opens Updates); the tray icon's tooltip says it too.
 $script:view = 'list'
-$script:SettingsPages = [ordered]@{ general = 'General'; notifications = 'Notifications'; sync = 'Sync & sharing'; updates = 'Updates'; yourlists = 'Your lists'; about = 'About' }
+# (in this order; the last two are a card of their own, "App")
+$script:SettingsPages = [ordered]@{ general = 'General'; notifications = 'Notifications'; sync = 'Sync & sharing'; yourlists = 'Your lists'; updates = 'Updates'; about = 'About' }
 # where Back (the header, Esc) goes from each view
 $script:ViewParent = @{ settings = 'list'; share = 'list'; keys = 'general'; pair = 'sync'; conflicts = 'sync'; trash = 'yourlists' }
 $script:ViewTitles = @{ list = 'the list'; settings = 'Settings'; keys = 'Keyboard shortcuts'; pair = 'Pair phone'; conflicts = 'Conflicts'; trash = 'Recently deleted'; share = 'Share' }
@@ -2190,36 +2229,39 @@ function Set-StartWithWindows([bool]$on) {
     $l.Save()
   } elseif (Test-Path -LiteralPath $startupLnk) { Remove-Item -LiteralPath $startupLnk -Force }
 }
+# Keyboard shortcuts: @('', heading) starts a card, @(keys, what it does) is a row, @('#', text) the card's footnote
 $script:Keybinds = @(
   @('', 'Tasks'),
-  @('Up / Down', 'Select previous / next task (a screen reader reads it)'),
-  @('Enter', 'Edit the selected task'),
-  @('Space', 'Mark done / not done'),
-  @('Right / Left', 'Open / close a task (Left on a subtask jumps to its parent)'),
-  @('Alt+Up / Alt+Down', 'Move the task up / down'),
-  @('Ctrl+Z', 'Undo the last change (a move, a delete, an edit)'),
-  @('Ctrl+D', 'Set a deadline'),
+  @('Up / Down', 'Previous / next task'),
+  @('Enter', 'Edit the task'),
+  @('Space', 'Done / not done'),
+  @('Right / Left', 'Open / close a task'),
+  @('Alt+Up / Alt+Down', 'Move the task'),
+  @('Ctrl+Z', 'Undo'),
+  @('Ctrl+D', 'Deadline'),
   @('Ctrl+I', 'Notes / links'),
-  @('Ctrl+M', 'Task menu (status, deadline, move, delete...)'),
+  @('Ctrl+M', 'Task menu'),
   @('Ctrl+N', 'New task'),
-  @('Esc', 'Clear selection'),
+  @('Esc', 'Clear the selection'),
+  @('#', 'A screen reader reads the selected task. Left on a subtask goes to its parent. Ctrl+Z undoes the last change: a move, a delete, an edit. The task menu has the status, deadline, move and delete.'),
   @('', 'While editing a task'),
-  @('Enter', 'Save and start a new task below'),
-  @('Shift+Enter', 'Save and start a new subtask'),
-  @('Enter (empty line)', 'Stop editing'),
-  @('Up / Down', 'Save and edit the previous / next task'),
-  @('Tab / Shift+Tab', 'Make it a subtask / move it back out'),
+  @('Enter', 'Save, new task below'),
+  @('Shift+Enter', 'Save, new subtask'),
+  @('Enter', 'Stop (on an empty line)'),
+  @('Up / Down', 'Edit the previous / next'),
+  @('Tab / Shift+Tab', 'Subtask / back out'),
   @('Esc', 'Cancel'),
-  @('Ctrl+Enter', 'Save notes'),
+  @('Ctrl+Enter', 'Save the notes'),
   @('', 'Projects and app'),
-  @('Tab / Shift+Tab', 'Move between the tabs, the window buttons, the list and the new-task box'),
-  @('Left / Right on a tab', 'Previous / next project'),
+  @('Tab / Shift+Tab', 'Move around the window'),
+  @('Left / Right', 'Switch projects (on a tab)'),
   @('Enter / Space', 'Use the focused button'),
-  @('Shift+F10', 'Menu of the focused tab or task'),
+  @('Shift+F10', 'Menu of the tab or task'),
   @('Ctrl+Tab / Ctrl+Shift+Tab', 'Next / previous project'),
-  @('Scroll over the tabs', 'Scroll through projects'),
-  @('Ctrl+,', 'Settings (again: back to the list)'),
-  @('Esc', 'Back: from a Settings page to Settings, from Settings to the list')
+  @('Wheel', 'Scroll the tabs (over them)'),
+  @('Ctrl+,', 'Settings, and back'),
+  @('Esc', 'Back one level'),
+  @('#', 'Tab goes through the tabs, the window buttons, the list (one stop: the selected task) and the new-task box. Esc goes from a Settings page to Settings, and from Settings to the list.')
 )
 
 function Toggle-Settings {
@@ -2234,77 +2276,216 @@ function New-Text([string]$text, [double]$size, $brush) {
   $t.Text = $text; $t.FontFamily = $UI; $t.FontSize = $size; $t.Foreground = $brush; $t.TextWrapping = 'Wrap'
   return $t
 }
-# a setting: its name, a one-line hint under it, and its control on the right. -Dot: the hint is something that
-# needs a look (an update, a conflict): a violet dot before it, and ink instead of the quiet colour
-function New-SettingRow([string]$label, [string]$hint, $control, [switch]$Dot) {
-  $g = New-Object System.Windows.Controls.Grid; $g.Margin = '8,8,6,8'
-  foreach ($wd in @('*', 'Auto')) { $cd = New-Object System.Windows.Controls.ColumnDefinition; $cd.Width = $wd; $g.ColumnDefinitions.Add($cd) }
-  $sp = New-Object System.Windows.Controls.StackPanel; $sp.VerticalAlignment = 'Center'
-  [void]$sp.Children.Add((New-Text $label $TypeSize.body $Ink))
-  if ($hint -and $Dot) {
-    $hg = New-Object System.Windows.Controls.Grid; $hg.Margin = '0,2,12,0'
-    foreach ($wd in @('Auto', '*')) { $cd = New-Object System.Windows.Controls.ColumnDefinition; $cd.Width = $wd; $hg.ColumnDefinitions.Add($cd) }
-    $d = New-Dot; $d.VerticalAlignment = 'Top'; $d.Margin = '0,6,7,0'
-    $h = New-Text $hint $TypeSize.meta $Ink; [System.Windows.Controls.Grid]::SetColumn($h, 1)
-    [void]$hg.Children.Add($d); [void]$hg.Children.Add($h); [void]$sp.Children.Add($hg)
-  } elseif ($hint) { $h = New-Text $hint $TypeSize.meta $Faint; $h.Margin = '0,2,12,0'; [void]$sp.Children.Add($h) }
-  [void]$g.Children.Add($sp)
-  if ($control) { $control.VerticalAlignment = 'Center'; [System.Windows.Controls.Grid]::SetColumn($control, 1); [void]$g.Children.Add($control) }
-  return $g
-}
 # the "needs a look" mark: a small violet dot (always next to words that say what it is about)
 function New-Dot {
   $d = New-Object System.Windows.Shapes.Ellipse; $d.Width = 7; $d.Height = 7; $d.Fill = $Accent
   return $d
 }
-# a row that opens another view (a Settings page, Keyboard shortcuts, Pair phone, ...): name, hint and a chevron.
-# Its key is "open-<view>", so Back puts keyboard focus on it again. -Name: what a screen reader says (default: the label)
-function New-LinkRow([string]$label, [string]$hint, [string]$view, [switch]$Dot, [string]$Name = '') {
-  $chev = New-Text (G 0xE76C) 10 $TabInk; $chev.FontFamily = $MDL2; $chev.Margin = '8,0,2,0'
-  $r = New-SettingRow $label $hint $chev -Dot:$Dot
-  $b = New-Control 'button' $(if ($Name) { $Name } else { $label }) $(if ($Name) { '' } else { $hint }) { param($s, $e) Show-View $s.Tag }
-  [System.Windows.Automation.AutomationProperties]::SetAutomationId($b, "open-$view")
-  $b.Child = $r; $b.Tag = $view; $b.Cursor = 'Hand'; $b.Background = $Clear; $b.CornerRadius = New-Object System.Windows.CornerRadius($Tokens.Radius.control)
-  $b.Add_MouseEnter({ param($s, $e) $s.Background = $Hover })
-  $b.Add_MouseLeave({ param($s, $e) $s.Background = $Clear })
-  $b.Add_MouseLeftButtonUp({ param($s, $e) $e.Handled = $true; Show-View $s.Tag })
+
+# ---------------------------------------------------------------- grouped lists (docs/design.md, "Grouped lists")
+# The task list and every Settings view are built the same way, top to bottom in $list: an optional heading, a card
+# of one-line rows, an optional footnote under the card, then the next card. A card is not a container: its rows are
+# siblings in $list (selection, editing and drag and drop find the task rows there). Each row has the card's colour,
+# the first and the last carry its rounded corners, and the hairline between two rows starts where the lower row's
+# text starts. A row says one thing: what is said under a setting elsewhere goes to the footnote, the value on the
+# right, the tooltip, or the description a screen reader reads.
+$script:card = $null; $script:blocks = 0; $script:headed = $false
+function Reset-Groups { $script:card = $null; $script:blocks = 0; $script:headed = $false }
+# the room above a new heading or card: none under its heading, the gap between cards, a little at the top of a view
+function Get-BlockGap { if ($script:headed) { return 0 } elseif ($script:blocks) { return $CardGap } else { return 6 } }
+function Set-Top($el, [double]$top) { $m = $el.Margin; $el.Margin = New-Object System.Windows.Thickness($m.Left, $top, $m.Right, $m.Bottom) }
+# a heading over the next card: small, quiet, sentence case. $el: its text, or a control (the Completed disclosure)
+function Add-Heading($el, [double]$x = $CardPad) {
+  Close-Card
+  if ($el -is [string]) {
+    $t = New-Text $el $TypeSize.small $Faint; $t.FontWeight = 'Medium'; $t.TextWrapping = 'NoWrap'; $t.TextTrimming = 'CharacterEllipsis'
+    $t.Margin = "$x,0,$CardPad,6"; $el = $t
+  } else { $el.Margin = '0,0,0,3' }
+  Set-Top $el (Get-BlockGap)
+  [void]$list.Children.Add($el); $script:blocks++; $script:headed = $true
+}
+# a row of the open card (the first row opens one). $lineX: where the hairline above it starts (its text);
+# -Joined: it continues the row above (a task's notes), with no hairline between them
+function Add-CardRow($row, [double]$lineX = $CardPad, [switch]$Joined) {
+  if (-not $script:card) {
+    $script:card = New-Object System.Collections.ArrayList
+    $row.Margin = "0,$(Get-BlockGap),0,0"; $script:blocks++; $script:headed = $false
+    $row.CornerRadius = New-Object System.Windows.CornerRadius($CardRadius, $CardRadius, 0, 0)
+  } else {
+    $row.Margin = $NoMargin
+    if (-not $Joined) {
+      $l = New-Object System.Windows.Controls.Border; $l.Height = 1; $l.Background = (Get-HairlineBrush $lineX); $l.Tag = $lineX
+      $l.IsHitTestVisible = $false; $l.SnapsToDevicePixels = $true
+      [void]$list.Children.Add($l)
+    }
+  }
+  [void]$script:card.Add($row)
+  [void]$list.Children.Add($row)
+}
+$NoMargin = New-Object System.Windows.Thickness(0)
+# a hairline's brush: the card's colour up to x, the hairline colour from there (one per x and theme, frozen)
+$script:hairlineBrushes = @{}
+function Get-HairlineBrush([double]$x) {
+  $k = "$($script:themeName)|$x"
+  $b = $script:hairlineBrushes[$k]
+  if (-not $b) {
+    $b = New-Object System.Windows.Media.LinearGradientBrush
+    $b.MappingMode = 'Absolute'; $b.StartPoint = New-Object System.Windows.Point($x, 0); $b.EndPoint = New-Object System.Windows.Point(($x + 1), 0)
+    $b.GradientStops.Add((New-Object System.Windows.Media.GradientStop($GroupBg.Color, 0)))
+    $b.GradientStops.Add((New-Object System.Windows.Media.GradientStop($GroupLine.Color, 1)))
+    $b.Freeze(); $script:hairlineBrushes[$k] = $b
+  }
   return $b
 }
-# a disclosure, drawn like the "Completed" section break: chevron, small label, hairline. Shows or hides what follows
-# it on the page; screen readers hear it as a button that is expanded or collapsed. $help says what is inside.
-function New-Disclosure([string]$text, [string]$help, [bool]$open, [scriptblock]$onToggle) {
-  $h = New-Control 'disclosure' $text $help { param($s, $e) & $s.Tag }
-  if ($script:HasA11y) { $h.IsExpanded = $open }
-  [System.Windows.Automation.AutomationProperties]::SetAutomationId($h, 'advanced')
-  $h.Tag = $onToggle; $h.Margin = '0,14,0,2'; $h.Padding = '8,7,6,7'; $h.Cursor = 'Hand'; $h.Background = $Clear
-  $h.CornerRadius = New-Object System.Windows.CornerRadius($Tokens.Radius.control)
-  $g = New-Object System.Windows.Controls.Grid
-  foreach ($wd in @('16', 'Auto', '*')) { $cd = New-Object System.Windows.Controls.ColumnDefinition; $cd.Width = $wd; $g.ColumnDefinitions.Add($cd) }
-  $chev = New-Text $(if ($open) { G 0xE70D } else { G 0xE76C }) 8 $Faint; $chev.FontFamily = $MDL2; $chev.VerticalAlignment = 'Center'
-  $lbl = New-Text $text $TypeSize.small $Faint; $lbl.FontWeight = 'Medium'; $lbl.VerticalAlignment = 'Center'
-  $rule = New-Object System.Windows.Controls.Border; $rule.Height = 1; $rule.Background = $Line; $rule.VerticalAlignment = 'Center'; $rule.Margin = '12,1,0,0'
-  [System.Windows.Controls.Grid]::SetColumn($lbl, 1); [System.Windows.Controls.Grid]::SetColumn($rule, 2)
-  foreach ($x in @($chev, $lbl, $rule)) { [void]$g.Children.Add($x) }
-  $h.Child = $g
-  $h.Add_MouseEnter({ param($s, $e) $s.Child.Children[1].Foreground = $Ink })
-  $h.Add_MouseLeave({ param($s, $e) $s.Child.Children[1].Foreground = $Faint })
-  $h.Add_MouseLeftButtonUp({ param($s, $e) $e.Handled = $true; & $s.Tag })
-  return $h
+# ends the open card: its last row gets the bottom corners
+function Close-Card {
+  $c = $script:card; $script:card = $null
+  if (-not $c -or -not $c.Count) { return }
+  $top = $(if ($c.Count -eq 1) { $CardRadius } else { 0 })
+  $c[$c.Count - 1].CornerRadius = New-Object System.Windows.CornerRadius($top, $top, $CardRadius, $CardRadius)
 }
-# a quiet paragraph at the end of a page
-function New-Note([string]$text) {
-  $t = New-Text $text $TypeSize.meta $Faint; $t.Margin = '8,10,8,8'
-  return $t
+# the footnote under a card: what its rows mean, when that is not obvious (iOS group footers)
+function Add-Footnote([string]$text, $brush = $Faint, [double]$x = $CardPad) {
+  Close-Card
+  $t = New-Text $text $TypeSize.meta $brush; $t.Margin = "$x,6,$CardPad,0"
+  [void]$list.Children.Add($t)
 }
+# a quiet paragraph of its own, between cards; and something that is not a card (a QR code), with the same spacing
+function Add-Note([string]$text, $brush = $Faint) {
+  $t = New-Text $text $TypeSize.meta $brush; $t.Margin = "$CardPad,0,$CardPad,0"
+  Add-Loose $t
+}
+function Add-Loose($el) {
+  Close-Card
+  Set-Top $el (Get-BlockGap)
+  [void]$list.Children.Add($el); $script:blocks++; $script:headed = $false
+}
+
+# A row's content, all on one line: [icon] label ...... [dot] value [trailing]. The label is cut with "..." if the
+# row is too narrow (callers put the whole text in the tooltip where that can happen); the value is short and muted.
+#   -LongValue: the value may be long (a version of a task's text): it takes the room and is the one cut short
+#   -Icon: a glyph before the label; -Lead: a short text there instead (a step's number)
+function New-RowGrid([string]$label, [string]$value = '', $trailing = $null, [switch]$Dot, $LabelBrush = $null, [int]$Icon = 0, [switch]$LongValue, [string]$Lead = '') {
+  $g = New-Object System.Windows.Controls.Grid; $g.VerticalAlignment = 'Center'
+  foreach ($wd in @('Auto', $(if ($LongValue) { 'Auto' } else { '*' }), $(if ($LongValue) { '*' } else { 'Auto' }), 'Auto')) {
+    $cd = New-Object System.Windows.Controls.ColumnDefinition; $cd.Width = $wd; $g.ColumnDefinitions.Add($cd)
+  }
+  if ($Icon) {
+    $ic = New-Text (G $Icon) 14 $TabInk; $ic.FontFamily = $MDL2; $ic.TextWrapping = 'NoWrap'; $ic.Width = 16; $ic.TextAlignment = 'Center'; $ic.VerticalAlignment = 'Center'; $ic.Margin = '0,1,12,0'
+    [void]$g.Children.Add((Hide-Decoration $ic))
+  } elseif ($Lead) {
+    $ld = New-Text $Lead $TypeSize.body $TabInk; $ld.TextWrapping = 'NoWrap'; $ld.Width = 16; $ld.TextAlignment = 'Center'; $ld.VerticalAlignment = 'Center'; $ld.Margin = '0,0,12,0'; Set-Tabular $ld
+    [void]$g.Children.Add($ld)
+  }
+  $l = New-Text $label $TypeSize.body $(if ($LabelBrush) { $LabelBrush } else { $Ink })
+  $l.TextWrapping = 'NoWrap'; $l.TextTrimming = 'CharacterEllipsis'; $l.VerticalAlignment = 'Center'
+  [System.Windows.Controls.Grid]::SetColumn($l, 1); [void]$g.Children.Add($l)
+  if ($value -or $Dot) {
+    # (a long value fills the room left of the trailing part, right-aligned, and is the one cut short)
+    if ($LongValue) { $vp = New-Object System.Windows.Controls.DockPanel; $vp.LastChildFill = $true }
+    else { $vp = New-Object System.Windows.Controls.StackPanel; $vp.Orientation = 'Horizontal' }
+    $vp.VerticalAlignment = 'Center'; $vp.Margin = '12,0,0,0'
+    if ($Dot) { $d = New-Dot; $d.VerticalAlignment = 'Center'; $d.Margin = '0,1,8,0'; [void]$vp.Children.Add($d) }
+    if ($value) {
+      $v = New-Text $value $TypeSize.body $Faint; $v.TextWrapping = 'NoWrap'; $v.VerticalAlignment = 'Center'; Set-Tabular $v
+      if ($LongValue) { $v.TextTrimming = 'CharacterEllipsis'; $v.TextAlignment = 'Right' }
+      [void]$vp.Children.Add($v)
+    }
+    [System.Windows.Controls.Grid]::SetColumn($vp, 2); [void]$g.Children.Add($vp)
+  }
+  if ($trailing) {
+    $trailing.VerticalAlignment = 'Center'; $m = $trailing.Margin
+    $trailing.Margin = New-Object System.Windows.Thickness(($m.Left + 10), $m.Top, $m.Right, $m.Bottom)
+    [System.Windows.Controls.Grid]::SetColumn($trailing, 3); [void]$g.Children.Add($trailing)
+  }
+  return $g
+}
+function Set-RowBox($b, $content) {
+  $b.Background = $GroupBg; $b.Padding = "$CardPad,6,$($CardPad - 2),6"; $b.MinHeight = $RowMinH; $b.Child = $content
+}
+# a row that does nothing by itself: a value, or a control at its end (a switch, a choice, a box, a small button)
+function New-InfoRow([string]$label, [string]$value = '', $trailing = $null, [switch]$Dot, [string]$Tip = '', [int]$Icon = 0, [switch]$LongValue, [string]$Lead = '') {
+  $b = New-Object System.Windows.Controls.Border
+  Set-RowBox $b (New-RowGrid $label $value $trailing -Dot:$Dot -Icon $Icon -LongValue:$LongValue -Lead $Lead)
+  if ($Tip) { $b.ToolTip = $Tip }
+  return $b
+}
+# a row that is one button: the whole row reacts to the mouse (hover, pressed) and to Enter / Space. $do gets $arg.
+# $id: its AutomationId, the key Get-FocusKey finds it by again after the view is rebuilt
+function New-RowButton([string]$name, [string]$help, $content, [scriptblock]$do, $arg = $null, [string]$id = '', [string]$role = 'button') {
+  $b = New-Control $role $name $help { param($s, $e) & $s.Tag.Do $s.Tag.Arg }
+  if ($id) { [System.Windows.Automation.AutomationProperties]::SetAutomationId($b, $id) }
+  Set-RowBox $b $content
+  $b.Cursor = 'Hand'; $b.Tag = @{ Do = $do; Arg = $arg }
+  if ($help) { $b.ToolTip = $help }
+  $b.Add_MouseEnter({ param($s, $e) $s.Background = $GroupHover })
+  $b.Add_MouseLeave({ param($s, $e) $s.Background = $GroupBg })
+  $b.Add_PreviewMouseLeftButtonDown({ param($s, $e) $s.Background = $GroupPress })
+  $b.Add_MouseLeftButtonUp({ param($s, $e) $e.Handled = $true; $s.Background = $GroupHover; & $s.Tag.Do $s.Tag.Arg })
+  return $b
+}
+function New-Chevron { $c = New-Text (G 0xE76C) 11 $TabInk; $c.FontFamily = $MDL2; $c.TextWrapping = 'NoWrap'; $c.Margin = '0,1,0,0'; return (Hide-Decoration $c) }
+# a row that opens another view (a Settings page, Keyboard shortcuts, Pair phone, ...): label, value, chevron. Its key
+# is "open-<view>", so Back puts keyboard focus on it again. -Name / -Help: what a screen reader says (and the tooltip)
+function New-LinkRow([string]$label, [string]$value, [string]$view, [switch]$Dot, [string]$Name = '', [string]$Help = '', [int]$Icon = 0) {
+  $g = New-RowGrid $label $value (New-Chevron) -Dot:$Dot -Icon $Icon
+  return (New-RowButton $(if ($Name) { $Name } else { $label }) $Help $g { param($v) Show-View $v } $view "open-$view")
+}
+# a row that does something: its label in violet, or red when it is risky (-Danger). -Name: when the label alone
+# does not say enough to a screen reader
+function New-ActionRow([string]$label, [scriptblock]$do, $arg = $null, [switch]$Danger, [string]$Name = '', [string]$Help = '', [string]$Value = '', [switch]$Dot) {
+  $g = New-RowGrid $label $Value $null -Dot:$Dot -LabelBrush $(if ($Danger) { $Red } else { $Accent })
+  return (New-RowButton $(if ($Name) { $Name } else { $label }) $Help $g $do $arg)
+}
+# a switch row: the switch at the end; a click anywhere on the row flips it too
+function New-SwitchRow([string]$label, [bool]$on, [scriptblock]$onToggle, [string]$help = '') {
+  $tg = New-Toggle $on $onToggle $label
+  if ($help) { Set-Name $tg $label $help }
+  $r = New-InfoRow $label '' $tg
+  $r.Tag = $tg; $r.Cursor = 'Hand'
+  $r.Add_MouseLeftButtonUp({ param($s, $e) if (-not $e.Handled) { $e.Handled = $true; & $s.Tag.Tag.F (-not $s.Tag.Tag.On) } })
+  return $r
+}
+# a small button at the end of a row (Restore, Leave, Connect): text only, violet or red
+function New-TextButton([string]$text, [scriptblock]$onClick, $fg = $null, $arg = $null) {
+  $b = New-Control 'button' $text '' { param($s, $e) & $s.Tag.F $s.Tag.A }
+  $b.Background = $Clear; $b.CornerRadius = New-Object System.Windows.CornerRadius($Tokens.Radius.control); $b.Padding = '8,3,8,4'; $b.Margin = '0,-3,-6,-3'; $b.Cursor = 'Hand'
+  $b.Child = (New-Text $text $TypeSize.body $(if ($fg) { $fg } else { $Accent })); $b.Child.TextWrapping = 'NoWrap'
+  $b.Tag = @{ F = $onClick; A = $arg }
+  $b.Add_MouseEnter({ param($s, $e) $s.Background = $GroupPress })
+  $b.Add_MouseLeave({ param($s, $e) $s.Background = $Clear })
+  $b.Add_MouseLeftButtonUp({ param($s, $e) $e.Handled = $true; & $s.Tag.F $s.Tag.A })
+  return $b
+}
+# a text box that is a whole row (a link to paste), with an optional button at its end; $hint: shown while it is empty
+function New-InputRow($box, [string]$hint, $button = $null) {
+  $box.FontFamily = $UI; $box.FontSize = $TypeSize.body; $box.Background = $Clear; $box.Foreground = $Ink; $box.CaretBrush = $Accent
+  $box.BorderThickness = '0'; $box.BorderBrush = $Red; $box.Padding = '0,2,0,2'; $box.VerticalContentAlignment = 'Center'
+  $g = New-Object System.Windows.Controls.Grid; $g.VerticalAlignment = 'Center'
+  foreach ($wd in @('*', 'Auto')) { $cd = New-Object System.Windows.Controls.ColumnDefinition; $cd.Width = $wd; $g.ColumnDefinitions.Add($cd) }
+  $h = New-Text $hint $TypeSize.body $Faint; $h.IsHitTestVisible = $false; $h.TextWrapping = 'NoWrap'; $h.TextTrimming = 'CharacterEllipsis'
+  $h.Margin = '2,0,0,0'; $h.VerticalAlignment = 'Center'
+  $hw = Hide-Decoration $h; $hw.Visibility = $(if ($box.Text) { 'Collapsed' } else { 'Visible' })
+  $box.Add_TextChanged({ param($s, $e) $s.Parent.Children[1].Visibility = $(if ($s.Text) { 'Collapsed' } else { 'Visible' }); $s.BorderThickness = '0' })
+  [void]$g.Children.Add($box); [void]$g.Children.Add($hw)
+  if ($button) { $button.VerticalAlignment = 'Center'; $button.Margin = '10,-3,-6,-3'; [System.Windows.Controls.Grid]::SetColumn($button, 1); [void]$g.Children.Add($button) }
+  $r = New-Object System.Windows.Controls.Border; Set-RowBox $r $g
+  return $r
+}
+# a box of an input row that does not take what was typed: a red line under it until it changes
+function Set-BoxError($box) { $box.BorderThickness = '0,0,0,1.5'; $box.BorderBrush = $Red }
+# a choice of a few (the theme, an access level): segments on a quiet track, the current one violet. $options:
+# @(value, label[, what it means: tooltip and screen-reader description])
 function New-Segmented($options, [string]$current, [scriptblock]$onPick, [string]$group = '') {
   $wrap = New-Object System.Windows.Controls.Border
-  $wrap.Background = $ButtonBg; $wrap.CornerRadius = New-Object System.Windows.CornerRadius($Tokens.Radius.control); $wrap.Padding = '2'
+  $wrap.Background = $GroupPress; $wrap.CornerRadius = New-Object System.Windows.CornerRadius($Tokens.Radius.control); $wrap.Padding = '2'
   $sp = New-Object System.Windows.Controls.StackPanel; $sp.Orientation = 'Horizontal'
   foreach ($o in $options) {
-    $b = New-Control 'radio' $o[1] $group { param($s, $e) & $s.Tag.F $s.Tag.V }
+    $b = New-Control 'radio' $o[1] $(if ($o.Count -gt 2) { $o[2] } else { $group }) { param($s, $e) & $s.Tag.F $s.Tag.V }
     if ($script:HasA11y) { $b.IsSelected = ($o[0] -eq $current) }
-    $b.CornerRadius = New-Object System.Windows.CornerRadius($Tokens.Radius.chip); $b.Padding = '12,5,12,6'; $b.Cursor = 'Hand'
-    $t = New-Text $o[1] $TypeSize.label $TabInk; $t.FontWeight = 'Medium'
+    if ($o.Count -gt 2) { $b.ToolTip = $o[2] }
+    $b.CornerRadius = New-Object System.Windows.CornerRadius($Tokens.Radius.chip); $b.Padding = '11,3,11,4'; $b.Cursor = 'Hand'
+    $t = New-Text $o[1] $TypeSize.label $TabInk; $t.FontWeight = 'Medium'; $t.TextWrapping = 'NoWrap'
     if ($o[0] -eq $current) { $b.Background = $Accent; $t.Foreground = $OnAccent; $t.FontWeight = 'SemiBold' } else { $b.Background = $Clear }
     $b.Child = $t; $b.Tag = @{ V = $o[0]; F = $onPick }
     $b.Add_MouseLeftButtonUp({ param($s, $e) $e.Handled = $true; & $s.Tag.F $s.Tag.V })
@@ -2317,7 +2498,7 @@ function New-Toggle([bool]$on, [scriptblock]$onToggle, [string]$name = '') {
   $b = New-Control 'toggle' $name '' { param($s, $e) & $s.Tag.F (-not $s.Tag.On) }
   if ($script:HasA11y) { $b.IsChecked = $on }
   $b.Width = 36; $b.Height = 20; $b.CornerRadius = New-Object System.Windows.CornerRadius(10); $b.Cursor = 'Hand'
-  $b.Background = $(if ($on) { $Accent } else { $Line })
+  $b.Background = $(if ($on) { $Accent } else { $GroupLine })
   $k = New-Object System.Windows.Shapes.Ellipse; $k.Width = 14; $k.Height = 14; $k.Fill = $(if ($on) { $OnAccent } else { $Paper })
   $k.HorizontalAlignment = $(if ($on) { 'Right' } else { 'Left' }); $k.Margin = '3,0,3,0'
   $b.Child = $k; $b.Tag = @{ On = $on; F = $onToggle }
@@ -2328,7 +2509,7 @@ function New-Toggle([bool]$on, [scriptblock]$onToggle, [string]$name = '') {
 function New-SettingsHeader([string]$title) {
   $h = New-Control 'button' "$title - back to $($script:ViewTitles[(Get-ViewParent $script:view)])" 'Esc goes back too' { param($s, $e) Go-Back }
   [System.Windows.Automation.AutomationProperties]::SetAutomationId($h, 'back')
-  $h.Padding = '6,4,6,6'; $h.Margin = '0,0,0,4'; $h.Cursor = 'Hand'; $h.Background = $Clear
+  $h.Padding = '6,4,8,6'; $h.Margin = '0,0,0,2'; $h.Cursor = 'Hand'; $h.Background = $Clear; $h.HorizontalAlignment = 'Left'
   $h.CornerRadius = New-Object System.Windows.CornerRadius($Tokens.Radius.control)
   $sp = New-Object System.Windows.Controls.StackPanel; $sp.Orientation = 'Horizontal'
   $c = New-Object System.Windows.Controls.TextBlock; $c.Text = G 0xE76B; $c.FontFamily = $MDL2; $c.FontSize = 10
@@ -2350,11 +2531,12 @@ function Render-Settings {
   $changed = $script:view -ne $script:renderedView
   $f = [System.Windows.Input.Keyboard]::FocusedElement
   $keep = $(if (-not $changed -and $f -is [System.Windows.DependencyObject] -and $list.IsKeyboardFocusWithin) { Get-FocusKey $f } else { '' })
-  $list.Children.Clear()
+  $list.Children.Clear(); Reset-Groups
   if ($script:HasA11y) { $list.Role = 'group' }
   Set-Name $list $(if ($script:view -eq 'share') { 'Share' } elseif ($script:ViewTitles.ContainsKey($script:view)) { $script:ViewTitles[$script:view] } else { 'Settings' })
-  $script:visible = New-Object System.Collections.ArrayList
+  $script:visible = New-Object System.Collections.ArrayList; $script:rows = New-Object System.Collections.ArrayList
   Render-SettingsView
+  Close-Card
   $verBar.Visibility = 'Visible'; Update-VersionDisplay
   $want = $(if ($script:focusKey) { $script:focusKey } elseif ($changed) { 'back' } else { $keep })
   $script:focusKey = ''; $script:renderedView = $script:view
@@ -2381,113 +2563,119 @@ function Render-SettingsView {
   $script:view = 'settings'
   Render-SettingsHome
 }
+# what it does on the left, its keys on the right (each a small key cap)
 function Render-KeysView {
-    [void]$list.Children.Add((New-SettingsHeader 'Keyboard shortcuts'))
-    foreach ($kb in $script:Keybinds) {
-      if (-not $kb[0]) { [void]$list.Children.Add((New-SectionLabel $kb[1])); continue }
-      $g = New-Object System.Windows.Controls.Grid; $g.Margin = '8,3,6,3'
-      foreach ($wd in @('170', '*')) { $cd = New-Object System.Windows.Controls.ColumnDefinition; $cd.Width = $wd; $g.ColumnDefinitions.Add($cd) }
-      $keys = New-Object System.Windows.Controls.WrapPanel
-      foreach ($part in ($kb[0] -split ' / ')) {
-        $chip = New-Object System.Windows.Controls.Border
-        $chip.Background = $Hover; $chip.BorderBrush = $Line; $chip.BorderThickness = '1'
-        $chip.CornerRadius = New-Object System.Windows.CornerRadius($Tokens.Radius.chip); $chip.Padding = '6,1,6,2'; $chip.Margin = '0,0,4,4'
-        $chip.Child = (New-Text $part $TypeSize.small $Ink)
-        [void]$keys.Children.Add($chip)
-      }
-      [void]$g.Children.Add($keys)
-      $d = New-Text $kb[1] $TypeSize.meta $TabInk; $d.VerticalAlignment = 'Center'
-      [System.Windows.Controls.Grid]::SetColumn($d, 1); [void]$g.Children.Add($d)
-      [void]$list.Children.Add($g)
+  [void]$list.Children.Add((New-SettingsHeader 'Keyboard shortcuts'))
+  foreach ($kb in $script:Keybinds) {
+    if (-not $kb[0]) { Add-Heading $kb[1]; continue }
+    if ($kb[0] -eq '#') { Add-Footnote $kb[1]; continue }
+    $keys = New-Object System.Windows.Controls.StackPanel; $keys.Orientation = 'Horizontal'
+    foreach ($part in ($kb[0] -split ' / ')) {
+      $chip = New-Object System.Windows.Controls.Border
+      $chip.Background = $GroupPress; $chip.CornerRadius = New-Object System.Windows.CornerRadius($Tokens.Radius.chip); $chip.Padding = '6,1,6,2'; $chip.Margin = '4,0,0,0'
+      $chip.Child = (New-Text $part $TypeSize.small $Ink); $chip.Child.TextWrapping = 'NoWrap'
+      [void]$keys.Children.Add($chip)
     }
+    Add-CardRow (New-InfoRow $kb[1] '' $keys -Tip "$($kb[1]): $($kb[0])")
+  }
+  Close-Card
 }
 
-# Settings: one row per page, each saying what is in it or how it stands
+# Settings: two cards of pages (the app's own things last), each row with what it stands at on the right
 function Render-SettingsHome {
   [void]$list.Children.Add((New-SettingsHeader 'Settings'))
   $page = {
-    param([string]$id, [string]$summary, [bool]$dot = $false)
-    [void]$list.Children.Add((New-LinkRow $script:SettingsPages[$id] $summary $id -Dot:$dot -Name "$($script:SettingsPages[$id]), $summary"))
+    param([string]$id, [string]$value, [string]$name, [string]$help, [int]$icon, [bool]$dot = $false)
+    Add-CardRow (New-LinkRow $script:SettingsPages[$id] $value $id -Dot:$dot -Name "$($script:SettingsPages[$id]), $name" -Help $help -Icon $icon) ($CardPad + 28)
   }
-  & $page 'general' 'Theme, start with Windows, keyboard shortcuts'
-  & $page 'notifications' "Daily summary at $($script:cfg.notifyAt)"
+  $theme = (Get-Culture).TextInfo.ToTitleCase($script:cfg.theme)
+  & $page 'general' $theme "$($theme.ToLower()) theme" 'Theme, start with Windows, keyboard shortcuts' 0xE713
+  & $page 'notifications' $script:cfg.notifyAt "daily summary at $($script:cfg.notifyAt)" 'Daily summary, test notification' 0xEA8F
   $sync = Get-SyncSummary
-  & $page 'sync' $sync.Text $sync.Dot
+  & $page 'sync' $sync.Short $sync.Text 'Set up sync or how it stands, pair phone, conflicts, shared lists' 0xE753 $sync.Dot
+  $n = @(Get-ProjectNames).Count
+  $nl = $(if ($n -eq 1) { '1 list' } else { "$n lists" })
+  & $page 'yourlists' $nl $nl 'Lists folder, recently deleted' 0xE8FD
+  Add-Heading 'App'
   $badge = Get-UpdateBadge
-  & $page 'updates' $(if ($badge) { $badge.Text } else { Get-UpdateSummary }) ([bool]($badge -and $badge.Dot))
-  & $page 'yourlists' 'Lists folder, recently deleted'
-  & $page 'about' 'Version, where your data is'
+  $upd = $(if ($badge) { $badge } else { Get-UpdateSummary })
+  & $page 'updates' $upd.Short $upd.Text 'The version, checking and installing updates' 0xE777 ([bool]($badge -and $badge.Dot))
+  & $page 'about' $script:Release.Version "version $($script:Release.Version)" 'Version, where the app and your data are' 0xE946
 }
-# the Sync & sharing row: own sync (off, setting up, its state), conflicts, lists shared with this PC, paused deletes
+# the Sync & sharing row: own sync (off, setting up, its state), conflicts, lists shared with this PC, paused deletes.
+# Text says all of it (for screen readers); Short is the value on the right, what needs a look first
 function Get-SyncSummary {
   $parts = New-Object System.Collections.ArrayList
+  $own = Read-SyncConfigUi
   if ($script:setupRun) { [void]$parts.Add('Setting up sync...') }
-  elseif (Read-SyncConfigUi) { [void]$parts.Add((Get-SyncStatusLine)) }
+  elseif ($own) { [void]$parts.Add((Get-SyncStatusLine)) }
   else { [void]$parts.Add('Sync is off') }
   $n = @(Get-OpenConflictList).Count + @(Get-NoticeList).Count
-  if ($n) { [void]$parts.Add($(if ($n -eq 1) { '1 conflict' } else { "$n conflicts" })) }
+  $nc = $(if ($n -eq 1) { '1 conflict' } else { "$n conflicts" })
+  if ($n) { [void]$parts.Add($nc) }
   $sh = @($script:bindings).Count
-  if ($sh) { [void]$parts.Add($(if ($sh -eq 1) { '1 shared list' } else { "$sh shared lists" })) }
+  $ns = $(if ($sh -eq 1) { '1 shared list' } else { "$sh shared lists" })
+  if ($sh) { [void]$parts.Add($ns) }
   $guarded = $script:sync -and $script:sync.Guarded
   if ($guarded) { [void]$parts.Add('deletions paused') }
-  return @{ Text = ($parts -join ', '); Dot = [bool]($n -or $guarded) }
+  $short = $(if ($n) { $nc } elseif ($guarded) { 'Deletions paused' } elseif ($script:setupRun) { 'Setting up...' }
+             elseif ($own) { Get-SyncStatusLine } elseif ($sh) { $ns } else { 'Off' })
+  return @{ Text = ($parts -join ', '); Short = $short; Dot = [bool]($n -or $guarded) }
 }
 
 function Render-GeneralPage {
   [void]$list.Children.Add((New-SettingsHeader 'General'))
-  $seg = New-Segmented @(@('dark', 'Dark'), @('light', 'Light'), @('auto', 'Auto')) $script:cfg.theme { param($v) Set-Theme $v } 'Theme'
-  [void]$list.Children.Add((New-SettingRow 'Theme' 'Auto follows the Windows light / dark setting' $seg))
-  $tg = New-Toggle (Test-Path -LiteralPath $startupLnk) {
+  $seg = New-Segmented @(@('dark', 'Dark'), @('light', 'Light'), @('auto', 'Auto', 'Follows the Windows light or dark setting')) $script:cfg.theme { param($v) Set-Theme $v } 'Theme'
+  Add-CardRow (New-InfoRow 'Theme' '' $seg)
+  Add-CardRow (New-SwitchRow 'Start with Windows' (Test-Path -LiteralPath $startupLnk) {
     param($on)
     try { Set-StartWithWindows $on } catch {}
     Render
-  } 'Start with Windows'
-  [void]$list.Children.Add((New-SettingRow 'Start with Windows' 'Saqme opens when you sign in to Windows' $tg))
-  [void]$list.Children.Add((New-LinkRow 'Keyboard shortcuts' 'Everything you can do without the mouse' 'keys'))
+  } 'Saqme opens when you sign in to Windows')
+  Add-CardRow (New-LinkRow 'Keyboard shortcuts' '' 'keys' -Help 'Everything you can do without the mouse')
 }
 
 function Render-NotificationsPage {
   [void]$list.Children.Add((New-SettingsHeader 'Notifications'))
   $tb = New-Object System.Windows.Controls.TextBox
   Set-Name $tb 'Daily summary time' 'Hours and minutes, for example 9:30'
-  $tb.Text = $script:cfg.notifyAt; $tb.Width = 64; $tb.FontFamily = $UI; $tb.FontSize = $TypeSize.label; $tb.TextAlignment = 'Center'; Set-Tabular $tb
-  $tb.Background = $Hover; $tb.Foreground = $Ink; $tb.CaretBrush = $Accent; $tb.BorderThickness = '0,0,0,1.5'; $tb.BorderBrush = $Line; $tb.Padding = '4,3,4,3'
+  $tb.Text = $script:cfg.notifyAt; $tb.Width = 58; $tb.FontFamily = $UI; $tb.FontSize = $TypeSize.body; $tb.TextAlignment = 'Center'; Set-Tabular $tb
+  $tb.Background = $Clear; $tb.Foreground = $Ink; $tb.CaretBrush = $Accent; $tb.BorderThickness = '0'; $tb.BorderBrush = $Red; $tb.Padding = '0,2,0,2'
   $save = {
     param($s)
     if ($s.Text.Trim() -match '^(\d{1,2}):(\d{2})$' -and [int]$matches[1] -lt 24 -and [int]$matches[2] -lt 60) {
-      $script:cfg.notifyAt = '{0}:{1}' -f [int]$matches[1], $matches[2]; Save-Settings; $s.BorderBrush = $Line
+      $script:cfg.notifyAt = '{0}:{1}' -f [int]$matches[1], $matches[2]; Save-Settings; $s.BorderThickness = '0'
       if ($script:sync) { $script:sync.NotifyAt = $script:cfg.notifyAt; Request-Sync }
-    } else { $s.BorderBrush = $Red }
+    } else { Set-BoxError $s }
   }
   $tb.Tag = $save
   $tb.Add_PreviewKeyDown({ param($s, $e) if ($e.Key -eq 'Return') { $e.Handled = $true; & $s.Tag $s; [void]$w.Focus() } })
   $tb.Add_LostKeyboardFocus({ param($s, $e) & $s.Tag $s })
-  [void]$list.Children.Add((New-SettingRow 'Daily summary at' 'One notification with what is due today or overdue; your phone uses the same time' $tb))
-  $tst = New-Control 'button' 'Send a test notification' '' { param($s, $e) Show-Toast 'Saqme To Do' 'Notifications are working.' $script:proj }
-  $tst.Background = $ButtonBg; $tst.CornerRadius = New-Object System.Windows.CornerRadius($Tokens.Radius.control); $tst.Padding = '12,5,12,6'; $tst.Cursor = 'Hand'
-  $tst.Child = (New-Text 'Send test' $TypeSize.label $Ink); $tst.Child.FontWeight = 'Medium'
-  $tst.Add_MouseLeftButtonUp({ param($s, $e) $e.Handled = $true; Show-Toast 'Saqme To Do' 'Notifications are working.' $script:proj })
-  [void]$list.Children.Add((New-SettingRow 'Test notification' 'Nothing shows up? Turn off Do Not Disturb, or make Saqme a priority app' $tst))
-  [void]$list.Children.Add((New-Note 'A task with a deadline time also reminds you 15 minutes before it and at the time.'))
+  # the time sits in a small pill, like a value you can change
+  $pill = New-Object System.Windows.Controls.Border
+  $pill.Background = $GroupPress; $pill.CornerRadius = New-Object System.Windows.CornerRadius($Tokens.Radius.control); $pill.Padding = '4,1,4,1'; $pill.Child = $tb
+  Add-CardRow (New-InfoRow 'Daily summary' '' $pill)
+  Add-Footnote 'One notification with what is due today or overdue; your phone uses the same time. A task with a deadline time also reminds you 15 minutes before it and at the time.'
+  Add-CardRow (New-ActionRow 'Send a test notification' { Show-Toast 'Saqme To Do' 'Notifications are working.' $script:proj })
+  Add-Footnote 'Nothing shows up? Turn off Do Not Disturb, or make Saqme a priority app.'
 }
 
 function Render-SyncPage {
   [void]$list.Children.Add((New-SettingsHeader 'Sync & sharing'))
-  [void]$list.Children.Add((New-SectionLabel 'Sync'))
   Render-SyncSettings
-  [void]$list.Children.Add((New-SectionLabel 'Shared lists'))
   Render-SharedListSettings
   # a pending decision: shown whenever it is there, below the everyday rows
   if ($script:sync -and $script:sync.Guarded) {
     $msg = $(if (Read-SyncConfigUi) { "$($script:sync.Guarded) tasks vanished from the lists folder at once. Deleting them on your other devices is paused in case that was an accident: restore the file, or confirm." }
              else { "$($script:sync.Guarded) tasks vanished from a shared list's file at once. Deleting them for its owner is paused in case that was an accident: restore the file, or confirm." })
-    $del = New-SmallButton 'Delete them' { $script:sync.AllowMassDelete = $true; Request-Sync; Render } $Red
-    Set-Name $del 'Delete them' 'Confirms the paused deletions: the tasks are deleted on your other devices too'
-    [void]$list.Children.Add((New-SettingRow 'Deletions paused' $msg $del -Dot))
+    Add-Heading 'Deletions paused'
+    Add-CardRow (New-InfoRow 'Waiting for you' "$($script:sync.Guarded) tasks" -Dot -Tip $msg)
+    Add-CardRow (New-ActionRow 'Delete them' { $script:sync.AllowMassDelete = $true; Request-Sync; Render } -Danger -Help 'Confirms the paused deletions: the tasks are deleted on your other devices too')
+    Add-Footnote $msg
   }
   Render-SyncAdvanced
 }
-# Sync & sharing > Advanced: turning sync off, a new key, the sync log
+# Sync & sharing > Advanced: turning sync off, a new key, the sync log (a row that opens the rest of its card)
 function Render-SyncAdvanced {
   $own = Read-SyncConfigUi
   $log = Join-Path $syncDir 'sync.log'
@@ -2496,43 +2684,43 @@ function Render-SyncAdvanced {
   $inside = @()
   if ($own) { $inside += 'Turn off sync', 'a new sync key' }
   if ($hasLog) { $inside += $(if ($own) { 'the sync log' } else { 'The sync log' }) }
-  [void]$list.Children.Add((New-Disclosure 'Advanced' ($inside -join ', ') $script:advancedOpen { $script:advancedOpen = -not $script:advancedOpen; Render }))
-  if (-not $script:advancedOpen) { return }
+  $open = $script:advancedOpen
+  $chev = New-Text $(if ($open) { G 0xE70D } else { G 0xE76C }) 11 $TabInk; $chev.FontFamily = $MDL2; $chev.TextWrapping = 'NoWrap'; $chev.Margin = '0,1,0,0'
+  $adv = New-RowButton 'Advanced' ($inside -join ', ') (New-RowGrid 'Advanced' '' (Hide-Decoration $chev)) { $script:advancedOpen = -not $script:advancedOpen; Render } $null 'advanced' 'disclosure'
+  if ($script:HasA11y) { $adv.IsExpanded = $open }
+  Add-CardRow $adv
+  if (-not $open) { return }
+  $notes = @()
   if ($own) {
-    $off = New-SmallButton 'Turn off' {
+    Add-CardRow (New-ActionRow 'Turn off sync' {
             $r = [System.Windows.MessageBox]::Show($w, "Turn off sync on this PC?`n`n$($script:TurnOffHelp)", 'Saqme To Do', 'YesNo', 'Question')
-            if ("$r" -eq 'Yes') { Disable-Sync; Render } } $Red
-    $off.ToolTip = $script:TurnOffHelp; Set-Name $off 'Turn off sync' $script:TurnOffHelp
-    [void]$list.Children.Add((New-SettingRow 'Turn off sync' $script:TurnOffHelp $off))
-    [void]$list.Children.Add((New-SettingRow 'New sync key' 'If a pairing link got out: run setup again with -RotateToken. The old key stops working; pair your devices again.' $null))
+            if ("$r" -eq 'Yes') { Disable-Sync; Render } } -Danger -Help $script:TurnOffHelp)
+    $notes += $script:TurnOffHelp, "A new sync key, if a pairing link got out: run setup again with $([char]0x2011)RotateToken. The old key stops working; pair your devices again."
   }
   if ($hasLog) {
-    $lb = New-SmallButton 'Open' { Start-Process notepad.exe -ArgumentList "`"$(Join-Path $syncDir 'sync.log')`"" }
-    Set-Name $lb 'Open the sync log' 'In Notepad'
-    [void]$list.Children.Add((New-SettingRow 'Sync log' 'What sync did, for a bug report (sync\sync.log in your data folder)' $lb))
+    Add-CardRow (New-ActionRow 'Open the sync log' { Start-Process notepad.exe -ArgumentList "`"$(Join-Path $syncDir 'sync.log')`"" } -Help 'In Notepad')
+    $notes += 'The sync log says what sync did, for a bug report (sync\sync.log in your data folder).'
   }
+  Add-Footnote ($notes -join ' ')
 }
 
 function Render-YourListsPage {
   [void]$list.Children.Add((New-SettingsHeader 'Your lists'))
-  $fo = New-SmallButton 'Open folder' { Start-Process explorer.exe -ArgumentList "`"$listsDir`"" }
-  Set-Name $fo 'Open the lists folder' (Format-Path $listsDir)
-  [void]$list.Children.Add((New-SettingRow 'Lists folder' "Plain markdown files, one per project`n$(Format-Path $listsDir)" $fo))
-  [void]$list.Children.Add((New-LinkRow 'Recently deleted' 'Deleted tasks, ready to restore for 30 days' 'trash'))
-  [void]$list.Children.Add((New-Note 'Editors and AI assistants can change these files too; the app picks up their changes by itself.'))
+  Add-CardRow (New-ActionRow 'Open the lists folder' { Start-Process explorer.exe -ArgumentList "`"$listsDir`"" } -Help (Format-Path $listsDir))
+  Add-CardRow (New-LinkRow 'Recently deleted' '' 'trash' -Help 'Deleted tasks, ready to restore for 30 days')
+  Add-Footnote "Plain markdown files, one per project, in $(Format-Path $listsDir). Editors and AI assistants can change them too; the app picks up their changes by itself."
 }
 
 function Render-AboutPage {
   [void]$list.Children.Add((New-SettingsHeader 'About'))
-  $where = $(if ($InstallRoot) { "Installed, and it updates itself`n$(Format-Path $InstallRoot)" }
-             else { "A copy that runs from its folder and does not update itself (setup.cmd installs it)`n$(Format-Path $dir)" })
-  [void]$list.Children.Add((New-SettingRow (Get-VersionText) $where $null))
+  Add-CardRow (New-InfoRow 'Version' $script:Release.Version -Tip (Get-VersionText))
   $badge = Get-UpdateBadge
-  if ($badge) { [void]$list.Children.Add((New-LinkRow 'Updates' $badge.Text 'updates' -Dot:$badge.Dot -Name "Updates, $($badge.Text)")) }
-  $fo = New-SmallButton 'Open folder' { Start-Process explorer.exe -ArgumentList "`"$DataDir`"" }
-  Set-Name $fo 'Open the data folder' (Format-Path $DataDir)
-  [void]$list.Children.Add((New-SettingRow 'Your data' "Your lists, these settings and the sync keys`n$(Format-Path $DataDir)" $fo))
-  [void]$list.Children.Add((New-Note 'Saqme To Do is free and open source (MIT license). Your lists are plain markdown files: this app, AI assistants and any editor can change them.'))
+  if ($badge) { Add-CardRow (New-LinkRow 'Updates' $badge.Short 'updates' -Dot:$badge.Dot -Name "Updates, $($badge.Text)" -Help $badge.Text) }
+  Add-CardRow (New-ActionRow 'Open the data folder' { Start-Process explorer.exe -ArgumentList "`"$DataDir`"" } -Help (Format-Path $DataDir))
+  Add-Footnote ($(if ($InstallRoot) { "Installed in $(Format-Path $InstallRoot), and it updates itself." }
+                         else { "Runs from $(Format-Path $dir) and does not update itself (setup.cmd installs it)." }) +
+                       " Your lists, these settings and the sync keys are in $(Format-Path $DataDir).")
+  Add-Note 'Saqme To Do is free and open source (MIT license). Your lists are plain markdown files: this app, AI assistants and any editor can change them.'
 }
 
 # ---------------------------------------------------------------- sync (cloud): UI side
@@ -2763,60 +2951,47 @@ function Disable-Sync {
   [void](Update-SyncIndicator -Force)
 }
 
-function New-SmallButton([string]$text, [scriptblock]$onClick, $fg = $null, $arg = $null) {
-  $b = New-Control 'button' $text '' { param($s, $e) & $s.Tag.F $s.Tag.A }
-  $b.Background = $ButtonBg; $b.CornerRadius = New-Object System.Windows.CornerRadius($Tokens.Radius.control); $b.Padding = '12,5,12,6'; $b.Cursor = 'Hand'; $b.Margin = '8,0,0,0'
-  $b.Child = (New-Text $text $TypeSize.label $(if ($fg) { $fg } else { $Ink })); $b.Child.FontWeight = 'Medium'
-  $b.Tag = @{ F = $onClick; A = $arg }
-  $b.Add_MouseLeftButtonUp({ param($s, $e) $e.Handled = $true; & $s.Tag.F $s.Tag.A })
-  return $b
-}
-
 function Render-SyncSettings {
   $syncCfg = Read-SyncConfigUi
+  Add-Heading 'Sync'
   if (-not $syncCfg) {
     if ($script:setupRun) {
-      [void]$list.Children.Add((New-SettingRow 'Setting up sync...' 'Follow the window that opened: a browser asks you to sign in to Cloudflare (or create a free account) and to click Allow. You can keep using the app meanwhile.' $null))
+      Add-CardRow (New-InfoRow 'Sync with your phone' 'Setting up...')
+      Add-Footnote 'Follow the window that opened: a browser asks you to sign in to Cloudflare (or create a free account) and to click Allow. You can keep using the app meanwhile.'
     } else {
-      $b = New-SmallButton 'Set up sync' { Start-SyncSetup }
-      $b.ToolTip = $script:SetupHelp; Set-Name $b 'Set up sync' $script:SetupHelp
-      [void]$list.Children.Add((New-SettingRow 'Sync with your phone' 'Off. Set it up once: your own free sync service, in your Cloudflare account' $b))
+      Add-CardRow (New-InfoRow 'Sync with your phone' 'Off')
+      Add-CardRow (New-ActionRow 'Set up sync' { Start-SyncSetup } -Help $script:SetupHelp)
+      Add-Footnote 'Set it up once: your own free sync service, in your Cloudflare account. Your lists stay on this PC and are uploaded there.'
     }
     if ($script:setupOutcome) {
-      [void]$list.Children.Add((New-SettingRow 'Sync was not set up' (($script:setupOutcome.message, $script:setupOutcome.next | Where-Object { $_ }) -join ' ') $null))
+      Add-Footnote ((@('Sync was not set up.', $script:setupOutcome.message, $script:setupOutcome.next) | Where-Object { $_ }) -join ' ') $Red
     }
-    [void]$list.Children.Add((New-SettingRow 'Already syncing on another device?' 'Paste its pairing link (there: Pair phone, Copy link)' $null))
-    $g = New-Object System.Windows.Controls.Grid; $g.Margin = '8,0,6,8'
-    foreach ($wd in @('*', 'Auto')) { $cd = New-Object System.Windows.Controls.ColumnDefinition; $cd.Width = $wd; $g.ColumnDefinitions.Add($cd) }
+    # a device that already syncs: its pairing link connects this PC to the same sync service
+    Add-Heading 'Already syncing on another device?'
     $box = New-Object System.Windows.Controls.TextBox
     Set-Name $box 'Pairing link' 'From a device that already syncs: its Pair phone page, Copy link'
-    $box.FontFamily = $UI; $box.FontSize = $TypeSize.meta; $box.Background = $Hover; $box.Foreground = $Ink; $box.CaretBrush = $Accent
-    $box.BorderThickness = '0,0,0,1.5'; $box.BorderBrush = $Line; $box.Padding = '6,4,6,4'; $box.VerticalContentAlignment = 'Center'
-    $hint = New-Text 'https://...workers.dev/#pair=...' $TypeSize.meta $Faint; $hint.IsHitTestVisible = $false; $hint.Margin = '8,5,0,0'
-    $box.Tag = $hint
-    $box.Add_TextChanged({ param($s, $e) $s.Tag.Visibility = $(if ($s.Text) { 'Collapsed' } else { 'Visible' }); $s.BorderBrush = $Line })
-    $go = {
-      $r = Connect-Sync $script:pairBox.Text
-      if ($r -eq 'ok') { Render } elseif ($r -eq 'bad') { $script:pairBox.BorderBrush = $Red }
-    }
     $script:pairBox = $box
     $box.Add_PreviewKeyDown({ param($s, $e) if ($e.Key -eq 'Return') {
         $e.Handled = $true
         $r = Connect-Sync $s.Text
-        if ($r -eq 'ok') { [void]$w.Focus(); Render } elseif ($r -eq 'bad') { $s.BorderBrush = $Red } } })
-    [void]$g.Children.Add($box); [void]$g.Children.Add((Hide-Decoration $hint))
-    $btn = New-SmallButton 'Connect' $go; [System.Windows.Controls.Grid]::SetColumn($btn, 1); [void]$g.Children.Add($btn)
-    [void]$list.Children.Add($g)
+        if ($r -eq 'ok') { [void]$w.Focus(); Render } elseif ($r -eq 'bad') { Set-BoxError $s } } })
+    $go = New-TextButton 'Connect' {
+      $r = Connect-Sync $script:pairBox.Text
+      if ($r -eq 'ok') { Render } elseif ($r -eq 'bad') { Set-BoxError $script:pairBox }
+    }
+    Add-CardRow (New-InputRow $box 'Paste its pairing link' $go)
+    Add-Footnote 'There: Pair phone, Copy link. It looks like https://...workers.dev/#pair=...'
     return
   }
   $srvHost = try { ([Uri][string]$syncCfg['url']).Host } catch { [string]$syncCfg['url'] }
-  $line = Get-SyncStatusLine
   $wv = $(if ($script:sync -and $script:sync.WorkerVersion) { ", version $($script:sync.WorkerVersion)" } elseif ($script:sync -and $script:sync.WorkerApi) { ', an older version' } else { '' })
-  [void]$list.Children.Add((New-SettingRow $line "Your sync service: $srvHost$wv" (New-SmallButton 'Sync now' { Request-Sync; if ($script:sync) { $script:sync.Status = 'syncing' }; [void](Update-SyncIndicator -Force); Render })))
-  [void]$list.Children.Add((New-LinkRow 'Pair phone' 'QR code and pairing code for your phone (or another PC)' 'pair'))
+  Add-CardRow (New-InfoRow 'Status' (Get-SyncStatusLine) -Tip "Your sync service: $srvHost$wv")
+  Add-CardRow (New-ActionRow 'Sync now' { Request-Sync; if ($script:sync) { $script:sync.Status = 'syncing' }; [void](Update-SyncIndicator -Force); Render })
+  Add-CardRow (New-LinkRow 'Pair phone' '' 'pair' -Help 'QR code and pairing code for your phone (or another PC)')
   # (Turn off sync is under Advanced, at the bottom of the page)
   $n = @(Get-OpenConflictList).Count + @(Get-NoticeList).Count
-  if ($n) { [void]$list.Children.Add((New-LinkRow "$n conflict$(if ($n -gt 1) { 's' })" 'Changed on two devices at once: pick which version to keep' 'conflicts' -Dot)) }
+  if ($n) { Add-CardRow (New-LinkRow 'Conflicts' "$n" 'conflicts' -Dot -Name "Conflicts, $n" -Help 'Changed on two devices at once: pick which version to keep') }
+  Add-Footnote "Your sync service: $srvHost$wv."
 }
 
 function New-QrImage([string]$text) {
@@ -2862,45 +3037,39 @@ function Receive-PairCode {
 function Render-PairView {
   [void]$list.Children.Add((New-SettingsHeader 'Pair phone'))
   $syncCfg = Read-SyncConfigUi
-  if (-not $syncCfg) { $t = New-Text 'Sync is not set up on this PC yet (Settings > Sync & sharing).' $TypeSize.body $Faint; $t.Margin = '8,6,8,6'; [void]$list.Children.Add($t); return }
+  if (-not $syncCfg) { Add-Note 'Sync is not set up on this PC yet (Settings > Sync & sharing).'; return }
   Request-PairCode $syncCfg
   $code = $(if ($script:pairCode -and $script:pairCode.Until -gt (Get-Date)) { $script:pairCode.Code } else { $null })
   $link = ([string]$syncCfg['url']).TrimEnd('/') + '/#pair=' + [string]$syncCfg['token']
   $frame = New-Object System.Windows.Controls.Border
-  $frame.Background = $Paper; $frame.CornerRadius = New-Object System.Windows.CornerRadius($Tokens.Radius.tab); $frame.Padding = '8'
-  $frame.HorizontalAlignment = 'Center'; $frame.Margin = '0,4,0,10'
+  $frame.Background = $Paper; $frame.CornerRadius = New-Object System.Windows.CornerRadius($CardRadius); $frame.Padding = '8'
+  $frame.HorizontalAlignment = 'Center'
   try { $frame.Child = New-QrImage $link } catch { $frame.Child = New-Text "Could not draw the QR code: $($_.Exception.Message)" $TypeSize.meta $Red }
-  [void]$list.Children.Add($frame)
-  $codeStep = $(if ($code) { '3.  Open Saqme from the Home Screen and type this code:' }
-                elseif ($null -eq $code) { '3.  Open Saqme from the Home Screen and type the code that appears here in a moment.' }
-                else { '3.  Open Saqme from the Home Screen and paste the link below (Copy link, then send it to the phone).' })
-  foreach ($step in @('1.  Scan it with the iPhone camera and open the link in Safari.',
-                      '2.  Tap Share, then Add to Home Screen.', $codeStep)) {
-    $t = New-Text $step $TypeSize.body $Ink; $t.Margin = '12,2,8,2'; [void]$list.Children.Add($t)
-  }
+  Add-Loose $frame
+  # the steps on the phone, one short line each
+  Add-Heading 'On the iPhone'
+  $codeStep = $(if ($code) { 'Type the pairing code below' } elseif ($null -eq $code) { 'Type the code (it shows below)' } else { 'Paste the link below' })
+  $steps = @('Scan the code with the Camera', 'Open the link in Safari', 'Share, then Add to Home Screen', 'Open Saqme from the Home Screen', $codeStep, 'In its Settings: Enable notifications')
+  for ($k = 0; $k -lt $steps.Count; $k++) { Add-CardRow (New-InfoRow $steps[$k] -Lead "$($k + 1)" -Tip $steps[$k]) ($CardPad + 28) }
   if ($code) {
-    $ct = New-Text $code 28 $Ink; $ct.FontWeight = 'SemiBold'; $ct.HorizontalAlignment = 'Center'; $ct.Margin = '0,6,0,0'; Set-Tabular $ct
+    Add-Heading 'Pairing code'
+    $ct = New-Text $code 26 $Ink; $ct.FontWeight = 'SemiBold'; $ct.TextWrapping = 'NoWrap'; $ct.HorizontalAlignment = 'Center'; Set-Tabular $ct
     Set-Name $ct ('Pairing code ' + (($code -replace '-', '').ToCharArray() -join ' '))
-    [void]$list.Children.Add($ct)
-    $ch = New-Text 'works once, for 10 minutes' $TypeSize.meta $Faint; $ch.HorizontalAlignment = 'Center'; $ch.Margin = '0,0,0,8'
-    [void]$list.Children.Add($ch)
-  }
-  $t = New-Text '4.  In its Settings, tap Enable notifications.' $TypeSize.body $Ink; $t.Margin = '12,2,8,2'; [void]$list.Children.Add($t)
-  $g = New-Object System.Windows.Controls.Grid; $g.Margin = '8,10,6,4'
-  foreach ($wd in @('*', 'Auto')) { $cd = New-Object System.Windows.Controls.ColumnDefinition; $cd.Width = $wd; $g.ColumnDefinitions.Add($cd) }
+    $r = New-Object System.Windows.Controls.Border; Set-RowBox $r $ct; $r.Padding = '8,10,8,10'
+    Add-CardRow $r
+    Add-Footnote 'It works once, for 10 minutes.'
+  } elseif ($code -eq '') { Add-Footnote 'No pairing code from your sync service right now: Copy link, and send the link to the phone.' }
+  Add-Heading 'Pairing link'
   $box = New-Object System.Windows.Controls.TextBox
   Set-Name $box 'Pairing link (keep it private)'
-  $box.Text = $link; $box.IsReadOnly = $true; $box.FontFamily = $UI; $box.FontSize = $TypeSize.meta; $box.Background = $Hover; $box.Foreground = $TabInk
-  $box.BorderThickness = '0'; $box.Padding = '6,4,6,4'; $box.VerticalContentAlignment = 'Center'
+  $box.Text = $link; $box.IsReadOnly = $true
   $box.Add_GotKeyboardFocus({ param($s, $e) $s.SelectAll() })
-  [void]$g.Children.Add($box)
-  $copy = New-SmallButton 'Copy link' { try { [System.Windows.Clipboard]::SetText($script:pairLink); Show-Toast 'Saqme To Do' 'Pairing link copied.' 'Saqme To Do' } catch {} }
+  $copy = New-TextButton 'Copy link' { try { [System.Windows.Clipboard]::SetText($script:pairLink); Show-Toast 'Saqme To Do' 'Pairing link copied.' 'Saqme To Do' } catch {} }
   $script:pairLink = $link
-  [System.Windows.Controls.Grid]::SetColumn($copy, 1); [void]$g.Children.Add($copy)
-  [void]$list.Children.Add($g)
-  $warn = New-Text 'The QR code and the link are the key to your lists: anyone who has them can read and change them. To revoke it, run setup again with -RotateToken and pair your devices again.' $TypeSize.meta $Faint
-  $warn.Margin = '8,6,8,8'
-  [void]$list.Children.Add($warn)
+  $row = New-InputRow $box '' $copy
+  $box.Foreground = $Faint
+  Add-CardRow $row
+  Add-Footnote "The QR code and the link are the key to your lists: anyone who has them can read and change them. To revoke it, run setup again with $([char]0x2011)RotateToken and pair your devices again."
 }
 
 # ---------------------------------------------------------------- updates (Settings > Updates; docs/setup.md, "Updating")
@@ -3018,25 +3187,28 @@ function Render-IfSettings {
 
 # ---------------------------------------------------------------- the version: under every Settings view, in About, on the tray icon
 function Get-VersionText { return "Saqme To Do $($script:Release.Version)" }
-# when an update needs a look: what the version line adds (Dot: something to do or decide), else $null
+# when an update needs a look: what the version line adds (Dot: something to do or decide), else $null. Short: the
+# value of the Updates row in Settings
 function Get-UpdateBadge {
   if (-not $InstallRoot) { return $null }
-  if (Test-UpdateRunning) { return @{ Text = 'Updating...'; Dot = $false } }
+  if (Test-UpdateRunning) { return @{ Text = 'Updating...'; Short = 'Updating...'; Dot = $false } }
   $res = Get-UpdateResult
-  if ($res -and $res['needsLogin']) { return @{ Text = 'Sign in to Cloudflare to finish the update'; Dot = $true } }
+  if ($res -and $res['needsLogin']) { return @{ Text = 'Sign in to Cloudflare to finish the update'; Short = 'Sign in needed'; Dot = $true } }
   $avail = Get-AvailableUpdate
-  if ($avail) { return @{ Text = "Update available: $($avail.version)"; Dot = $true } }
-  if ($res -and -not $res['ok'] -and $res['version']) { return @{ Text = "The update to $($res['version']) is waiting"; Dot = $true } }
+  if ($avail) { return @{ Text = "Update available: $($avail.version)"; Short = "$($avail.version) available"; Dot = $true } }
+  if ($res -and -not $res['ok'] -and $res['version']) { return @{ Text = "The update to $($res['version']) is waiting"; Short = 'Waiting'; Dot = $true } }
   return $null
 }
-# the Updates row in Settings when there is no badge
+# the Updates row in Settings when there is no badge: Text in words, Short for the row's value
 function Get-UpdateSummary {
-  if (-not $InstallRoot) { return 'This copy does not update itself' }
-  if ($script:upd.Checking) { return 'Checking for updates...' }
-  if ($script:upd.Error) { return 'Could not check for updates' }
-  if ($script:upd.CheckedAt) { return 'Up to date' }
-  return $(if ($script:cfg.autoUpdate -eq '1') { 'Checked once a day, installed by itself when idle' } else { 'Checked once a day' })
+  if (-not $InstallRoot) { return @{ Text = 'This copy does not update itself'; Short = 'Off' } }
+  if ($script:upd.Checking) { return @{ Text = 'Checking for updates...'; Short = 'Checking...' } }
+  if ($script:upd.Error) { return @{ Text = 'Could not check for updates'; Short = "Couldn't check" } }
+  if ($script:upd.CheckedAt) { return @{ Text = 'Up to date'; Short = 'Up to date' } }
+  if ($script:cfg.autoUpdate -eq '1') { return @{ Text = 'Checked once a day, installed by itself when idle'; Short = 'Automatic' } }
+  return @{ Text = 'Checked once a day'; Short = 'Manual' }
 }
+
 # the quiet line at the bottom of the Settings views, and the tray icon's tooltip. With a badge, the line is a link to Updates.
 $script:versionShown = ''
 function Update-VersionDisplay {
@@ -3061,13 +3233,13 @@ function Update-VersionDisplay {
   if ($link) {
     $b = New-Control 'link' "$text. $($badge.Text)" 'Opens Settings, Updates' { param($s, $e) Show-View 'updates' }
     [System.Windows.Automation.AutomationProperties]::SetAutomationId($b, 'version')
-    $b.Child = $row; $b.Tag = 'updates'; $b.Cursor = 'Hand'; $b.Background = $Clear; $b.Padding = '6,3,6,3'; $b.HorizontalAlignment = 'Left'
+    $b.Child = $row; $b.Tag = 'updates'; $b.Cursor = 'Hand'; $b.Background = $Clear; $b.Padding = '6,3,6,3'; $b.Margin = "$($CardPad - 6),0,0,0"; $b.HorizontalAlignment = 'Left'
     $b.CornerRadius = New-Object System.Windows.CornerRadius($Tokens.Radius.control); $b.ToolTip = 'Open Updates'
     $b.Add_MouseEnter({ param($s, $e) $s.Background = $Hover })
     $b.Add_MouseLeave({ param($s, $e) $s.Background = $Clear })
     $b.Add_MouseLeftButtonUp({ param($s, $e) $e.Handled = $true; Show-View 'updates' })
     $verBar.Child = $b
-  } else { $row.Margin = '6,3,6,3'; $verBar.Child = $row }
+  } else { $row.Margin = "$CardPad,3,$CardPad,3"; $verBar.Child = $row }
 }
 # the timer, every few seconds: the daily check, an idle update, what a running one says
 function Step-Updates {
@@ -3109,8 +3281,9 @@ function Step-Updates {
 
 function Render-UpdateSettings {
   $cur = $script:Release.Version
+  Add-CardRow (New-InfoRow 'Version' $cur -Tip (Get-VersionText))
   if (-not $InstallRoot) {
-    [void]$list.Children.Add((New-SettingRow "Version $cur" 'This copy runs from a folder of its own, not an installed one, so it does not update itself. setup.cmd installs it.' $null))
+    Add-Footnote 'This copy runs from a folder of its own, not an installed one, so it does not update itself. setup.cmd installs it.'
     return
   }
   $running = Test-UpdateRunning
@@ -3120,47 +3293,50 @@ function Render-UpdateSettings {
     $st = Read-UpdateFile $InstallRoot 'status.json'
     $v = $(if ($st -and $st['version']) { [string]$st['version'] } elseif ($avail) { $avail.version } else { '' })
     $what = $(switch ($(if ($st) { [string]$st['state'] } else { '' })) {
-      'checking' { 'Checking for updates...' }
+      'checking' { 'Checking...' }
       'downloading' { "Downloading $v..." }
       'installing' { "Installing $v..." }
       'worker' { 'Updating your sync service...' }
       'restarting' { 'Restarting...' }
       default { 'Updating...' } })
-    [void]$list.Children.Add((New-SettingRow "Version $cur" "$what Saqme restarts by itself when it is done; your lists stay as they are." $null))
+    Add-CardRow (New-InfoRow 'Status' $what -LongValue -Tip $what)
+    Add-Footnote 'Saqme restarts by itself when it is done; your lists stay as they are.'
   } elseif ($avail) {
-    $b = New-SmallButton 'Update now' { Start-Update } $OnAccent; $b.Background = $Accent
-    Set-Name $b "Update now to $($avail.version)" 'Saqme restarts by itself; your lists stay as they are'
-    [void]$list.Children.Add((New-SettingRow "Update available: $($avail.version)" "You have $cur. It takes a minute; Saqme restarts by itself and your lists stay as they are." $b))
+    Add-CardRow (New-InfoRow 'Available' $avail.version -Dot)
+    Add-CardRow (New-ActionRow 'Update now' { Start-Update } -Name "Update now to $($avail.version)" -Help 'Saqme restarts by itself; your lists stay as they are')
+    Add-Footnote "You have $cur. It takes a minute; Saqme restarts by itself and your lists stay as they are."
   } else {
-    $when = $(if ($script:upd.Checking) { 'Checking for updates...' } elseif ($script:upd.Error) { $script:upd.Error } elseif ($script:upd.CheckedAt) { "Up to date (checked $(Format-Ms $script:upd.CheckedAt 'H:mm'))." } else { 'Checked for updates shortly after the start, then once a day.' })
-    $b = New-SmallButton 'Check now' { Start-UpdateCheck; Render }
-    [void]$list.Children.Add((New-SettingRow "Version $cur" $when $b))
+    $state = $(if ($script:upd.Checking) { 'Checking...' } elseif ($script:upd.Error) { "Couldn't check" } elseif ($script:upd.CheckedAt) { 'Up to date' } else { 'Not checked yet' })
+    Add-CardRow (New-InfoRow 'Status' $state)
+    Add-CardRow (New-ActionRow 'Check now' { Start-UpdateCheck; Render } -Name 'Check for updates now')
+    Add-Footnote $(if ($script:upd.Error) { [string]$script:upd.Error } elseif ($script:upd.CheckedAt) { "Checked at $(Format-Ms $script:upd.CheckedAt 'H:mm'), then again once a day." } else { 'Checked shortly after the start, then once a day.' })
   }
   # how the last one ended, when there is something to do about it
   if ($script:upd.Login) {
-    [void]$list.Children.Add((New-SettingRow 'Signing in to Cloudflare...' 'Allow it in the browser window that opened; the update finishes by itself afterwards.' $null))
+    Add-CardRow (New-InfoRow 'Signing in to Cloudflare...')
+    Add-Footnote 'Allow it in the browser window that opened; the update finishes by itself afterwards.'
   } elseif (-not $running -and $res -and ($res['needsLogin'] -or -not $res['ok'] -or $res['worker'] -eq 'pending')) {
     $hint = (([string]$res['message']), ([string]$res['next']), $script:upd.LoginError | Where-Object { $_ }) -join ' '
     if ($res['needsLogin']) {
-      # (the message is usually this row's own title)
-      $hint = (([string]$res['message']), ([string]$res['next']), $script:upd.LoginError | Where-Object { $_ -and $_.TrimEnd('.') -ne 'Sign in to Cloudflare to finish the update' }) -join ' '
-      $b = New-SmallButton 'Sign in' { Start-CloudLogin } $OnAccent; $b.Background = $Accent
-      Set-Name $b 'Sign in to Cloudflare' 'Opens the browser; the update finishes by itself afterwards'
-      [void]$list.Children.Add((New-SettingRow 'Sign in to Cloudflare to finish the update' $hint $b))
+      Add-CardRow (New-ActionRow 'Sign in to Cloudflare' { Start-CloudLogin } -Help 'Opens the browser; the update finishes by itself afterwards')
     } elseif ($res['ok']) {
-      [void]$list.Children.Add((New-SettingRow 'Your sync service is not updated yet' $hint (New-SmallButton 'Try again' { Start-Update -WorkerOnly })))
+      Add-CardRow (New-InfoRow 'Your sync service' 'Not updated yet')
+      Add-CardRow (New-ActionRow 'Try again' { Start-Update -WorkerOnly } -Name 'Try updating your sync service again')
     } elseif ($res['version']) {
-      [void]$list.Children.Add((New-SettingRow $(if ($res['held']) { "The update to $($res['version']) is waiting" } else { "The update to $($res['version']) did not install" }) $hint (New-SmallButton 'Try again' { Start-Update })))
+      Add-CardRow (New-InfoRow "Update to $($res['version'])" $(if ($res['held']) { 'Waiting' } else { "Didn't install" }) -Dot)
+      Add-CardRow (New-ActionRow 'Try again' { Start-Update } -Name "Try the update to $($res['version']) again")
     } else {
-      [void]$list.Children.Add((New-SettingRow 'Could not check for updates' $hint $null))
+      Add-CardRow (New-InfoRow 'Checking for updates' "Couldn't check")
     }
+    if ($hint) { Add-Footnote $hint }
   }
-  $tg = New-Toggle ($script:cfg.autoUpdate -eq '1') {
+  Close-Card
+  Add-CardRow (New-SwitchRow 'Install updates automatically' ($script:cfg.autoUpdate -eq '1') {
     param($on)
     $script:cfg.autoUpdate = $(if ($on) { '1' } else { '0' }); Save-Settings
     Render
-  } 'Install updates automatically'
-  [void]$list.Children.Add((New-SettingRow 'Install updates automatically' 'When the app is idle. It restarts by itself; your lists stay as they are.' $tg))
+  } 'When the app is idle. It restarts by itself; your lists stay as they are.')
+  Add-Footnote 'When the app is idle. It restarts by itself; your lists stay as they are.'
 }
 
 # ---------------------------------------------------------------- sharing a list (the owner's side)
@@ -3258,80 +3434,80 @@ function Remove-ShareAccess($person) {
 function Render-ShareView {
   $sv = $script:shareView
   [void]$list.Children.Add((New-SettingsHeader "Share '$($sv.Name)'"))
-  $say = { param([string]$t, $brush) $x = New-Text $t $TypeSize.meta $(if ($brush) { $brush } else { $Faint }); $x.Margin = '8,4,8,6'; [void]$list.Children.Add($x) }
-  if (-not (Read-SyncConfigUi)) { & $say $script:ShareNeedsSync; return }
-  if ($script:sync -and $script:sync.WorkerApi -and $script:sync.WorkerApi -lt $script:SharingApi) { & $say $script:WorkerTooOld; return }
+  if (-not (Read-SyncConfigUi)) { Add-Note $script:ShareNeedsSync; return }
+  if ($script:sync -and $script:sync.WorkerApi -and $script:sync.WorkerApi -lt $script:SharingApi) { Add-Note $script:WorkerTooOld; return }
   if (-not $sv.ProjectId -and $script:sync -and $script:sync.ProjectIds) { $sv.ProjectId = $script:sync.ProjectIds[$sv.Name]; if ($sv.ProjectId) { Update-SharePeople } }
-  if (-not $sv.ProjectId) { & $say 'This list is not on your sync service yet. It gets there within a few seconds; then open Share again.'; return }
-  & $say 'They get a link that works once, for 24 hours. The list stays on your sync service; they sync it from there with a key that reaches this list only.'
-  # who: a name only you see, to recognise them later
-  $g = New-Object System.Windows.Controls.Grid; $g.Margin = '8,4,6,4'
+  if (-not $sv.ProjectId) { Add-Note 'This list is not on your sync service yet. It gets there within a few seconds; then open Share again.'; return }
+  # who (a name only you see, to recognise them later), what they may do, and the link
+  Add-Heading 'Invite someone'
   $box = New-Object System.Windows.Controls.TextBox
   Set-Name $box 'Their name' 'Only you see it: it is how you recognise them in this list later'
-  $box.Text = [string]$sv.Alias; $box.FontFamily = $UI; $box.FontSize = $TypeSize.body; $box.Background = $Hover; $box.Foreground = $Ink; $box.CaretBrush = $Accent
-  $box.BorderThickness = '0,0,0,1.5'; $box.BorderBrush = $Line; $box.Padding = '6,4,6,4'; $box.MaxLength = 60
-  $hint = New-Text 'Their name, e.g. Nuca (only you see it)' $TypeSize.meta $Faint; $hint.IsHitTestVisible = $false; $hint.Margin = '8,5,0,0'
-  $hint.Visibility = $(if ($box.Text) { 'Collapsed' } else { 'Visible' }); $box.Tag = $hint
-  $box.Add_TextChanged({ param($s, $e) $s.Tag.Visibility = $(if ($s.Text) { 'Collapsed' } else { 'Visible' }); $script:shareView.Alias = $s.Text })
+  $box.Text = [string]$sv.Alias; $box.MaxLength = 60
+  $box.Add_TextChanged({ param($s, $e) $script:shareView.Alias = $s.Text })
   $box.Add_PreviewKeyDown({ param($s, $e) if ($e.Key -eq 'Return') { $e.Handled = $true; New-ShareInvite } })
-  [void]$g.Children.Add($box); [void]$g.Children.Add((Hide-Decoration $hint))
-  [void]$list.Children.Add($g)
-  # what: can edit / can view, in words
-  $seg = New-Segmented @(@('edit', $script:AccessText.edit[0]), @('view', $script:AccessText.view[0])) $sv.Access { param($v) $script:shareView.Access = $v; Render } 'Access'
-  $seg.Child.Children[0].ToolTip = $script:AccessText.edit[1]; $seg.Child.Children[1].ToolTip = $script:AccessText.view[1]
-  $mk = New-SmallButton $(if ($sv.Busy) { 'Creating...' } else { 'Create invite link' }) { if (-not $script:shareView.Busy) { New-ShareInvite } } $Accent
-  $acc = New-SettingRow 'Access' $script:AccessText[$sv.Access][1] $seg
-  [void]$list.Children.Add($acc)
-  $row = New-Object System.Windows.Controls.StackPanel; $row.Orientation = 'Horizontal'; $row.HorizontalAlignment = 'Right'; $row.Margin = '8,0,6,6'
-  [void]$row.Children.Add($mk); [void]$list.Children.Add($row)
-  if ($sv.Error) { & $say $sv.Error $Red }
+  Add-CardRow (New-InputRow $box 'Their name, e.g. Nuca')
+  $seg = New-Segmented @(@('edit', $script:AccessText.edit[0], $script:AccessText.edit[1]), @('view', $script:AccessText.view[0], $script:AccessText.view[1])) $sv.Access { param($v) $script:shareView.Access = $v; Render } 'Access'
+  Add-CardRow (New-InfoRow 'Access' '' $seg)
+  Add-CardRow (New-ActionRow $(if ($sv.Busy) { 'Creating...' } else { 'Create invite link' }) { if (-not $script:shareView.Busy) { New-ShareInvite } } -Name 'Create invite link')
+  Add-Footnote "Only you see their name. $($script:AccessText[$sv.Access][1]) They get a link that works once, for 24 hours; the list stays on your sync service, and they sync it from there with a key that reaches this list only."
+  if ($sv.Error) { Add-Footnote $sv.Error $Red }
   if ($sv.Invite) {
     $inv = $sv.Invite; $link = [string]$inv['link']
     $frame = New-Object System.Windows.Controls.Border
-    $frame.Background = $Paper; $frame.CornerRadius = New-Object System.Windows.CornerRadius($Tokens.Radius.tab); $frame.Padding = '8'; $frame.HorizontalAlignment = 'Center'; $frame.Margin = '0,4,0,6'
+    $frame.Background = $Paper; $frame.CornerRadius = New-Object System.Windows.CornerRadius($CardRadius); $frame.Padding = '8'; $frame.HorizontalAlignment = 'Center'
     try { $frame.Child = New-QrImage $link; $frame.Child.Width = 180; $frame.Child.Height = 180 } catch { $frame.Child = New-Text "Could not draw the QR code: $($_.Exception.Message)" $TypeSize.meta $Red }
-    [void]$list.Children.Add($frame)
-    & $say ("Invite for $($inv['share']['alias']), $($script:AccessText[[string]$inv['share']['access']][0].ToLower()). It works once, until $(Format-Ms ([long]$inv['expiresAt']) 'ddd H:mm'). Send it to them yourself (a message, an email): whoever opens it first joins.") $Ink
-    $lg = New-Object System.Windows.Controls.Grid; $lg.Margin = '8,2,6,8'
-    foreach ($wd in @('*', 'Auto')) { $cd = New-Object System.Windows.Controls.ColumnDefinition; $cd.Width = $wd; $lg.ColumnDefinitions.Add($cd) }
+    Add-Loose $frame
     $lb = New-Object System.Windows.Controls.TextBox
     Set-Name $lb 'Invite link'
-    $lb.Text = $link; $lb.IsReadOnly = $true; $lb.FontFamily = $UI; $lb.FontSize = $TypeSize.meta; $lb.Background = $Hover; $lb.Foreground = $TabInk
-    $lb.BorderThickness = '0'; $lb.Padding = '6,4,6,4'; $lb.VerticalContentAlignment = 'Center'
+    $lb.Text = $link; $lb.IsReadOnly = $true
     $lb.Add_GotKeyboardFocus({ param($s, $e) $s.SelectAll() })
-    [void]$lg.Children.Add($lb)
-    $cp = New-SmallButton 'Copy' { param($x) try { [System.Windows.Clipboard]::SetText($x); Show-Notice 'Invite link copied.' } catch {} } $null $link
-    [System.Windows.Controls.Grid]::SetColumn($cp, 1); [void]$lg.Children.Add($cp)
-    [void]$list.Children.Add($lg)
+    $cp = New-TextButton 'Copy' { param($x) try { [System.Windows.Clipboard]::SetText($x); Show-Notice 'Invite link copied.' } catch {} } $Accent $link
+    Set-Name $cp 'Copy the invite link'
+    $row = New-InputRow $lb '' $cp; $lb.Foreground = $Faint
+    Add-CardRow $row
+    Add-Footnote ("For $($inv['share']['alias']), $($script:AccessText[[string]$inv['share']['access']][0].ToLower()). It works once, until $(Format-Ms ([long]$inv['expiresAt']) 'ddd H:mm'). Send it to them yourself (a message, an email): whoever opens it first joins.") $Ink
   }
-  # who has it
-  [void]$list.Children.Add((New-SectionLabel 'Shared with'))
-  if ($null -eq $sv.People) { & $say 'Loading...'; return }
-  if (-not @($sv.People).Count) { & $say 'Nobody yet.'; return }
+  # who has it: one row each, with their access; the row's menu changes it, or revokes it
+  Add-Heading 'Shared with'
+  if ($null -eq $sv.People) { Add-Note 'Loading...'; return }
+  if (-not @($sv.People).Count) { Add-Note 'Nobody yet.'; return }
   foreach ($p in @($sv.People)) {
     $state = [string]$p['state']
+    $access = $script:AccessText[[string]$p['access']][0]
     $when = $(switch ($state) {
       'joined' { "joined $(Format-Ms ([long]$p['joinedAt']) 'd MMM')" }
       'pending' { "invited $(Format-Ms ([long]$p['createdAt']) 'd MMM'), not joined yet" }
       default { 'invite expired, never used' } })
-    $ctl = New-Object System.Windows.Controls.StackPanel; $ctl.Orientation = 'Horizontal'
-    if ($state -ne 'expired') {
-      # their access, changeable: the current one is highlighted (each button carries the person, like Revoke)
-      foreach ($v in @('edit', 'view')) {
-        $cur = ([string]$p['access'] -eq $v)
-        $ab = New-SmallButton $(if ($v -eq 'edit') { 'Edit' } else { 'View' }) { param($x) if ($x.V -ne [string]$x.P['access']) { Set-ShareAccess $x.P $x.V } } $(if ($cur) { $OnAccent } else { $null }) @{ P = $p; V = $v }
-        if ($cur) { $ab.Background = $Accent }
-        $ab.ToolTip = $script:AccessText[$v][1]; $ab.Margin = '4,0,0,0'
-        Set-Name $ab ("$($script:AccessText[$v][0]) for $($p['alias'])" + $(if ($cur) { ' (current)' } else { '' })) $script:AccessText[$v][1]
-        [void]$ctl.Children.Add($ab)
-      }
-    }
-    $label = $(switch ($state) { 'joined' { 'Revoke' } 'pending' { 'Cancel invite' } default { 'Remove' } })
-    $end = New-SmallButton $label { param($x) Remove-ShareAccess $x } $(if ($state -eq 'joined') { $Red } else { $null }) $p
-    if ($state -eq 'joined') { $end.ToolTip = 'Their key stops working now; the list stays on their device as their own copy.' }
-    [void]$ctl.Children.Add($end)
-    [void]$list.Children.Add((New-SettingRow ([string]$p['alias']) "$($script:AccessText[[string]$p['access']][0]), $when" $ctl))
+    $value = $(switch ($state) { 'joined' { $access } 'pending' { 'Invited' } default { 'Expired' } })
+    $more = New-Text (G 0xE70D) 10 $TabInk; $more.FontFamily = $MDL2; $more.TextWrapping = 'NoWrap'; $more.Margin = '0,2,0,0'
+    $g = New-RowGrid ([string]$p['alias']) $value (Hide-Decoration $more)
+    $r = New-RowButton "$($p['alias']), $($access.ToLower()), $when" 'Opens a menu: change their access, or revoke it' $g { param($x) Show-PersonMenu $x.Row $x.P } @{ P = $p; Row = $null }
+    $r.Tag.Arg.Row = $r; $r.ToolTip = "$access, $when"
+    Add-CardRow $r
   }
+}
+# a person's menu in Share: their access (the current one in bold), then revoke / cancel the invite / remove it
+function Show-PersonMenu($target, $p) {
+  $m = New-Menu
+  $state = [string]$p['state']
+  if ($state -ne 'expired') {
+    foreach ($v in @('edit', 'view')) {
+      $cur = ([string]$p['access'] -eq $v)
+      $mi = New-MenuItem $script:AccessText[$v][0]; $mi.ToolTip = $script:AccessText[$v][1]
+      if ($cur) { $mi.FontWeight = 'SemiBold' }
+      Set-Name $mi ("$($script:AccessText[$v][0]) for $($p['alias'])" + $(if ($cur) { ' (current)' } else { '' })) $script:AccessText[$v][1]
+      $mi.Tag = @{ P = $p; V = $v }
+      $mi.Add_Click({ param($s, $e) if ($s.Tag.V -ne [string]$s.Tag.P['access']) { Set-ShareAccess $s.Tag.P $s.Tag.V } })
+      [void]$m.Items.Add($mi)
+    }
+    [void]$m.Items.Add((New-Separator))
+  }
+  $end = New-MenuItem $(switch ($state) { 'joined' { 'Revoke' } 'pending' { 'Cancel invite' } default { 'Remove' } }); $end.Tag = $p
+  if ($state -eq 'joined') { $end.Foreground = $Red; $end.ToolTip = 'Their key stops working now; the list stays on their device as their own copy.' }
+  $end.Add_Click({ param($s, $e) Remove-ShareAccess $s.Tag })
+  [void]$m.Items.Add($end)
+  $m.PlacementTarget = $target; $m.Placement = 'Bottom'; $m.IsOpen = $true
+  $script:openPopup = $m
 }
 
 # ---------------------------------------------------------------- joining and leaving (the other side)
@@ -3395,32 +3571,24 @@ function Leave-SharedList([string]$name) {
 
 # Settings > Sync & sharing > Shared lists: join one (paste the invite link), and those this PC has, each with Leave
 function Render-SharedListSettings {
-  [void]$list.Children.Add((New-SettingRow 'Join a shared list' 'Paste the invite link someone sent you. Works without sync of your own too.' $null))
-  $g = New-Object System.Windows.Controls.Grid; $g.Margin = '8,0,6,8'
-  foreach ($wd in @('*', 'Auto')) { $cd = New-Object System.Windows.Controls.ColumnDefinition; $cd.Width = $wd; $g.ColumnDefinitions.Add($cd) }
+  Add-Heading 'Shared lists'
   $box = New-Object System.Windows.Controls.TextBox
   Set-Name $box 'Invite link' 'From the person who shares the list with you'
-  $box.FontFamily = $UI; $box.FontSize = $TypeSize.meta; $box.Background = $Hover; $box.Foreground = $Ink; $box.CaretBrush = $Accent
-  $box.BorderThickness = '0,0,0,1.5'; $box.BorderBrush = $Line; $box.Padding = '6,4,6,4'; $box.VerticalContentAlignment = 'Center'
-  $hint = New-Text 'https://.../join#code=...' $TypeSize.meta $Faint; $hint.IsHitTestVisible = $false; $hint.Margin = '8,5,0,0'
-  $box.Tag = $hint
-  $box.Add_TextChanged({ param($s, $e) $s.Tag.Visibility = $(if ($s.Text) { 'Collapsed' } else { 'Visible' }); $s.BorderBrush = $Line })
   $script:joinBox = $box
-  $go = { $r = Start-JoinShare $script:joinBox.Text; if ($r -eq 'ok') { $script:joinBox.Text = '' } elseif ($r -eq 'bad') { $script:joinBox.BorderBrush = $Red; Show-Notice 'That is not an invite link (it looks like https://.../join#code=...).' } }
-  $box.Add_PreviewKeyDown({ param($s, $e) if ($e.Key -eq 'Return') { $e.Handled = $true; $r = Start-JoinShare $s.Text; if ($r -eq 'ok') { $s.Text = '' } elseif ($r -eq 'bad') { $s.BorderBrush = $Red } } })
-  [void]$g.Children.Add($box); [void]$g.Children.Add((Hide-Decoration $hint))
-  $btn = New-SmallButton 'Join' $go; [System.Windows.Controls.Grid]::SetColumn($btn, 1); [void]$g.Children.Add($btn)
-  [void]$list.Children.Add($g)
+  $box.Add_PreviewKeyDown({ param($s, $e) if ($e.Key -eq 'Return') { $e.Handled = $true; $r = Start-JoinShare $s.Text; if ($r -eq 'ok') { $s.Text = '' } elseif ($r -eq 'bad') { Set-BoxError $s } } })
+  $go = New-TextButton 'Join' { $r = Start-JoinShare $script:joinBox.Text; if ($r -eq 'ok') { $script:joinBox.Text = '' } elseif ($r -eq 'bad') { Set-BoxError $script:joinBox; Show-Notice 'That is not an invite link (it looks like https://.../join#code=...).' } }
+  Add-CardRow (New-InputRow $box 'Paste an invite link to join' $go)
   # (Deletions paused, for this PC's own lists or a shared one, is further down the Sync & sharing page)
   foreach ($b in $script:bindings) {
     $st = $(if ($script:sync -and $script:sync.Shares) { @($script:sync.Shares | Where-Object { $_.Id -eq [string]$b['id'] })[0] } else { $null })
-    $status = $(if ($st -and @('offline', 'error') -contains $st.State) { ", $($st.Message)" } else { '' })
-    $lv = New-SmallButton 'Leave' { param($x) Leave-SharedList $x } $Red ([string]$b['file'])
-    Set-Name $lv "Leave $([string]$b['file'])" 'It goes from this PC; nothing changes in the owner''s list'
-    [void]$list.Children.Add((New-SettingRow ([string]$b['file']) "From $(Get-ShareHost $b), $($script:AccessText[[string]$b['access']][0].ToLower())$status" $lv))
+    $trouble = $st -and @('offline', 'error') -contains $st.State
+    $access = $script:AccessText[[string]$b['access']][0]
+    $about = "From $(Get-ShareHost $b), $($access.ToLower())$(if ($trouble) { ", $($st.Message)" })"
+    $lv = New-TextButton 'Leave' { param($x) Leave-SharedList $x } $Red ([string]$b['file'])
+    Set-Name $lv "Leave $([string]$b['file'])" "$about. It goes from this PC; nothing changes in the owner's list"
+    Add-CardRow (New-InfoRow ([string]$b['file']) $(if ($trouble) { 'Not synced' } else { $access }) $lv -Dot:$trouble -Tip $about)
   }
-  $t = New-Text 'To share one of your own lists, right-click its tab and choose Share.' $TypeSize.meta $Faint; $t.Margin = '8,4,8,4'
-  [void]$list.Children.Add($t)
+  Add-Footnote 'Someone shared a list with you? Paste the invite link they sent; it works without sync of your own too. To share one of your own lists, right-click its tab and choose Share.'
 }
 
 function Format-ConflictValue([string]$field, $v) {
@@ -3456,53 +3624,35 @@ function Render-ConflictsView {
   $all = @(Get-OpenConflictList)
   $notices = @(Get-NoticeList)
   if (-not $all.Count -and -not $notices.Count) {
-    $t = New-Text 'No conflicts. When the same thing is changed on two devices before they sync, the newest change wins and the other one is kept here for you to pick.' $TypeSize.body $Faint
-    $t.Margin = '8,6,8,6'; [void]$list.Children.Add($t); return
+    Add-Note 'No conflicts. When the same thing is changed on two devices before they sync, the newest change wins and the other one is kept here for you to pick.'
+    return
   }
+  # a version on one line: the whole of it (a long note, say) is in the tooltip and read by screen readers
+  $flat = { param([string]$t) ($t -replace '\s*\r?\n\s*', ' / ').Trim() }
   # changes made in a view-only shared list (by hand, an editor, an AI assistant): the owner's version stays, and
-  # what was typed is kept here, not lost
+  # what was typed is kept here, not lost. One card per task: what is kept, then Copy and Dismiss
   $what = @{ text = 'Text'; status = 'Status'; due = 'Deadline'; notes = 'Notes'; deleted = 'Delete'; new = 'New task' }
   foreach ($n in $notices) {
-    $card = New-Object System.Windows.Controls.Border
-    $card.Background = $NoteBg; $card.CornerRadius = New-Object System.Windows.CornerRadius(7); $card.Padding = '10,8,10,8'; $card.Margin = '6,4,6,6'
-    $sp = New-Object System.Windows.Controls.StackPanel
-    $title = New-Text $(if ($n.Text) { $n.Text } else { '(untitled)' }) $TypeSize.body $Ink; $title.FontWeight = 'SemiBold'
-    [void]$sp.Children.Add($title)
-    $sub = New-Text ("Not saved: " + [string]$what[$n.Field] + " in '$($n.List)'") $TypeSize.meta $Faint; $sub.Margin = '0,2,0,8'
-    [void]$sp.Children.Add($sub)
+    Add-Heading $(if ($n.Text) { $n.Text } else { '(untitled)' })
     $val = $(if ($n.Field -eq 'deleted') { 'Deleted' } elseif ($n.Field -eq 'new') { [string]$n.Value } else { Format-ConflictValue $n.Field $n.Value })
-    $row = New-Text ('Your version:  ' + $val) $TypeSize.meta $NoteInk; $row.Margin = '0,2,0,2'
-    [void]$sp.Children.Add($row)
-    $why = New-Text $(if ($n.Reason -eq 'this shared list is view-only') { "'$($n.List)' is view-only for you, so the owner's version stays." } else { "The owner's server did not take it: $($n.Reason)." }) $TypeSize.meta $Faint
-    $why.Margin = '0,4,0,0'; [void]$sp.Children.Add($why)
-    $btns = New-Object System.Windows.Controls.StackPanel; $btns.Orientation = 'Horizontal'; $btns.HorizontalAlignment = 'Right'; $btns.Margin = '0,8,0,0'
-    [void]$btns.Children.Add((New-SmallButton 'Copy' { param($x) try { [System.Windows.Clipboard]::SetText($x); Show-Notice 'Copied.' } catch {} } $null $val))
-    [void]$btns.Children.Add((New-SmallButton 'Dismiss' { param($x) Dismiss-SyncNotice $x } $Accent $n))
-    [void]$sp.Children.Add($btns)
-    $card.Child = $sp
-    [void]$list.Children.Add($card)
+    Add-CardRow (New-InfoRow 'Your version' (& $flat $val) -LongValue -Tip $val)
+    Add-CardRow (New-ActionRow 'Copy' { param($x) try { [System.Windows.Clipboard]::SetText($x); Show-Notice 'Copied.' } catch {} } $val -Name 'Copy your version' -Help $val)
+    Add-CardRow (New-ActionRow 'Dismiss' { param($x) Dismiss-SyncNotice $x } $n)
+    $why = $(if ($n.Reason -eq 'this shared list is view-only') { "'$($n.List)' is view-only for you, so the owner's version stays." } else { "The owner's server did not take it: $($n.Reason)." })
+    Add-Footnote ("Not saved: " + [string]$what[$n.Field] + " in '$($n.List)'. " + $why)
   }
-  $names = @{ text = 'Text'; status = 'Status'; due = 'Deadline'; notes = 'Notes'; deleted = 'Deleted on one device, edited on another' }
+  # changed on two devices before they synced: the version that won (Now) and the other one, then the choice
+  $names = @{ text = 'Text'; status = 'Status'; due = 'Deadline'; notes = 'Notes' }
   foreach ($c in $all) {
-    $card = New-Object System.Windows.Controls.Border
-    $card.Background = $NoteBg; $card.CornerRadius = New-Object System.Windows.CornerRadius(7); $card.Padding = '10,8,10,8'; $card.Margin = '6,4,6,6'
-    $sp = New-Object System.Windows.Controls.StackPanel
-    $title = New-Text $(if ($c.TaskText) { $c.TaskText } else { '(untitled)' }) $TypeSize.body $Ink; $title.FontWeight = 'SemiBold'
-    [void]$sp.Children.Add($title)
-    $sub = New-Text ([string]$names[$c.Field] + ' changed on two devices') $TypeSize.meta $Faint; $sub.Margin = '0,2,0,8'
-    if ($c.Field -eq 'deleted') { $sub.Text = $names.deleted }
-    [void]$sp.Children.Add($sub)
+    Add-Heading $(if ($c.TaskText) { $c.TaskText } else { '(untitled)' })
     foreach ($pair in @(@('Now', $c.Current), @('Other version', $c.Value))) {
-      $row = New-Text ($pair[0] + ':  ' + (Format-ConflictValue $c.Field $pair[1])) $TypeSize.meta $NoteInk; $row.Margin = '0,2,0,2'
-      [void]$sp.Children.Add($row)
+      $v = Format-ConflictValue $c.Field $pair[1]
+      Add-CardRow (New-InfoRow $pair[0] (& $flat $v) -LongValue -Tip $v)
     }
-    $btns = New-Object System.Windows.Controls.StackPanel; $btns.Orientation = 'Horizontal'; $btns.HorizontalAlignment = 'Right'; $btns.Margin = '0,8,0,0'
     $useText = $(if ($c.Field -eq 'deleted') { if ($c.Value) { 'Delete it' } else { 'Restore it' } } else { 'Use other' })
-    [void]$btns.Children.Add((New-SmallButton 'Keep now' { param($x) Resolve-SyncConflict $x $false } $null $c))
-    [void]$btns.Children.Add((New-SmallButton $useText { param($x) Resolve-SyncConflict $x $true } $Accent $c))
-    [void]$sp.Children.Add($btns)
-    $card.Child = $sp
-    [void]$list.Children.Add($card)
+    Add-CardRow (New-ActionRow 'Keep now' { param($x) Resolve-SyncConflict $x $false } $c -Name 'Keep the version you have now')
+    Add-CardRow (New-ActionRow $useText { param($x) Resolve-SyncConflict $x $true } $c -Name $(if ($c.Field -eq 'deleted') { $useText } else { 'Use the other version' }))
+    Add-Footnote $(if ($c.Field -eq 'deleted') { 'Deleted on one device, edited on another.' } else { "$([string]$names[$c.Field]) changed on two devices. The newest change is the one you have now." })
   }
 }
 
@@ -3510,23 +3660,28 @@ function Render-ConflictsView {
 function Set-Sel($it, [switch]$Focus) {
   $script:sel = $it
   $first = $null; $selRow = $null
-  foreach ($row in $list.Children) {
-    if (Is-TaskRow $row) {
-      if (-not $first) { $first = $row }
-      $isSel = ($null -ne $it -and $row.Tag -eq $it)
-      $row.Background = $(if ($isSel) { $Selected } else { $Clear })
-      $row.BorderBrush = $(if ($isSel) { $Accent } else { $Clear })
+  # (only the rows whose state changes are touched: the one selected before and the new one; long lists stay quick)
+  foreach ($row in $script:rows) {
+    if (-not $first) { $first = $row }
+    $isSel = ($null -ne $it -and $row.Tag -eq $it)
+    if ($isSel -or $row.BorderBrush -eq $Accent) {
+      Paint-TaskRow $row $isSel
       if ($script:HasA11y) { $row.IsSelected = $isSel }
       [System.Windows.Input.KeyboardNavigation]::SetIsTabStop($row, $isSel)
-      if ($isSel) { $row.BringIntoView(); $selRow = $row }
     }
+    if ($isSel) { $row.BringIntoView(); $selRow = $row }
   }
-  if (-not $selRow -and $first) { [System.Windows.Input.KeyboardNavigation]::SetIsTabStop($first, $true) }   # the list stays reachable with Tab
+  # one Tab stop for the list: the selected task, else the first one (the list stays reachable with Tab)
+  $stop = $(if ($selRow) { $selRow } else { $first })
+  if ($script:tabRow -and $script:tabRow -ne $stop) { [System.Windows.Input.KeyboardNavigation]::SetIsTabStop($script:tabRow, $false) }
+  if ($stop) { [System.Windows.Input.KeyboardNavigation]::SetIsTabStop($stop, $true) }
+  $script:tabRow = $stop
   # keyboard focus follows the selection (screen readers then read the task), unless someone is typing
   $f = [System.Windows.Input.Keyboard]::FocusedElement
   if ($selRow -and ($Focus -or $null -eq $f -or $f -eq $w -or (Is-TaskRow $f)) -and -not ($f -is [System.Windows.Controls.TextBox])) { [void]$selRow.Focus() }
 }
-function Sel-Row { foreach ($c in $list.Children) { if ((Is-TaskRow $c) -and $c.Tag -eq $script:sel) { return $c } }; return $null }
+function Sel-Row { foreach ($c in $script:rows) { if ($c.Tag -eq $script:sel) { return $c } }; return $null }
+
 function Node-HasMore($it) {
   $i = $script:items.IndexOf($it)
   return ($it.Notes -or ($i -ge 0 -and (Subtree-End $i) -gt $i + 1))
@@ -3712,7 +3867,10 @@ if (Test-Path $posFile) {
 if ($w.Left + $w.Width -gt $wa.Right + 7) { $w.Left = $wa.Right + 7 - $w.Width }
 
 $script:sizeDirty = $false
-$w.Add_SizeChanged({ $script:sizeDirty = $true })
+$w.Add_SizeChanged({
+  $script:sizeDirty = $true
+  if (($w.Width -lt $MetaBelowW) -ne $script:metaBelow) { Render }   # (the rows' deadlines move to or from under the text)
+})
 
 $names = @(Get-ProjectNames)
 $start = $script:cfg.active
@@ -3819,13 +3977,13 @@ if ($SmokeTest) {
     # reader's Invoke opens it, and Back (the header, Esc) goes up one level. Nothing here is switched or pressed
     # (Start with Windows is the real Startup folder's shortcut). The settings file keeps its keys.
     $find = { param($root, [string]$k) foreach ($c in (Get-Controls $root)) { if ((Get-FocusKey $c) -eq $k) { return $c } }; return $null }
-    $activate = { param($el) if ($script:HasA11y) { $el.RaiseActivate() } elseif ($el.Tag -is [scriptblock]) { & $el.Tag } else { Show-View $el.Tag } }
+    $activate = { param($el) if ($script:HasA11y) { $el.RaiseActivate() } elseif ($el.Tag -is [hashtable]) { & $el.Tag.Do $el.Tag.Arg } else { Show-View $el.Tag } }
     $mustHave = [ordered]@{
       general       = @('Dark', 'Light', 'Auto', 'Start with Windows', 'open-keys')
       notifications = @('Daily summary time', 'Send a test notification')
       sync          = @('Set up sync', 'Pairing link', 'Connect', 'Invite link', 'Join')
-      updates       = @('back')
       yourlists     = @('Open the lists folder', 'open-trash')
+      updates       = @('back')
       about         = @('Open the data folder')
     }
     if ((@($mustHave.Keys) -join ',') -ne (@($script:SettingsPages.Keys) -join ',')) { throw 'a Settings page without checks' }
@@ -3873,7 +4031,7 @@ if ($SmokeTest) {
     }
     if ($null -eq $InstallRoot -and (& $find $verBar 'version')) { throw 'the version line links to Updates with nothing to show' }
     Show-View 'about'
-    if (-not (& $hasText $list $ver)) { throw 'About does not say the version' }
+    if (-not (& $hasText $list $script:Release.Version)) { throw 'About does not say the version' }
     if (-not $tray.Text.StartsWith($ver)) { throw "tray tooltip: $($tray.Text)" }
     Show-View 'list'
     if ($verBar.Visibility -ne 'Collapsed') { throw 'the version line shows in the list' }
@@ -3906,6 +4064,83 @@ if ($SmokeTest) {
     Show-View 'list'; Update-VersionDisplay
     if ($null -eq $InstallRoot -and $tray.Text -ne $ver) { throw "tray tooltip after the update: $($tray.Text)" }
     Write-Output 'SETTINGS OK'
+    # Grouped lists (docs/design.md): every view is cards of rows. A card's first row has its rounded top corners and
+    # its last row the bottom ones; between two rows of a card a hairline starts where the lower row's text starts (a
+    # task's notes follow it without one); a Settings row is one line (its texts never wrap: explanations are
+    # footnotes); in the list the deadline sits on the right of the task's line.
+    $cardsIn = {
+      # the view's cards, each a list of @{ Row; Line } (Line: the hairline above the row, or $null)
+      $cards = New-Object System.Collections.ArrayList; $cur = $null; $line = $null
+      foreach ($c in $list.Children) {
+        if ($c -is [System.Windows.Controls.Border] -and $c.Height -eq 1 -and $c.Tag -is [double]) { $line = $c; continue }
+        $part = $c -is [System.Windows.Controls.Border] -and @($GroupBg, $GroupHover, $GroupSel, $GroupPress) -contains $c.Background
+        if (-not $part) { $cur = $null; $line = $null; continue }
+        if (-not $cur -or $c.Margin.Top -gt 0) { $cur = New-Object System.Collections.ArrayList; [void]$cards.Add($cur) }
+        [void]$cur.Add(@{ Row = $c; Line = $line }); $line = $null
+      }
+      return ,$cards
+    }
+    $checkCards = {
+      param([string]$where)
+      $cards = & $cardsIn
+      if (-not $cards.Count) { throw "${where}: no cards" }
+      foreach ($cd in $cards) {
+        for ($k = 0; $k -lt $cd.Count; $k++) {
+          $r = $cd[$k].Row.CornerRadius
+          $top = $(if ($k -eq 0) { $CardRadius } else { 0 }); $bottom = $(if ($k -eq $cd.Count - 1) { $CardRadius } else { 0 })
+          if ($r.TopLeft -ne $top -or $r.TopRight -ne $top -or $r.BottomLeft -ne $bottom -or $r.BottomRight -ne $bottom) { throw "${where}: the corners of row $($k + 1) of $($cd.Count) are $r" }
+          if ($k -eq 0 -and $cd[$k].Line) { throw "${where}: a hairline above a card" }
+        }
+      }
+      return ,$cards
+    }
+    foreach ($v in @('settings') + @($script:SettingsPages.Keys) + @('keys')) {
+      Show-View $v
+      foreach ($cd in (& $checkCards "Settings view '$v'")) {
+        for ($k = 0; $k -lt $cd.Count; $k++) {
+          if ($k -gt 0 -and -not $cd[$k].Line) { throw "Settings view '$v': no hairline between two rows" }
+          if ($k -gt 0 -and @($CardPad, ($CardPad + 28)) -notcontains $cd[$k].Line.Tag) { throw "Settings view '$v': a hairline starts at $($cd[$k].Line.Tag)" }
+          foreach ($t in (Get-Controls $cd[$k].Row)) { if ($t -is [System.Windows.Controls.TextBlock] -and $t.TextWrapping -ne 'NoWrap') { throw "Settings view '$v': '$($t.Text)' can take a second line" } }
+        }
+      }
+    }
+    Show-View 'settings'
+    $homeCards = & $cardsIn
+    $pageCards = @($homeCards | ForEach-Object { (@($_ | ForEach-Object { [System.Windows.Automation.AutomationProperties]::GetAutomationId($_.Row) }) -join ',') })
+    if (($pageCards -join ' | ') -ne 'open-general,open-notifications,open-sync,open-yourlists | open-updates,open-about' -or -not (& $hasText $list 'App')) { throw "Settings is not two cards of pages: $($pageCards -join ' | ')" }
+    $groupedHome = $script:proj
+    Write-TextFileAtomic (Proj-Path 'Grouped check') ("- [ ] G one due:$((Get-Date).ToString('yyyy-MM-dd')) ^gggggg01`n  > a note`n  - [ ] G sub ^gggggg02`n  - [x] G sub done ^gggggg03`n" +
+      "- [ ] G two ^gggggg04`n- [>] G later ^gggggg05`n- [x] G done ^gggggg06`n")
+    Switch-Project 'Grouped check'
+    $script:openState['gggggg01'] = '1'; $script:cfg.showCompleted = '1'; $script:view = 'list'; Render
+    $cards = & $checkCards 'the list'
+    $rowsOf = { param($cd) @($cd | ForEach-Object { if (Is-TaskRow $_.Row) { $_.Row.Tag.Id.Substring(6) } else { 'notes' } }) -join ',' }
+    $shape = @($cards | ForEach-Object { & $rowsOf $_ }) -join ' | '
+    if ($shape -ne '01,notes,02,03,04 | 05 | 06') { throw "the list's cards: $shape" }
+    foreach ($e in $cards[0]) {
+      if (Is-TaskRow $e.Row) {
+        if ($e.Row.Tag.Id -ne 'gggggg01' -and $e.Line.Tag -ne $RowTextX + $e.Row.Tag.Level * $Tokens.Row.indent) { throw "the hairline above '$($e.Row.Tag.Text)' starts at $($e.Line.Tag)" }
+      } elseif ($e.Line) { throw 'a hairline between a task and its notes' }
+    }
+    $meta = $cards[0][0].Row.Child.Children[3]
+    if ([System.Windows.Controls.Grid]::GetColumn($meta) -ne 4 -or -not @($meta.Children | Where-Object { [System.Windows.Automation.AutomationProperties]::GetName($_) -like 'Deadline: Today*' }).Count) { throw 'the deadline is not on the right of the line' }
+    if (-not (& $hasText $list 'Postponed')) { throw 'no Postponed heading' }
+    Set-Sel $cards[0][4].Row.Tag
+    foreach ($e in $cards[0]) {
+      if (-not (Is-TaskRow $e.Row)) { continue }
+      $ok = $(if ($e.Row.Tag.Id -eq 'gggggg04') { $e.Row.Background -eq $GroupSel -and $e.Row.BorderBrush -eq $Accent } else { $e.Row.BorderBrush -eq $e.Row.Background })
+      if (-not $ok) { throw "the selection paints '$($e.Row.Tag.Text)' wrong" }
+    }
+    $doneHead = $null
+    foreach ($c in (Get-Controls $list)) { if ([System.Windows.Automation.AutomationProperties]::GetName($c) -eq 'Completed, 1 task') { $doneHead = $c } }
+    if (-not $doneHead -or ($script:HasA11y -and ($doneHead.Role -ne 'disclosure' -or -not $doneHead.IsExpanded))) { throw 'the Completed heading is not an open disclosure' }
+    & $activate $doneHead
+    if ($script:cfg.showCompleted -ne '0' -or (& $cardsIn).Count -ne 2) { throw 'Completed did not close' }
+    Switch-Project $groupedHome
+    Remove-Item -LiteralPath (Proj-Path 'Grouped check') -Force
+    Render
+    $first = @($script:items | Where-Object { $_.Kind -eq 'task' -and $_.Id -eq $first.Id })[0]   # (the list was loaded again)
+    Write-Output 'GROUPED OK'
     Apply-Theme $(if ($script:themeName -eq 'dark') { 'light' } else { 'dark' })
     [void](New-QrImage 'https://saqme.example.workers.dev/#pair=0123456789abcdefghijklmnopqrstuvwxyzABCDEFG')
     Check-Reminders

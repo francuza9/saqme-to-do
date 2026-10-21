@@ -9,7 +9,9 @@
 #   - the Tab order (WPF's: focusable tab stops in visual order) goes header, tabs, window buttons, list, add box
 # It also opens Settings, each of its pages and Keyboard shortcuts through UI Automation (Invoke, Expand), and checks
 # those too: the pages are a list of buttons, each page has what belongs on it, Back returns, Advanced is a
-# disclosure that says whether it is expanded, and the version line is read out.
+# disclosure that says whether it is expanded, and the version line is read out. The grouped look (cards, hairlines)
+# adds nothing a screen reader walks: each row is one control or one line of text, and what used to be a second
+# line under a setting is in that control's description or in the footnote under its card.
 #   powershell -NoProfile -ExecutionPolicy Bypass -File scripts\dev\uia-check.ps1 [-Out C:\temp\uia]
 param([string]$Out = (Join-Path ([IO.Path]::GetTempPath()) 'saqme-uia'))
 $ErrorActionPreference = 'Stop'
@@ -150,6 +152,9 @@ try {
   Check (@($tabs | Where-Object { $_.State -eq ' [selected]' }).Count -eq 1) 'the current project is the selected tab'
   Check (@($acc | Where-Object { $_.Type -eq 'Button' -and $_.Name -like 'Status: *' }).Count -ge 5) 'status chips are buttons named by their status'
   Check (@($acc | Where-Object { $_.Type -eq 'Edit' -and $_.Name -eq 'Add a task' }).Count -eq 1) 'the new-task box is labelled'
+  $done = @($acc | Where-Object { $_.Type -eq 'Button' -and $_.Name -match '^Completed, \d+ tasks?$' })
+  Check ($done.Count -eq 1 -and $done[0].Patterns -contains 'ExpandCollapse' -and $done[0].State -eq ' [Collapsed]') "the Completed heading is a disclosure that says it is collapsed ('$($done[0].Name)')"
+  Check (@($acc | Where-Object { $_.Type -eq 'Text' -and $_.Name -eq 'Postponed' }).Count -eq 1) 'the Postponed heading is read out'
 
   Set-Content $orderAsk 'x'
   [void](Wait-For { Test-Path $orderFile })
@@ -170,15 +175,18 @@ try {
   [void](& $invoke $settings 'the Settings button')
   $acc = Test-View 'settings view' $win
   $pages = @($acc | Where-Object { $_.Type -eq 'Button' -and $_.El.Current.AutomationId -like 'open-*' } | ForEach-Object { ($_.Name -split ', ')[0] })
-  Check (($pages -join ' | ') -eq 'General | Notifications | Sync & sharing | Updates | Your lists | About') "Settings is a list of its pages ($($pages -join ' | '))"
+  Check (($pages -join ' | ') -eq 'General | Notifications | Sync & sharing | Your lists | Updates | About') "Settings is a list of its pages ($($pages -join ' | '))"
   Check (@($acc | Where-Object { $_.Type -eq 'Button' -and $_.El.Current.AutomationId -eq 'open-sync' -and $_.Name -match '^Sync & sharing, .+' }).Count -eq 1) 'each page row says how it stands (Sync & sharing, ...)'
   Check (@($acc | Where-Object { $_.Type -eq 'Text' -and $_.Name -match '^Saqme To Do \d+\.\d+\.\d+$' }).Count -eq 1) 'the version line is read out'
+  Check (@($acc | Where-Object { $_.Type -eq 'Text' -and $_.Name -eq 'App' }).Count -eq 1) "the second card's heading (App) is read out"
+  $rowHelp = @($acc | Where-Object { $_.Type -eq 'Button' -and $_.El.Current.AutomationId -like 'open-*' -and -not $_.Help })
+  Check ($rowHelp.Count -eq 0) "each page row describes what is on the page (its old second line)$(if ($rowHelp.Count) { ': not ' + (($rowHelp | ForEach-Object { $_.Name }) -join ', ') })"
   Set-Content $orderAsk 'x'; Remove-Item $orderFile -ErrorAction SilentlyContinue
   [void](Wait-For { Test-Path $orderFile }); Start-Sleep -Milliseconds 200
   $order = @(Get-Content $orderFile)
   [void]$report.AppendLine('== Tab order (settings view)'); foreach ($o in $order) { [void]$report.AppendLine("  $o") }
   $iBack = [array]::IndexOf($order, 'Settings - back to the list'); $iClose = [array]::IndexOf($order, ($order | Where-Object { $_ -like 'Close*' } | Select-Object -First 1))
-  $rowOrder = @($order | Where-Object { $_ -match '^(General|Notifications|Sync & sharing|Updates|Your lists|About), ' } | ForEach-Object { ($_ -split ', ')[0] })
+  $rowOrder = @($order | Where-Object { $_ -match '^(General|Notifications|Sync & sharing|Your lists|Updates|About), ' } | ForEach-Object { ($_ -split ', ')[0] })
   Check ($iBack -gt $iClose -and ($rowOrder -join ' | ') -eq ($pages -join ' | ') -and [array]::IndexOf($order, ($order | Where-Object { $_ -like 'General, *' } | Select-Object -First 1)) -gt $iBack) "Tab order: window buttons, then the header (Back), then the pages in order"
 
   if (& $invoke (& $byId 'open-general') 'the General row') {
@@ -188,7 +196,7 @@ try {
     Check (@($acc | Where-Object { $_.Type -eq 'Button' -and $_.Name -eq 'General - back to Settings' }).Count -eq 1) 'the page header is a Back button that names the page'
     if (& $invoke (& $byId 'open-keys') 'the Keyboard shortcuts row') {
       $acc = Test-View 'keyboard shortcuts view' $win
-      Check (@($acc | Where-Object { $_.Name -like 'Move between the tabs*' }).Count -ge 1) 'the shortcuts list explains Tab'
+      Check (@($acc | Where-Object { $_.Name -eq 'Move around the window' }).Count -ge 1 -and @($acc | Where-Object { $_.Name -like 'Tab goes through the tabs*' }).Count -ge 1) 'the shortcuts list explains Tab'
       [void](& $invoke (& $byId 'back') 'Back')
       Check ($null -ne (& $byId 'open-keys')) 'Back from Keyboard shortcuts returns to General'
     }
@@ -220,7 +228,7 @@ try {
   }
   if (& $invoke (& $byId 'open-about') 'the About row') {
     $acc = Test-View 'Settings > About' $win
-    Check (@($acc | Where-Object { $_.Type -eq 'Text' -and $_.Name -match '^Saqme To Do \d+\.\d+\.\d+$' }).Count -ge 2) 'About says the version (and so does the line under it)'
+    Check (@($acc | Where-Object { $_.Type -eq 'Text' -and $_.Name -match '^\d+\.\d+\.\d+$' }).Count -ge 1 -and @($acc | Where-Object { $_.Type -eq 'Text' -and $_.Name -match '^Saqme To Do \d+\.\d+\.\d+$' }).Count -ge 1) 'About says the version (and so does the line under it)'
     [void](& $invoke (& $byId 'back') 'Back')
   }
   [void](& $invoke (& $byId 'open-updates') 'the Updates row')

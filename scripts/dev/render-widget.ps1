@@ -6,11 +6,13 @@
 #   powershell -NoProfile -ExecutionPolicy Bypass -File scripts\dev\render-widget.ps1 -Out C:\temp\shots [-Prefix desktop] [-Project Work] [-View settings] [-Sample dir]
 #     -View      list (default), settings, or any other view of the widget (a Settings page: sync, updates, ...; keys, pair, conflicts, trash)
 #     -Full      the whole view, as tall as its content (Settings scrolls inside the window)
-#     -Busy      Settings at its most crowded: syncing with a conflict, a list shared with this PC, deletions paused, and an
-#                installed copy whose update waits for the Cloudflare sign-in
+#     -Busy      Settings at its most crowded: syncing with a conflict, a list shared with this PC, deletions paused, an
+#                installed copy whose update waits for the Cloudflare sign-in, tasks in Recently deleted, and (-View share)
+#                the current list shared with three people
 #     -Advanced  with the Advanced part of the Settings pages open
+#     -Open      the list as it looks in use: every task with notes open, and Completed shown
 param([Parameter(Mandatory)][string]$Out, [string]$Prefix = 'desktop', [string]$Project = 'Work', [int]$Width = 440, [int]$Height = 660,
-  [string]$View = 'list', [string]$Sample = '', [switch]$Full, [switch]$Busy, [switch]$Advanced)
+  [string]$View = 'list', [string]$Sample = '', [switch]$Full, [switch]$Busy, [switch]$Advanced, [switch]$Open)
 $ErrorActionPreference = 'Stop'
 $root = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
 $tmp = Join-Path ([IO.Path]::GetTempPath()) ('saqme-render-' + [guid]::NewGuid().ToString('N').Substring(0, 6))
@@ -29,7 +31,7 @@ foreach ($f in Get-ChildItem $Sample -Force -File) {
   $text = [regex]::Replace($text, 'due:\{([+-]?\d+)\}', { param($m) 'due:' + (Get-Date).Date.AddDays([int]$m.Groups[1].Value).ToString('yyyy-MM-dd') })
   [IO.File]::WriteAllText((Join-Path $data "lists\$($f.Name)"), $text, $utf8)
 }
-[IO.File]::WriteAllText((Join-Path $data '.widget-settings'), "active=$Project`nwidth=$Width`nheight=$Height`ntheme=dark`n", $utf8)
+[IO.File]::WriteAllText((Join-Path $data '.widget-settings'), "active=$Project`nwidth=$Width`nheight=$Height`ntheme=dark`nshowCompleted=$([int][bool]$Open)`n", $utf8)
 
 # the copy: own instance name, no tray icon, and a render step instead of the message loop
 $w = [IO.File]::ReadAllText((Join-Path $app 'widget.ps1'))
@@ -50,6 +52,13 @@ Save-ShareBindings `$listsDir @(@{ id = 'srender00001'; file = 'Groceries (from 
 [void](New-Item -ItemType Directory -Path (Join-Path `$InstallRoot 'update') -Force)
 Write-TextFileAtomic (Join-Path `$InstallRoot 'update\result.json') (ConvertTo-JsonText @{ ok = `$false; held = `$true; needsLogin = `$true; version = `$nextV; message = 'Sign in to Cloudflare to finish the update.'; next = 'Your lists and sync keep working meanwhile.'; at = 1 })
 `$script:upd.Latest = @{ version = `$nextV }; `$script:upd.CheckedAt = Get-NowMs
+Add-DeletedEntry (Read-Items "- [ ] Old draft of the Q4 roadmap ^drender01``n  - [ ] Outline ^drender02``n  - [ ] Numbers ^drender03``n") '' 'Work'
+Add-DeletedEntry (Read-Items "- [ ] Water the plants ^drender04``n") '' 'Home'
+`$day = [long]86400000; `$now = Get-NowMs
+`$script:shareView = @{ Name = `$script:proj; ProjectId = 'prender02'; Error = ''; Invite = `$null; Access = 'edit'; Alias = ''; Busy = `$false
+  People = @(@{ id = 'p1'; alias = 'Nuca'; access = 'edit'; state = 'joined'; joinedAt = `$now - 3 * `$day; createdAt = `$now - 4 * `$day },
+             @{ id = 'p2'; alias = 'Giorgi'; access = 'view'; state = 'pending'; createdAt = `$now - `$day },
+             @{ id = 'p3'; alias = 'Old link'; access = 'view'; state = 'expired'; createdAt = `$now - 9 * `$day }) }
 [void](Update-SyncIndicator -Force)
 "@
 $render = @"
@@ -58,6 +67,7 @@ try {
 `$w.Width = $Width; `$w.Height = $Height
 $(if ($Busy) { $busyState })
 `$script:advancedOpen = `$$([bool]$Advanced)
+if (`$$([bool]$Open)) { foreach (`$it in `$script:items) { if (`$it.Kind -eq 'task' -and `$it.Notes) { `$script:openState[(Open-Key `$it)] = '1' } } }
 if (-not `$$([bool]$Full)) { `$w.Show() }   # (a window on screen would lay its content out at its own height)
 `$script:view = '$($View.Replace("'", "''"))'
 foreach (`$th in 'dark', 'light') {
