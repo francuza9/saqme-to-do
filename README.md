@@ -53,7 +53,8 @@ Setup installs the app with your lists on this computer; no account is needed. T
 too, open the app's **Settings > Sync** and choose **Set up sync**. It creates your own free sync service in
 your Cloudflare account and uploads your lists (nothing is deleted). The one step it cannot do for you is the
 Cloudflare login: a browser window opens, you sign in (or create a free account) and click **Allow**. Then the
-app shows a QR code for your phone. Running setup again is safe at any time: it updates or repairs the app.
+app shows a QR code for your phone. From then on the app updates itself, your sync service and the phone app
+with it (**Settings > Updates**); running setup again is still safe at any time and repairs the app.
 
 | | Without an account | With sync |
 |---|---|---|
@@ -144,6 +145,13 @@ one). See [docs/file-format.md](docs/file-format.md).
 **Can I share a list with someone?** Yes. They need the app, not a Cloudflare account; you need sync (the list
 stays on your sync service). Each invite works once, for 24 hours; you pick *can edit* or *can view* and can
 change or revoke it later. What they change goes to your service only. [Steps](docs/setup.md#9-sharing-a-list-with-someone).
+
+**How do I update it?** You don't need to do anything: the app checks GitHub for a new release about once a
+day and installs it when it is idle (or now, with **Settings > Updates > Update now**). It checks the download
+against the release's checksum, keeps the version before to go back to, updates your own Worker (its keys
+and data stay) and never touches your lists; the phone app follows by itself. If Cloudflare's sign-in has
+expired, the app asks you to sign in again with one click. An install from before 1.1.0 needs setup run once
+more to get the updater. [Details](docs/setup.md#updating).
 
 **Android?** Yes: the phone app installs from Chrome, push included. It is tuned and tested mostly on iPhone.
 

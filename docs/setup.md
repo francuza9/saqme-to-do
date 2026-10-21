@@ -74,7 +74,7 @@ What setup does on Windows (no administrator rights needed, everything is per us
 
 | Step | Where |
 |---|---|
-| Copies the app (PowerShell scripts, icons, fonts) and runs a self-check | `%LOCALAPPDATA%\Programs\SaqmeToDo` |
+| Copies the app (PowerShell scripts, icons, fonts) and runs a self-check | `%LOCALAPPDATA%\Programs\SaqmeToDo\versions\<version>` (one folder per version, see [Updating](#updating)) |
 | Creates your data folder (lists, settings, sync state) | `%APPDATA%\SaqmeToDo` |
 | Registers the notification identity "Saqme To Do" and allows its banners | `HKCU\Software\Classes\AppUserModelId\Saqme.ToDo` |
 | Registers the `saqme:` link that notifications use to open the app | `HKCU\Software\Classes\saqme` |
@@ -108,7 +108,7 @@ What setup does:
 
 | | Linux | macOS |
 |---|---|---|
-| App files (and Node.js, if it had to download it) | `~/.local/lib/saqme` | `~/Library/Application Support/Saqme To Do/app` |
+| App files (one folder per version in `versions/`, and Node.js if it had to download it) | `~/.local/lib/saqme` | `~/Library/Application Support/Saqme To Do/app` |
 | Your lists and settings | `~/.local/share/saqme` (`$XDG_DATA_HOME`) | `~/Library/Application Support/Saqme To Do` |
 | Command | `~/.local/bin/saqme` | `~/.local/bin/saqme` |
 | Opening it | menu entry *Saqme To Do* | *Saqme To Do* in `~/Applications` (Launchpad, Spotlight) |
@@ -122,7 +122,8 @@ as a normal tab). Set `SAQME_BROWSER` to the browser command you prefer.
 **Commands:** `saqme open` (the window), `saqme status` (where the lists are, sync state), `saqme stop`,
 `saqme serve` (run in the foreground), `saqme allow-deletes` (confirm a paused mass delete),
 `saqme pair-phone` (the QR code for your phone, once sync is set up), `saqme connect '<pairing link>'`
-(sync with a Worker another device already uses).
+(sync with a Worker another device already uses), `saqme update` (install the newest release now, the same as
+**Update now** in the window), `saqme version`.
 
 | Option | What it does |
 |---|---|
@@ -168,10 +169,10 @@ Cloudflare account and one sign-in in the browser.
 line, and also updates the cloud part of an existing setup.
 
 Sync runs in your own Cloudflare account on the free plan. On Windows, setup needs **Node.js 22 or newer**
-for this part only (the Cloudflare tools refuse older versions); if it is missing, setup offers to install
-the LTS version with `winget` (answer **Y**; winget installs it for all users, so Windows may ask for
-administrator approval). Without winget, install it from <https://nodejs.org> and run `setup.cmd -CloudOnly`. On Linux and macOS the Node.js
-from [section 2](#2-install-on-linux-or-macos) is used.
+for this part only (the Cloudflare tools refuse older versions). It uses the one you have; if there is none, it
+downloads the official Node.js 24 just for Saqme (checksum-verified, about 30 MB, into the app's folder, no
+administrator rights; removed again with the app). On Linux and macOS the Node.js from
+[section 2](#2-install-on-linux-or-macos) is used. The app's updater uses the same one to update your Worker.
 
 Then setup starts the Cloudflare login — **the one step you have to do yourself**:
 
@@ -292,9 +293,9 @@ uses them from the invite's own page instead (*Use it in this browser*), at thei
 
 A shared list stays on **your** sync service; the other person syncs that one list from there, with a key of
 their own that reaches nothing else. They need no Cloudflare account, and not even Saqme: the list works in
-their browser too. (After updating an existing install, run setup's cloud part once, `-Cloud` / `--cloud`: it
-adds the database tables for shares and deploys the Worker that handles them. The other person does the same
-if they have sync of their own: their phone reaches your list through their Worker.)
+their browser too. (Sharing needs a Worker from 1.1.0 on: the app's updater brings yours there by itself,
+database included. If the other person has sync of their own, theirs needs it as well: their phone reaches
+your list through their Worker.)
 
 **You (the owner):**
 
@@ -348,10 +349,32 @@ The app uses normal Windows notifications. If none appear (try **Settings > Send
 
 ## Updating
 
-Run setup again (`setup.cmd`, `scripts/setup.sh`, or the one-liners). It replaces the app files, keeps your
-data and keeps sync as it is. To update the Worker as well, add `-Cloud` (Windows) or `--cloud` (Linux, macOS);
-it reuses the existing setup (no new login unless Cloudflare's session expired). The phone app updates itself
-the next time it is opened with a connection.
+**No commands any more.** The app updates itself, your Worker and the phone app with it:
+
+- It checks for a new release on GitHub when it starts and about once a day. **Settings > Updates** says
+  *Update available* with **Update now**. With **Install updates automatically** (on unless you switch it off)
+  it installs it by itself while the app is idle: the window hidden, or nobody at the keyboard for ten
+  minutes, and never while you are typing in it. Saqme restarts and is back within a minute.
+- It downloads the release's zip from GitHub, checks it against the release's manifest (size and SHA-256), puts
+  the new version in a folder of its own next to the one that runs (`versions\<version>`), checks that it
+  starts, and only then switches over. The version before stays, to go back to: if the new one does not come
+  up, Saqme goes back to it by itself and says so in Settings > Updates. Your lists and data are never touched.
+- **Your Worker** (if you set up sync) is updated first, with the code and phone app files of the new release;
+  its keys, database and pairings stay as they are. This uses the Cloudflare sign-in setup made, and the
+  Node.js and wrangler setup installed (missing ones are installed again, quietly). If Cloudflare's sign-in
+  expired, Settings > Updates says **Sign in to Cloudflare to finish the update** with a button that opens
+  the browser; the update finishes by itself afterwards. If the Worker cannot be updated, the apps still
+  update when they work with the Worker that runs, and the Worker is tried again later; when they need the
+  newer Worker, the whole update waits (and says so), so sync never breaks halfway.
+- **The database** updates itself: the new Worker applies what it needs on its first request.
+- **The phone app** loads the new version the next time it is opened (or comes back to the foreground) with a
+  connection, and says *Saqme was updated to …*.
+- Linux and macOS: `saqme update` does the same from a terminal.
+
+Installs from before 1.1.0 have no updater yet: **run setup once more** (the one-liner, `setup.cmd` or
+`scripts/setup.sh`, as when you installed it) to get it; it keeps your lists, settings and sync. Running setup
+again is still safe at any time, and a copy of the repository (`setup.cmd` from a clone, or `local/saqme.mjs`
+run from it) does not update itself: `git pull` and run setup.
 
 ## Troubleshooting
 
@@ -373,8 +396,12 @@ the next time it is opened with a connection.
 | Joining says "Open the invite link instead" | This copy of the app has no sync of its own and the list is on another address. Open the invite link itself and choose **Use it in this browser**, or pair the app first. |
 | A shared list says "Not synced while this app is not paired" | The phone was unpaired; its shared lists wait (with your changes) and go on once it is paired with the same sync service again. |
 | A shared list on a phone says the owner's Worker "could not be reached" | Your own sync service talks to theirs for your phone: check that their address still works in a browser. If it says "redirect" or "too much data", it is not a Saqme sync service. |
-| Sync fails right after updating the app | The Worker was updated without its new database table: run setup's cloud part again (`-Cloud` / `--cloud`), which applies it. |
-| Logs | Windows: `%APPDATA%\SaqmeToDo\sync\sync.log`. Linux/macOS: `local/saqme.log` in the data folder. |
+| Settings > Updates: "Sign in to Cloudflare to finish the update" | Cloudflare's sign-in from setup expired. Click **Sign in**, allow it in the browser; the update finishes by itself. |
+| Settings > Updates: "The update to … is waiting" | The new apps need your Worker updated first, and that did not work (the reason is shown). Nothing changed; **Try again**, or wait: it is tried again later. |
+| Settings > Updates: "did not start, so Saqme went back" | The new version did not come up on this computer; the one before runs again. Please report it with the log (below). |
+| "Your sync service could not update its database" | The Worker's own database update failed; it tries again with the next request. If it keeps saying so, the reason is in the message; please report it. |
+| Sharing says the sync service "runs an older version" | Your Worker is not updated yet: Settings > Updates on the computer (it updates the Worker too). |
+| Logs | Windows: `%APPDATA%\SaqmeToDo\sync\sync.log`, updates in `%LOCALAPPDATA%\Programs\SaqmeToDo\update\result.json`. Linux/macOS: `local/saqme.log` in the data folder. |
 
 Re-running setup is always safe: finished steps are skipped and existing keys, database and lists are reused.
 

@@ -22,7 +22,10 @@
 | `desktop/rules.ps1` | The widget's deadline and reminder rules (parsing "fri 14:00", labels, pill colours, which notifications are due). |
 | `desktop/sync-worker.ps1` | The background sync loop, run in its own PowerShell runspace. |
 | `desktop/qr.ps1` | QR encoder for *Pair phone* (byte-identical to `worker/public/js/qr.js`). |
+| `desktop/update-core.ps1`, `update.ps1` | The Windows updater: version rules, the release manifest, checked downloads (`update-core.ps1`), and the run that hands a verified release to its own `setup.ps1 -Update` (`update.ps1`). See [Updates](#updates). |
 | `worker/src/index.js` | Worker entry: routing, bearer auth, cron handler. |
+| `worker/src/version.js` | The release (`VERSION`, read from `worker/package.json`) and the API version apps check ([sync.md](sync.md#versions-and-updates)). |
+| `worker/src/schema.js`, `migrations.js` | The Worker updates its own database on the first request after a deploy (the migrations of `worker/migrations/`, recorded in wrangler's `d1_migrations`). |
 | `worker/src/pairing.js` | One-time pairing codes for phones (the app on an iPhone's Home Screen). |
 | `worker/src/shares.js` | Shared lists: invites, claims, the people a list is shared with, share keys, move codes, a share's browser reminders ([sync.md](sync.md#shared-lists)). The scope a share key gets is in `sync.js`. |
 | `worker/src/remotes.js` | Lists others share with you, kept by your own Worker for your phone apps: the relay to their owners' Workers and the reading of their deadlines for your reminders ([sync.md](sync.md#the-relay-lists-shared-with-a-phone-that-has-its-own-sync)). |
@@ -30,11 +33,12 @@
 | `worker/src/sync.js` | D1 access for `/api/sync`: optimistic batches, paging. |
 | `worker/src/push.js`, `reminders.js` | Web Push (VAPID + RFC 8291 encryption, WebCrypto only) and the reminder rules. |
 | `worker/public/` | The PWA: `index.html`, `js/app.js` (UI), `js/store.js` (data + sync, one session per server), `js/model.js`, `js/dates.js`, `js/keys.js`, `js/markdown.js` (list format, shared with the Linux/macOS app), `js/zip.js` (export / import), `sw.js`; `join.html` + `js/join.js`, the page a shared list's invite link opens. |
-| `local/` | The Linux/macOS app (Node.js 22.13+, no dependencies): `saqme.mjs` (commands, the app process), `server.mjs` (local server), `d1.mjs` (D1 API on `node:sqlite`), `engine.mjs` (lists folder engine, a port of `sync-core.ps1`), `shares.mjs` (lists shared with this computer), `desktop.mjs` (notifications, app window), `paths.mjs`, `icns.mjs`. |
-| `worker/migrations/` | D1 schema. |
-| `scripts/` | `setup.ps1` (Windows), `setup.sh` (Linux, macOS, WSL), `cloud-setup.mjs` (provisioning), dev helpers. |
+| `local/` | The Linux/macOS app (Node.js 22.13+, no dependencies): `saqme.mjs` (commands, the app process), `server.mjs` (local server), `d1.mjs` (D1 API on `node:sqlite`), `engine.mjs` (lists folder engine, a port of `sync-core.ps1`), `shares.mjs` (lists shared with this computer), `desktop.mjs` (notifications, app window), `update.mjs` (the updater's rules, downloads and install layout; also run by `setup.sh`), `updater.mjs` (the app's side: checks, *Update now*, idle updates), `paths.mjs`, `icns.mjs`. |
+| `worker/migrations/` | D1 schema (the Worker applies it itself, from `worker/src/migrations.js`). |
+| `scripts/` | `setup.ps1` (Windows), `setup.sh` (Linux, macOS, WSL), `cloud-setup.mjs` (provisioning; `--update` deploys code only, keeping the keys), `build-release.mjs` (the release assets), dev helpers. |
 | `shared/fixtures/` | Input → expected output for every rule that exists in both languages; see below. |
 | `.github/workflows/pages.yml` | Publishes `worker/public` as a static site (GitHub Pages) for using the phone app without a Cloudflare account. |
+| `.github/workflows/release.yml` | On a `vX.Y.Z` tag: tests, builds the release zip and its manifest, publishes the GitHub Release the updaters read ([CONTRIBUTING.md](../CONTRIBUTING.md#how-to-ship-an-update)). |
 
 ## Desktop: threads and files
 
@@ -92,10 +96,11 @@ device id), `sync\state.json` (sync engine state), `sync\sync.log`, `cloud.json`
   Cloudflare tools on first use) from the local server and streams its output to the window; it writes
   `sync/config.json` when it succeeds and the cloud engine starts. On Windows the widget runs
   `setup.ps1 -FromApp` in a console window of its own and reads the result file it leaves.
-- **Process and start:** `setup.sh` installs the files to `~/.local/lib/saqme` (macOS: `~/Library/Application
-  Support/Saqme To Do/app`), a launcher `~/.local/bin/saqme`, a menu entry or `~/Applications/Saqme To
-  Do.app`, and starts `saqme serve` at login (systemd user service, desktop autostart entry, or LaunchAgent).
-  `saqme open` starts it if needed and opens the window.
+- **Process and start:** `setup.sh` installs the files to `~/.local/lib/saqme/versions/<version>` (macOS:
+  `~/Library/Application Support/Saqme To Do/app/versions/<version>`), a launcher `~/.local/bin/saqme` that runs
+  the version `current` names, a menu entry or `~/Applications/Saqme To Do.app`, and starts `saqme serve` at
+  login (systemd user service, desktop autostart entry, or LaunchAgent). `saqme open` starts it if needed and
+  opens the window.
 - **Runtime:** Node.js 22.13+ (for `node:sqlite`). Setup uses an installed one or downloads the official
   Node.js 24 build into the app folder (glibc 2.28+, macOS 13.5+). No compiled code of our own and no npm
   dependencies at run time.
@@ -140,6 +145,43 @@ device id), `sync\state.json` (sync engine state), `sync\sync.log`, `cloud.json`
   sends Web Push; then the same for each share's browser subscriptions, in their time zone, for that list
   only. Subscriptions the push service reports as gone are removed.
 
+- **Its own database updates:** each request and cron run first calls `ensureSchema` (`worker/src/schema.js`):
+  one read of `meta.schema_version`, remembered for the isolate's life; only after a deploy with a new migration
+  does it apply that one ([sync.md](sync.md#versions-and-updates)).
+
+## Updates
+
+The apps update themselves from GitHub Releases ([setup.md](setup.md#updating) for what users see,
+[CONTRIBUTING.md](../CONTRIBUTING.md#how-to-ship-an-update) for publishing one).
+
+```
+ GitHub Release vX.Y.Z: saqme-X.Y.Z.zip, saqme-release.json { version, api, minWorkerApi, asset { name, size, sha256 } }
+      │ the app: start + about once a day (fixed URLs on github.com; the manifest only names the version)
+      ▼
+ download -> size + SHA-256 = manifest? -> unpack -> the NEW release's installer, outside the app's process:
+   copy to versions/X.Y.Z (next to the one that runs) -> its self-check -> update the user's Worker (code and
+   phone app, keys stay) -> decision (shared/fixtures/update.json) -> switch `current` (one atomic replace)
+   -> restart the app -> is it up? else back to the version before -> remove versions older than `previous`
+```
+
+| | Windows | Linux, macOS |
+|---|---|---|
+| Install folder | `%LOCALAPPDATA%\Programs\SaqmeToDo` | `~/.local/lib/saqme`, macOS `…/Saqme To Do/app` |
+| One folder per version | `versions\X.Y.Z\` (the widget's files, `release.json`) | `versions/X.Y.Z/` (`local/`, `worker/`, `scripts/`) |
+| Which one runs | `current.txt`, `previous.txt`; `start-widget.vbs` next to them reads it | `current`, `previous`; the launcher `~/.local/bin/saqme` reads it |
+| The Worker is deployed from | `cloud\` (wrangler's `node_modules` stay there) | `cloud/` |
+| Node.js for the Worker | the one installed, or `node\` (setup downloads it) | the one setup found, or `node/` |
+| Checks and *Update now* | `widget.ps1` (Settings > Updates), a background runspace | `local/updater.mjs` in `saqme serve` |
+| Installs it | `desktop\update.ps1` -> the release's `scripts\setup.ps1 -Update` | the release's `local/update.mjs apply` (via `systemd-run --user` under systemd, else detached) |
+| What it says | `update\status.json`, `update\result.json` | the same, in `update/` |
+
+Lists and the data folder are never part of it. The release has no signature of its own: it is checked
+against the SHA-256 in its manifest, both come over HTTPS from the repository's GitHub Releases at addresses the
+app builds itself, and the new version must pass its self-check before anything points at it. A signing key
+kept in the repository's Actions secrets would add nothing (whoever can publish a release can use it), and one
+kept off GitHub would make every release a manual step; tag protection on `v*` (CONTRIBUTING.md) guards who can
+publish.
+
 ## Rules that exist twice
 
 The Windows app is PowerShell and everything else is JavaScript, so some rules are written twice. Each
@@ -158,6 +200,7 @@ test suites load: `worker/test/node/shared-fixtures.test.js` (Vitest) and
 | Links: pairing links, invite links, a sync server's short name ("Groceries (from nuca)") | `sync-core.ps1` `Get-PairingLink`, `Get-InviteLink`, `Get-ServerLabel` | `public/js/pairing.js` `parsePairingLink`, `parseInviteLink`, `serverLabel` | `text.json` |
 | The lists-folder engine: files → changes, server rows → file plans | `sync-core.ps1` `Add-LocalDiff`, `Get-RemotePlan`, `Invoke-PlanOps` | `local/engine.mjs` (a port) | `engine.json`; the end-to-end test also runs both engines against one Worker |
 | QR codes for pairing | `desktop/qr.ps1` | `public/js/qr.js` | `qr.test.js` checks that both build the same matrix (when `powershell.exe` is there) |
+| Updates: version order, the release manifest, whether the apps may switch while the Worker is behind | `update-core.ps1` `Compare-SaqmeVersion`, `Test-ReleaseManifest`, `Get-UpdateDecision` | `local/update.mjs` `compareVersions`, `checkManifest`, `updateDecision` | `update.json` |
 | Colours, type, spacing | `desktop/tokens.ps1` | `public/css/tokens.css` | both generated from `design/tokens.json`; `tokens.test.js` fails if they are stale or a colour is written anywhere else |
 
 Decisions the fixtures pin down, where the two languages behave differently by default:

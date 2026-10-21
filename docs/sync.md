@@ -396,6 +396,52 @@ move, own sync on and off, two owners and one's own list shared out at once), `w
 (engine and app, the same combinations) and the shared-list cases in `desktop/tests/sync-core.tests.ps1`. A
 checklist for trying it by hand with a second person: [testing-shared-lists.md](testing-shared-lists.md).
 
+## Versions and updates
+
+The apps update themselves and the user's Worker ([setup.md, "Updating"](setup.md#updating)), one device at a
+time, so for a while a newer Worker serves older apps, or the other way round. Both must keep syncing.
+
+**API version.** `worker/src/version.js` has the release (`VERSION`, from `worker/package.json`, the one place
+it is written) and `API_VERSION`, a whole number that goes up when the Worker learns something apps rely on:
+
+| API | Worker | What came with it |
+|---|---|---|
+| 1 | before 1.1.0 (it sends no `api`) | sync, pairing codes, reminders |
+| 2 | 1.1.0 | shared lists (`/api/shares/*`, `/api/join/*`) |
+| 3 | 1.1.0 | the relay for lists shared with a phone that has sync of its own (`/api/remotes/*`) |
+
+Every `/api/health`, `/api/config` and `/api/sync` answer carries `version` and `api` (the local server of the
+Linux/macOS app says the same about itself). An answer without `api` comes from a Worker before 1.1.0: API 1.
+
+- **Older Worker, newer app:** the app keeps syncing (nothing in `/api/sync` changed shape). A feature the
+  Worker does not have yet says so in plain words instead of failing with an error: "Your sync service runs an
+  older version… It is updated together with the app on your computer" (the phone app's `OLDER_SERVER`, the
+  Windows app's Share view, `SHARING_API = 2`).
+- **Newer Worker, older app:** additions are new fields and new routes only; an app ignores fields it does not
+  know. Nothing a Worker answers is ever renamed or removed without an API version that says so.
+- **The updater's rule** (`shared/fixtures/update.json`, the same in `local/update.mjs` and
+  `desktop/update-core.ps1`): each release's manifest says the oldest Worker API its apps need
+  (`minWorkerApi`, from `MIN_WORKER_API`). The Worker is updated first; if that worked (or there is no Worker),
+  the apps switch. If it did not (signed out of Cloudflare, an error), the apps still switch when the Worker that
+  runs has at least `minWorkerApi` (the Worker is tried again later), and otherwise the whole update waits.
+  So sync never runs with apps that need a Worker it does not have.
+
+**The database updates itself.** There is no `wrangler d1 migrations apply` in an update: the Worker carries
+its migrations (`worker/src/migrations.js`, the same SQL as `worker/migrations/*.sql`, checked by a test) and
+applies what is missing on the first request or cron run after a deploy (`worker/src/schema.js`):
+
+- It reads `meta.schema_version`; when that is current (the usual case) nothing else happens, and the answer is
+  kept in memory for the life of the isolate.
+- Otherwise it looks at wrangler's own record, the `d1_migrations` table, and applies each migration that is
+  not in it as **one batch whose first statement records it there**. Two first requests at the same moment
+  both try; the second one's record insert hits the unique name and D1 rolls its whole batch back, so a
+  migration runs exactly once. A database that wrangler migrated already (setup before 1.1.0) has those records
+  and gets only what is new; one migrated by hand without records is recognised by its tables and columns.
+- A migration that fails rolls back completely, and the request answers `503` with `code: "schema"` and the
+  reason ("Your sync service could not update its database…"); the next request tries again.
+
+New installs still create the database the same way; the Worker fills it on its first request.
+
 ## Guarantees and limits
 
 - A change saved on a device is never dropped by sync: it stays in the outbox until the server has it, and

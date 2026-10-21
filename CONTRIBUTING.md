@@ -12,10 +12,11 @@ bigger changes.
   to the sync engine's rules belongs in both (the end-to-end test runs them side by side).
 - `worker/` — the Cloudflare Worker (`src/`) and the phone app it serves (`public/`), plain ES modules, no
   build step.
-- `scripts/` — setup (`setup.ps1`, `setup.sh`, `cloud-setup.mjs`) and dev helpers (`scripts/dev/`).
+- `scripts/` — setup (`setup.ps1`, `setup.sh`, `cloud-setup.mjs`), the release build (`build-release.mjs`)
+  and dev helpers (`scripts/dev/`).
 - `shared/fixtures/` — input and expected output for every rule that exists both in PowerShell and in
   JavaScript (deadline parsing, reminders, the list format, order keys, value rules, the lists-folder
-  engine). Both test suites run them; a rule changed on one side only fails the other side's suite. See
+  engine, the updater's version and manifest rules). Both test suites run them; a rule changed on one side only fails the other side's suite. See
   [docs/architecture.md](docs/architecture.md#rules-that-exist-twice).
 - `docs/` — user and design docs. If you change behaviour, update the matching page
   (especially [docs/sync.md](docs/sync.md) for anything that touches merging).
@@ -25,6 +26,52 @@ bigger changes.
   `app.css`, the widget or the browser theme colours use a colour that is not from the tokens.
 - `worker/public/fonts/` — FiraGO (SIL OFL 1.1), used by the phone app and loaded by the desktop app from
   the same files. `scripts/dev/subset-fonts.mjs` rebuilds the subsets.
+
+## How to ship an update
+
+Installed apps update themselves from this repository's GitHub Releases ([docs/setup.md](docs/setup.md#updating),
+[docs/architecture.md](docs/architecture.md#updates)); a release is a tag, the workflow does the rest.
+
+1. **The version** is written in one place, `version` in `worker/package.json` (the Worker, both apps, setup
+   and the release read it from there; `worker/test/node/version.test.js` fails if it shows up anywhere else):
+
+   ```bash
+   cd worker && npm version 1.2.0 --no-git-tag-version   # package.json and package-lock.json together
+   ```
+
+2. **The notes:** a `## 1.2.0` section in `CHANGELOG.md` (rename `## Unreleased`). Its text becomes the
+   release's description.
+3. **Compatibility.** If the Worker gained something the apps now rely on, raise `API_VERSION` in
+   `worker/src/version.js` and say what it is there and in [docs/sync.md](docs/sync.md#versions-and-updates).
+   If the new apps cannot work with an older Worker at all, raise `MIN_WORKER_API` to that API: the updater
+   then holds a computer's update until its Worker is updated (avoid it when you can; apps that say "your sync
+   service is not updated yet" for one feature are better). A new database change goes in
+   `worker/migrations/NNNN_name.sql` **and** `worker/src/migrations.js` (a test compares them); it must work on
+   a database that already has every earlier migration, as the Worker applies it on its own.
+4. **Commit, tag, push:**
+
+   ```bash
+   git commit -am "Release 1.2.0"
+   git tag v1.2.0
+   git push origin main v1.2.0
+   ```
+
+`.github/workflows/release.yml` then checks that the tag is the version in `worker/package.json`, runs the
+tests, builds `saqme-1.2.0.zip`, its manifest `saqme-release.json` (version, API, `minWorkerApi`, size and
+SHA-256 of the zip) and `SHA256SUMS` with `scripts/build-release.mjs`, and publishes the release with them as
+*latest*. Apps see it within a day (on start, then daily). `node scripts/build-release.mjs --out /tmp/rel`
+builds the same files locally to look at.
+
+Once per repository: **Settings > Rules > Rulesets**, a tag ruleset for `v*` that restricts creation, update
+and deletion to you (and requires the tests). Whoever can push such a tag ships code to every install: the
+updater checks the download against the release's checksum and only takes releases from this repository, but
+it trusts what this repository publishes. Releases are not signed with a key of their own, on purpose: a key
+in the Actions secrets protects nothing a tag rule does not, and one kept off GitHub would make every release
+a manual step.
+
+To try an update before publishing it: Windows, `scripts\dev\test-setup.ps1` installs, updates (from a release
+it builds), refuses a bad checksum and rolls back a version that does not start, in a sandbox; Linux/macOS,
+`worker/test/node/update.test.js` and `scripts/dev/test-setup-linux.sh`.
 
 ## Publishing the phone app
 
