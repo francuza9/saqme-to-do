@@ -195,8 +195,10 @@ export function readLocalLists(listsDir, settleMs = 1500, view = null) {
     try { lw = statSync(path).mtimeMs; } catch { /* vanished */ }
     f.mtime = Math.floor(lw);
     f.text = readText(path);
+    // whole ms on both sides: mtimeMs has a fraction and Date.now() has not, so a list written earlier in this
+    // very millisecond would otherwise look written in the future (a clock ahead, which is never busy)
     if (f.text == null || f.text.includes('\u0000')) f.status = 'error';
-    else if (now - lw >= 0 && now - lw < settleMs) f.status = 'busy';
+    else if (now - f.mtime >= 0 && now - f.mtime < settleMs) f.status = 'busy';
     else {
       f.items = parseItems(f.text);
       for (const it of f.items) {

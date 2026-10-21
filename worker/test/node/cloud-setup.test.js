@@ -20,8 +20,12 @@ function setupDirs() {
 }
 function runSetup(d, extra = [], fakeInit) {
   if (fakeInit) writeFileSync(d.fakeState, JSON.stringify({ loggedIn: false, dbs: [], deploys: [], subdomain: true, calls: [], ...fakeInit }));
+  // setup as run on someone's own computer: a CI=true from the test runner would reach the wrangler setup runs
+  // interactively, and wrangler (the fake too) never asks anything under CI
+  const env = { ...process.env, SAQME_WRANGLER_JS: fake, FAKE_WRANGLER_STATE: d.fakeState, SAQME_VERIFY_ATTEMPTS: '1', NO_COLOR: '1' };
+  delete env.CI;
   const r = spawnSync(process.execPath, [script, '--state', d.state, '--desktop-config', d.desktop, '--worker-dir', d.worker, '--skip-install', '--yes', ...extra], {
-    encoding: 'utf8', env: { ...process.env, SAQME_WRANGLER_JS: fake, FAKE_WRANGLER_STATE: d.fakeState, SAQME_VERIFY_ATTEMPTS: '1', NO_COLOR: '1' },
+    encoding: 'utf8', env,
   });
   return { ...r, fakeState: JSON.parse(readFileSync(d.fakeState, 'utf8')) };
 }

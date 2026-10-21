@@ -1,11 +1,11 @@
 // The Linux/macOS app's lists-folder engine (local/engine.mjs, a port of desktop/sync-core.ps1) against
 // the Worker's own sync code running on node:sqlite (local/d1.mjs), the way the app runs it.
-import { describe, it, expect, afterEach } from 'vitest';
+import { describe, it, expect, afterEach, vi } from 'vitest';
 import { copyFileSync, mkdtempSync, mkdirSync, readFileSync, writeFileSync, rmSync, readdirSync, existsSync, renameSync, unlinkSync, utimesSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { D1 } from '../../../local/d1.mjs';
-import { newState, syncCycle, applyPlanToFolder, rekeyMap } from '../../../local/engine.mjs';
+import { newState, syncCycle, applyPlanToFolder, rekeyMap, readLocalLists } from '../../../local/engine.mjs';
 import { localTransport } from '../../../local/saqme.mjs';
 import { handleSync } from '../../src/sync.js';
 
@@ -191,6 +191,19 @@ describe('lists folder <-> local store (local/engine.mjs)', () => {
     const p = phone(s);
     await p.sync();
     expect(p.liveTexts('Work')).toEqual(['Keep me']);
+  });
+
+  it('a list written earlier in the current millisecond is busy too (mtimes have sub-ms precision, Date.now() has not)', () => {
+    const f = folder();
+    f.write('Work', '- [ ] Keep me\n');
+    const now = Date.now();
+    utimesSync(f.path('Work'), (now + 0.5) / 1000, (now + 0.5) / 1000);   // written 0.5 ms into this millisecond (fine-grained mtimes)
+    vi.spyOn(Date, 'now').mockReturnValue(now);
+    try {
+      expect(readLocalLists(f.lists, 60_000).files.Work.status).toBe('busy');
+    } finally {
+      vi.restoreAllMocks();
+    }
   });
 
   it('two engines on one folder (this computer + the cloud) carry edits both ways and converge', async () => {
