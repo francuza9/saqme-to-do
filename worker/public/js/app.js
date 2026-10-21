@@ -1877,6 +1877,11 @@ function listsPage() {
   const l = ui.local;
   return [
     store.saveError ? saveWarning() : null,
+    l ? card(
+      actionRow('Copy instructions for your AI', () => aiInstructions(false), { help: 'Where your lists are and how to edit them, to paste into Claude, ChatGPT, Cursor…' }),
+      actionRow('Save them as a file…', () => aiInstructions(true), { name: 'Save the instructions for your AI as a file', help: 'SAQME.md, to add to an assistant’s instructions, a Claude Project or a skill' }),
+    ) : null,
+    l ? foot('Your lists are plain markdown files, so an AI assistant that can open files can read and manage them. These instructions tell it where they are, the format and what it must not do.') : null,
     card(
       l ? actionRow('Copy the lists folder path', () => copyText(l.lists, 'Folder path copied'), { help: l.lists }) : null,
       actionRow('Export lists', exportLists, { help: 'Markdown files in a zip, the same format as the desktop app' }),
@@ -1886,6 +1891,20 @@ function listsPage() {
     foot(l ? `Plain markdown files, one per list, in ${l.lists}: this window, AI assistants and any editor can change them. Export saves them in a zip; Import adds lists from such files (tasks already here are skipped).`
       : 'Export saves your lists as markdown files in a zip, the same format as the desktop app. Import takes such files or a zip of them; tasks already here are skipped.'),
   ];
+}
+
+/** "Use with AI": the instructions the local app wrote for this lists folder (local/ai-prompt.mjs), copied or saved as SAQME.md. */
+async function aiInstructions(save) {
+  try {
+    const { text } = await api('local/ai-prompt');
+    if (!save) { await navigator.clipboard.writeText(text); toast('Instructions copied. Paste them into your AI assistant.'); return; }
+    const a = h('a', { href: URL.createObjectURL(new Blob([text], { type: 'text/markdown' })), download: 'SAQME.md' });
+    document.body.append(a);
+    a.click();
+    a.remove();
+    setTimeout(() => URL.revokeObjectURL(a.href), 60_000);
+    toast('Saved SAQME.md');
+  } catch (e) { toast(`Could not ${save ? 'save' : 'copy'} the instructions: ${e.message}`); }
 }
 
 function aboutPage() {

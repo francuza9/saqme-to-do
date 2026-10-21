@@ -7,6 +7,7 @@
 //   saqme stop             stop the running app
 //   saqme allow-deletes    confirm a paused mass delete in the lists folder
 //   saqme restore-deletes  undo it instead: the vanished tasks go back into their lists
+//   saqme ai-prompt        print the instructions that let an AI assistant manage your lists (Settings > Your lists)
 //   saqme pair-phone       the QR code and link that connect your phone (once cloud sync is set up)
 //   saqme connect LINK     sync with the cloud using a pairing link from a device that already syncs
 //   saqme join LINK        join a list someone shares with you, from their invite link (.../join#code=...)
@@ -25,7 +26,7 @@ import { spawn, spawnSync } from 'node:child_process';
 import { appendFileSync, chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, statSync, unlinkSync, watch, writeFileSync } from 'node:fs';
 import { randomBytes } from 'node:crypto';
 import { tmpdir } from 'node:os';
-import { delimiter, dirname, join } from 'node:path';
+import { delimiter, dirname, join, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { D1 } from './d1.mjs';
 import { startServer } from './server.mjs';
@@ -33,6 +34,7 @@ import { notify, openWindow } from './desktop.mjs';
 import { APP_DIR, DEFAULT_PORT, appPaths, cloudSetupStatePath, dataPaths, defaultDataDir } from './paths.mjs';
 import { applyPlanToFolder, openConflicts, readState, saveState, syncCycle } from './engine.mjs';
 import { Shares } from './shares.mjs';
+import { aiPrompt } from './ai-prompt.mjs';
 import { handleSync, HttpError } from '../worker/src/sync.js';
 import { computeReminders, localClock } from '../worker/src/reminders.js';
 import { parseInviteLink, parsePairingLink, serverLabel } from '../worker/public/js/pairing.js';
@@ -502,6 +504,7 @@ export async function startApp({ dataDir = defaultDataDir(), port, interval = 10
   const srv = await startServer({
     port: port ?? portSetting(p), token, d1, publicDir: appPaths.public, version: VERSION, info, updates: updateRoutes, workerUpdate,
     onSync: () => { files.wake(); updater?.touch(); },
+    aiPrompt: () => aiPrompt(resolve(p.lists)),
     onAllowDeletes: () => {
       for (const l of [files, cloud, ...[...shareLoops.values()].map((s) => s.loop)]) { l.allowMassDelete = true; l.restoreHeld = false; l.wake(); }
     },
@@ -783,6 +786,7 @@ if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
     stop: () => cmdSimple(opts, '/api/local/stop', 'Stopped.'),
     'allow-deletes': () => cmdSimple(opts, '/api/local/allow-deletes', 'Confirmed: the vanished tasks will be deleted everywhere.'),
     'restore-deletes': () => cmdSimple(opts, '/api/local/restore-deletes', 'The vanished tasks will be put back into their lists.'),
+    'ai-prompt': async () => { process.stdout.write(aiPrompt(resolve(dataPaths(opts.data).lists))); },
     'pair-phone': () => cmdPairPhone(opts),
     connect: () => cmdConnect(opts),
     join: () => cmdJoin(opts),
@@ -793,7 +797,7 @@ if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
   };
   const run = commands[opts.cmd];
   if (!run) {
-    console.log(readFileSync(fileURLToPath(import.meta.url), 'utf8').split('\n').slice(1, 16).map((l) => l.replace(/^\/\/ ?/, '')).join('\n'));
+    console.log(readFileSync(fileURLToPath(import.meta.url), 'utf8').split('\n').slice(1, 17).map((l) => l.replace(/^\/\/ ?/, '')).join('\n'));
     process.exit(opts.cmd === 'help' || opts.cmd === '--help' ? 0 : 2);
   }
   run().catch((e) => { console.error(e?.message ?? e); process.exit(1); });

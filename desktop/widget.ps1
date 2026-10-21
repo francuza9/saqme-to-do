@@ -2801,8 +2801,36 @@ function Render-SyncAdvanced {
   Add-Footnote ($notes -join ' ')
 }
 
+# "Use with AI": the instructions for an AI assistant (Get-AiPrompt, rules.ps1) with this PC's real lists folder
+function Get-ThisAiPrompt { return (Get-AiPrompt ([IO.Path]::GetFullPath($listsDir))) }
+function Copy-AiPrompt {
+  try { [System.Windows.Clipboard]::SetText((Get-ThisAiPrompt)); Show-Notice 'Instructions copied. Paste them into your AI assistant.' }
+  catch { Show-Notice 'Could not copy: another program is using the clipboard.' }
+}
+# writes the instructions to $path (UTF-8). Returns why not, or '' when saved. Not into the lists folder: the app would show the file as a list
+function Save-AiPromptFile([string]$path) {
+  $full = [IO.Path]::GetFullPath($path)
+  $in = ([IO.Path]::GetFullPath($listsDir)).TrimEnd('\') + '\'
+  if (([IO.Path]::GetDirectoryName($full) + '\').StartsWith($in, [StringComparison]::OrdinalIgnoreCase)) { return 'Not in the lists folder: the app would show that file as a list. Choose another folder.' }
+  try { Write-TextFileAtomic $full (Get-ThisAiPrompt) } catch { return "Could not save it: $($_.Exception.Message)" }
+  return ''
+}
+function Save-AiPromptAs {
+  $dlg = New-Object Microsoft.Win32.SaveFileDialog
+  $dlg.Title = 'Save the instructions for your AI'; $dlg.FileName = 'SAQME.md'; $dlg.DefaultExt = '.md'
+  $dlg.Filter = 'Markdown (*.md)|*.md|All files (*.*)|*.*'; $dlg.InitialDirectory = [Environment]::GetFolderPath('MyDocuments')
+  if ($dlg.ShowDialog($w) -ne $true) { return }
+  $err = Save-AiPromptFile $dlg.FileName
+  Show-Notice $(if ($err) { $err } else { "Saved $([IO.Path]::GetFileName($dlg.FileName))." })
+}
+
 function Render-YourListsPage {
   [void]$list.Children.Add((New-SettingsHeader 'Your lists'))
+  Add-Heading 'Use with AI'
+  Add-CardRow (New-ActionRow 'Copy instructions for your AI' { Copy-AiPrompt } -Help 'Where your lists are and how to edit them, to paste into Claude, ChatGPT, Cursor...')
+  Add-CardRow (New-ActionRow 'Save them as a file...' { Save-AiPromptAs } -Name 'Save the instructions for your AI as a file' -Help 'SAQME.md, to add to an assistant''s instructions, a Claude Project or a skill')
+  Add-Footnote "Your lists are plain markdown files, so an AI assistant that can open files can read and manage them. These instructions tell it where they are, the format and what it must not do."
+  Add-Heading 'Lists'
   Add-CardRow (New-ActionRow 'Open the lists folder' { Start-Process explorer.exe -ArgumentList "`"$listsDir`"" } -Help (Format-Path $listsDir))
   Add-CardRow (New-LinkRow 'Recently deleted' '' 'trash' -Help 'Deleted tasks, ready to restore for 30 days')
   Add-Footnote "Plain markdown files, one per project, in $(Format-Path $listsDir). Editors and AI assistants can change them too; the app picks up their changes by itself."
@@ -4180,7 +4208,7 @@ if ($SmokeTest) {
       general       = @('Dark', 'Light', 'Auto', 'Start with Windows', 'open-keys')
       notifications = @('Daily summary time', 'Send a test notification')
       sync          = @('Set up sync', 'Pairing link', 'Connect', 'Invite link', 'Join')
-      yourlists     = @('Open the lists folder', 'open-trash')
+      yourlists     = @('Copy instructions for your AI', 'Save the instructions for your AI as a file', 'Open the lists folder', 'open-trash')
       updates       = @('back')
       about         = @('Open the data folder')
     }
@@ -4198,6 +4226,15 @@ if ($SmokeTest) {
       Go-Back
       if ($script:view -ne 'settings') { throw "Back from $pg went to '$($script:view)'" }
     }
+    # Use with AI: the text names this data folder's real lists folder; the saved file is that text and never goes into the lists folder
+    $ai = Get-ThisAiPrompt
+    if (-not $ai.Contains("`n$([IO.Path]::GetFullPath($listsDir))`n") -or -not $ai.Contains('Never delete') -or $ai.Contains("`r")) { throw 'the AI instructions do not name the lists folder' }
+    $aiFile = Join-Path $DataDir 'SAQME.md'
+    $aiErr = Save-AiPromptFile $aiFile
+    if ($aiErr) { throw "saving the AI instructions: $aiErr" }
+    if ([IO.File]::ReadAllText($aiFile) -cne $ai) { throw 'the saved AI instructions differ from the copied ones' }
+    Remove-Item -LiteralPath $aiFile -Force
+    if (-not (Save-AiPromptFile (Join-Path $listsDir 'SAQME.md')) -or (Test-Path -LiteralPath (Join-Path $listsDir 'SAQME.md'))) { throw 'the AI instructions were saved into the lists folder' }
     foreach ($sub in @(@('general', 'keys'), @('yourlists', 'trash'))) {
       Show-View $sub[0]; & $activate (& $find $list "open-$($sub[1])")
       if ($script:view -ne $sub[1]) { throw "$($sub[0]) did not open $($sub[1])" }

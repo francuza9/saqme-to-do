@@ -12,10 +12,31 @@
   <img src="docs/images/hero-dark.png" width="860" alt="The desktop widget and the iPhone app side by side, showing the same Work list with subtasks, deadlines and a Georgian task">
 </p>
 
+## Use Saqme with your AI
+
+Your lists are plain markdown files, so any AI assistant that can open files can read and manage them: Claude
+Desktop or Claude Code, the ChatGPT desktop app, Cursor, Codex, a local MCP filesystem server. No plugin, no API
+key, no export. Ask it:
+
+- **"What's due this week?"** It reads every list and answers by deadline, overdue first.
+- **"Move everything about the Berlin trip to Travel."** Tasks, subtasks and notes move with their ids, so sync
+  moves them instead of deleting and re-creating.
+- **"Add these meeting notes as tasks."** Paste the notes; they become tasks with deadlines, in the right list.
+- **"Tell me what I've been postponing."** It collects the postponed (`[>]`) and overdue tasks across all lists.
+
+What it changes shows in the app within seconds and syncs to your phone.
+
+**Set it up in one step:** open
+**Settings > Your lists > Use with AI** and choose **Copy instructions for your AI** (on Linux and macOS you can
+also run `saqme ai-prompt`), then paste them into your assistant. They name this computer's real lists folder,
+describe the file format, and tell the AI to never delete a list file, never rewrite a whole file from memory
+and keep every id. **Save them as a file…** writes the same text as `SAQME.md` for a Claude Project, a skill or
+`AGENTS.md`. Per assistant, and what an AI can't or shouldn't do: [docs/ai.md](docs/ai.md).
+
 ## Features
 
 - **Your lists are files.** One markdown file per project (`lists/Work.md`). Edit them in any editor, script
-  them, or let an AI assistant rewrite them; the app picks the changes up. [Format](docs/file-format.md).
+  them, or [let an AI assistant manage them](docs/ai.md); the app picks the changes up. [Format](docs/file-format.md).
 - **Every platform, one look.** A small widget on Windows, an app window on macOS and Linux, and the phone
   app on iPhone and Android. All work offline and share one design, down to the typeface.
 - **No account needed.** Everything works on a single device. Sync is optional: it runs on the free plan of
@@ -142,7 +163,8 @@ back.
 
 **Can my AI assistant edit the lists?** Yes, that is the point. Each line carries a short id like
 `^k3j9x2ab` so sync can follow a task through edits; leave it in place (the app usually re-attaches a lost
-one). See [docs/file-format.md](docs/file-format.md).
+one). **Settings > Your lists > Use with AI** copies instructions that say so. See [docs/ai.md](docs/ai.md) and
+[docs/file-format.md](docs/file-format.md).
 
 **Can I share a list with someone?** Yes. They need the app, not a Cloudflare account; you need sync (the list
 stays on your sync service). Each invite works once, for 24 hours; you pick *can edit* or *can view* and can
@@ -168,6 +190,7 @@ notification settings. More in [docs/setup.md](docs/setup.md#windows-notificatio
 
 - [docs/setup.md](docs/setup.md): every setup step, updating, troubleshooting, removing everything
 - [docs/sync.md](docs/sync.md): the sync protocol and conflict rules
+- [docs/ai.md](docs/ai.md): using Saqme with an AI assistant: setup per assistant, what it can and can't do
 - [docs/file-format.md](docs/file-format.md): the markdown format and the data folder
 - [docs/architecture.md](docs/architecture.md): how the pieces fit together
 - [docs/design.md](docs/design.md): colours, type and layout shared by all the apps

@@ -247,6 +247,7 @@ try {
   if (& $invoke (& $byId 'open-yourlists') 'the Your lists row') {
     $acc = Test-View 'Settings > Your lists' $win
     Check (@($acc | Where-Object { $_.Type -eq 'Button' -and $_.Name -in 'Open the lists folder', 'Recently deleted' }).Count -eq 2) 'the lists folder and Recently deleted'
+    Check (@($acc | Where-Object { $_.Type -eq 'Button' -and $_.Name -in 'Copy instructions for your AI', 'Save the instructions for your AI as a file' -and $_.Patterns -contains 'Invoke' }).Count -eq 2) 'Use with AI: copy and save, both invokable buttons'
     [void](& $invoke (& $byId 'back') 'Back')
   }
   if (& $invoke (& $byId 'open-about') 'the About row') {

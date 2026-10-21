@@ -1,0 +1,17 @@
+{
+  "about": [
+    "The \"Use with AI\" instructions: local/ai-prompt.mjs (aiPrompt: Linux/macOS app, `saqme ai-prompt`) and desktop/rules.ps1",
+    "(Get-AiPrompt: the Windows app). 'dir' is the lists folder; 'file' (in ai-prompt/) is the exact text expected, compared as bytes",
+    "(LF, UTF-8, no byte order mark). 'same' cases must give that file's text with only the folder swapped: whatever the path holds",
+    "(spaces, Georgian letters, a backslash, quotes) goes in as is."
+  ],
+  "cases": [
+    { "about": "Windows path with spaces", "dir": "C:\\Users\\Ana Maria\\AppData\\Roaming\\SaqmeToDo\\lists", "file": "windows-spaces.md" },
+    { "about": "Linux path with Georgian folder names", "dir": "/home/ნუცა/.local/share/saqme/სიები", "file": "georgian.md" }
+  ],
+  "same": [
+    { "as": "georgian.md", "dir": "/home/ana/.local/share/saqme/lists" },
+    { "as": "georgian.md", "dir": "/Users/Ana Maria/Library/Application Support/Saqme To Do/lists" },
+    { "as": "georgian.md", "dir": "D:\\ჩემი სიები\\My \"lists\" ($HOME) 100% {x}" }
+  ]
+}

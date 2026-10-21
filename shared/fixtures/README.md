@@ -12,6 +12,7 @@ implements what.
 | `markdown.json`, `markdown/*.md` | reading and writing the list files byte for byte; ids for lines that lost theirs |
 | `keys.json` | fractional order keys: between, valid, rekey, and a 300-step insert walk |
 | `text.json` | task text, notes, times, dates, project and file names |
+| `ai-prompt.json`, `ai-prompt/*.md` | the "Use with AI" instructions, byte for byte, for paths with spaces and Georgian letters |
 | `engine.json` | the lists-folder engine: plans that bring the files in line with the server, and the changes it reads from them |
 
 Every JSON file starts with an `about` that explains its case format. The `.md` samples are compared as

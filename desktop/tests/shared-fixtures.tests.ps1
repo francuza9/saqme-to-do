@@ -296,6 +296,20 @@ foreach ($c in $engine['diff']) {
   }
 }
 
+# ---------------------------------------------------------------- "Use with AI"
+Write-Host 'ai-prompt.json: Get-AiPrompt (rules.ps1)'
+$aiFx = Read-Fixture 'ai-prompt.json'
+function Read-AiExpected([string]$name) { return Read-Utf8 (Join-Path $Fixtures "ai-prompt\$name") }
+foreach ($c in $aiFx['cases']) {
+  Test-Case "ai-prompt: $($c['about'])" { Assert-Eq (Get-AiPrompt $c['dir']) (Read-AiExpected $c['file']) 'text' }
+}
+foreach ($c in $aiFx['same']) {
+  Test-Case "ai-prompt: the same text for $($c['dir'])" {
+    $base = $aiFx['cases'] | Where-Object { $_['file'] -eq $c['as'] }
+    Assert-Eq (Get-AiPrompt $c['dir']) ((Read-AiExpected $c['as']).Replace($base['dir'], $c['dir'])) 'text'
+  }
+}
+
 # ---------------------------------------------------------------- the app updater
 Write-Host 'update.json: Compare-SaqmeVersion, Test-ReleaseManifest, Get-UpdateDecision (update-core.ps1)'
 $updFx = Read-Fixture 'update.json'

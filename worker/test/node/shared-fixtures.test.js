@@ -13,6 +13,7 @@ import {
 import * as model from '../../public/js/model.js';
 import { parsePairingLink, parseInviteLink, serverLabel } from '../../public/js/pairing.js';
 import { checkManifest, compareVersions, updateDecision } from '../../../local/update.mjs';
+import { aiPrompt } from '../../../local/ai-prompt.mjs';
 import { keyBetween, isValidKey, rekey } from '../../public/js/keys.js';
 import { normalizeText, normalizeNotes, isValidDate as serverValidDate } from '../../src/merge.js';
 import {
@@ -244,6 +245,28 @@ describe('engine.json: remotePlan, addLocalDiff (local/engine.mjs)', () => {
       if (c.filesAfter) expect(sorted({ ...st.Files, ...r.plan.files })).toEqual(sorted(c.filesAfter));
     });
   }
+});
+
+// ---------------------------------------------------------------- "Use with AI"
+describe('ai-prompt.json: aiPrompt (local/ai-prompt.mjs; desktop/rules.ps1 Get-AiPrompt runs the same cases)', () => {
+  const fx = load('ai-prompt.json');
+  const expected = (name) => readFileSync(join(FIXTURES, 'ai-prompt', name), 'utf8');
+  const dirOf = (name) => fx.cases.find((c) => c.file === name).dir;
+  for (const c of fx.cases) {
+    it(`${c.about}`, () => { expect(aiPrompt(c.dir)).toBe(expected(c.file)); });
+  }
+  for (const c of fx.same) {
+    it(`the same text for ${c.dir}`, () => {
+      expect(aiPrompt(c.dir)).toBe(expected(c.as).replace(dirOf(c.as), () => c.dir));
+    });
+  }
+  it('says what an assistant needs to know', () => {
+    const t = aiPrompt('/x/lists');
+    for (const s of ['[ ]', '[/]', '[x]', '[>]', '[!]', '[-]', '[~]', 'due:YYYY-MM-DDTHH:MM', '`> `', '^xxxxxxxx', '.order', 'Never delete', 'Never rewrite a whole file']) {
+      expect(t, s).toContain(s);
+    }
+    expect(t.endsWith('\n') && !t.includes('\r') && !t.startsWith('﻿')).toBe(true);
+  });
 });
 
 // ---------------------------------------------------------------- the app updater

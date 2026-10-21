@@ -13,6 +13,7 @@
 //   POST /api/local/disconnect    Settings > Sync & sharing > Advanced > Turn off sync (the lists stay)
 //   POST /api/local/allow-deletes confirm a paused mass delete in the lists folder
 //   POST /api/local/restore-deletes put the tasks of a paused mass delete back into their lists instead
+//   GET  /api/local/ai-prompt     { text }: the "Use with AI" instructions for this lists folder (Settings > Your lists)
 //   POST /api/local/stop          shut down (used by setup when updating)
 // Updates (local/updater.mjs), for Settings > Updates and `saqme update`:
 //   GET  /api/local/update        what it knows: this version, the newest one, what an update is doing, how it ended
@@ -141,6 +142,7 @@ export function startServer(opts) {
         try { link = String(JSON.parse(body.toString('utf8')).link ?? ''); } catch { /* bad JSON */ }
         try { return json(res, 200, { url: opts.connect(link) }); } catch (e) { return json(res, 400, { error: e.message }); }
       }
+      case 'GET /api/local/ai-prompt': return json(res, 200, { text: opts.aiPrompt() });
       case 'POST /api/local/allow-deletes': opts.onAllowDeletes?.(); return json(res, 200, { ok: true });
       case 'POST /api/local/restore-deletes': opts.onRestoreDeletes?.(); return json(res, 200, { ok: true });
       case 'GET /api/local/cloud-setup': return json(res, 200, opts.cloudSetup.status());

@@ -1,5 +1,23 @@
 # Changes
 
+## Unreleased
+
+**Use Saqme with your AI.** Your lists are markdown files, so an AI assistant with file access (Claude Desktop or
+Claude Code, the ChatGPT desktop app, Cursor, Codex, an MCP filesystem server) can read and manage them. Until now
+you had to explain the folder and the format to it every time.
+
+- **Settings > Your lists > Use with AI** (Windows, Linux, macOS): **Copy instructions for your AI** puts a
+  ready-made block on the clipboard: this computer's real lists folder, the format (the seven status marks,
+  two-space subtasks, `due:` with an optional time, notes as `> ` lines, the `^ids`, one file per list, `.order`),
+  how the app picks changes up, and the rules for the AI (never delete a list file, never rewrite a whole file from
+  memory, keep the ids). **Save them as a file...** writes the same text as `SAQME.md`, for a Claude Project, a
+  skill or `AGENTS.md`; on Windows it refuses the lists folder, where the file would show up as a list.
+- **`saqme ai-prompt`** (Linux, macOS) prints the same text.
+- The README starts with what this gets you, and **docs/ai.md** has the setup for Claude Desktop and Projects,
+  Claude Code, ChatGPT, Cursor and Codex and MCP filesystem servers, and what an AI can't or shouldn't do.
+- The text exists once per engine (`rules.ps1`, `local/ai-prompt.mjs`); shared fixtures hold the exact output for
+  paths with spaces and Georgian folder names.
+
 ## 1.2.1
 
 **Deletions paused: Restore them.** When many tasks vanish from the lists folder at once, deleting them

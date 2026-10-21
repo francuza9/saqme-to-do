@@ -3,7 +3,7 @@
 // Needs Playwright (see pwa-ui-check.mjs):
 //   node test/ui/local-window-check.mjs
 import { chromium } from 'playwright';
-import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, readFileSync, writeFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -26,12 +26,14 @@ writeFileSync(fake, `
 process.env.SAQME_CLOUD_SETUP_JS = fake;
 process.env.SAQME_CLOUD_STATE = join(dir, 'setup', 'cloud.json');
 const { startApp } = await import('../../../local/saqme.mjs');
+const { aiPrompt } = await import('../../../local/ai-prompt.mjs');
 const app = await startApp({ dataDir: dir, port: 0, interval: 500, cloudInterval: 60_000, settleMs: 0, reminders: false });
 
 let fails = 0;
 const check = (ok, what) => { console.log(`  ${ok ? 'ok  ' : 'FAIL'} ${what}`); if (!ok) fails++; };
 const browser = await chromium.launch();
-const page = await browser.newPage({ viewport: { width: 430, height: 900 } });
+const context = await browser.newContext({ viewport: { width: 430, height: 900 }, permissions: ['clipboard-read', 'clipboard-write'], acceptDownloads: true });
+const page = await context.newPage();
 const errors = [];
 page.on('pageerror', (e) => errors.push(e.message));
 try {
@@ -47,6 +49,15 @@ try {
   check(await page.isVisible('[data-fk="open:updates"]') && /Saqme To Do \d+\.\d+\.\d+/.test(await page.textContent('#list .version-line')), 'Settings has Updates (the window updates itself) and the version line');
   await page.click('[data-fk="open:lists"]');
   check((await page.textContent('#list')).includes(join(dir, 'lists')), 'Your lists says where the lists folder is');
+  // Use with AI: the instructions with this lists folder in them, on the clipboard and as SAQME.md
+  const wanted = aiPrompt(join(dir, 'lists'));
+  await page.click('[data-fk="do:Copy instructions for your AI"]');
+  await page.waitForSelector('#toast:has-text("Instructions copied")');
+  check(await page.evaluate(() => navigator.clipboard.readText()) === wanted, 'Use with AI: Copy puts the instructions for this lists folder on the clipboard');
+  const [download] = await Promise.all([page.waitForEvent('download'), page.click('[data-fk="do:Save them as a file…"]')]);
+  const saved = join(dir, 'downloaded.md');
+  await download.saveAs(saved);
+  check(download.suggestedFilename() === 'SAQME.md' && readFileSync(saved, 'utf8') === wanted, 'Use with AI: Save downloads SAQME.md with the same text');
   await page.keyboard.press('Escape');
   await page.click('[data-fk="open:sync"]');
   await page.waitForSelector('button:has-text("Set up sync")');

@@ -9,6 +9,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { startApp } from '../../../local/saqme.mjs';
+import { aiPrompt } from '../../../local/ai-prompt.mjs';
 import { Store } from '../../public/js/store.js';
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -62,6 +63,22 @@ describe('local app server', () => {
     expect(res.headers.get('access-control-allow-origin')).toBeNull();
     expect((await res.json()).local.lists).toBe(join(dir, 'lists'));
     expect((await fetch(`${app.url}/api/sync`, { method: 'OPTIONS' })).headers.get('access-control-allow-origin')).toBeNull();
+  });
+
+  it('gives the window its "Use with AI" instructions, with this lists folder in them', async () => {
+    expect((await fetch(`${app.url}/api/local/ai-prompt`)).status).toBe(401);
+    const res = await fetch(`${app.url}/api/local/ai-prompt`, { headers: { authorization: `Bearer ${app.token}` } });
+    const { text } = await res.json();
+    expect(text).toBe(aiPrompt(join(dir, 'lists')));
+    expect(text).toContain(`\n${join(dir, 'lists')}\n`);
+  });
+
+  it('`saqme ai-prompt` prints the same text for any data folder, spaces and Georgian letters included, without the app running', async () => {
+    const cli = fileURLToPath(new URL('../../../local/saqme.mjs', import.meta.url));
+    const odd = join(dir, 'ჩემი სიები ტესტი');
+    const { stdout } = await promisify(execFile)(process.execPath, [cli, 'ai-prompt', '--data', odd, '--port', '1']);
+    expect(stdout).toBe(aiPrompt(join(odd, 'lists')));
+    expect(existsSync(odd)).toBe(false);   // (printing it creates nothing)
   });
 
   it('connects cloud sync from a pairing link pasted in the window', async () => {
