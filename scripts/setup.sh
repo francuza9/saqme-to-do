@@ -362,7 +362,7 @@ adopt_wrangler() {
 # A shell-script app cannot receive a link there (it comes as an Apple event), so a small AppleScript applet takes
 # it and hands it to `saqme invite`. Registered with Launch Services; --uninstall removes it.
 install_mac_invite_handler() {
-  if ! has osacompile || [ ! -x /usr/libexec/PlistBuddy ]; then warn "saqme:// invite links: osacompile is missing, so paste invites instead (Settings > Sync > Join a shared list)"; return; fi
+  if ! has osacompile || [ ! -x /usr/libexec/PlistBuddy ]; then warn "saqme:// invite links: osacompile is missing, so paste invites instead (Settings > Sync & sharing > Shared lists)"; return; fi
   local src plist pb bin_as
   src="$(mktemp -d)/invite.applescript"
   bin_as="$(printf '%s' "$BIN" | sed 's/\\/\\\\/g; s/"/\\"/g')"
@@ -375,7 +375,7 @@ on run
 end run
 EOF
   rm -rf "$MAC_INVITE_APP"
-  if ! osacompile -o "$MAC_INVITE_APP" "$src" >/dev/null 2>&1; then warn "saqme:// invite links: the handler could not be built; paste invites instead (Settings > Sync > Join a shared list)"; return; fi
+  if ! osacompile -o "$MAC_INVITE_APP" "$src" >/dev/null 2>&1; then warn "saqme:// invite links: the handler could not be built; paste invites instead (Settings > Sync & sharing > Shared lists)"; return; fi
   plist="$MAC_INVITE_APP/Contents/Info.plist"
   pb=/usr/libexec/PlistBuddy
   "$pb" -c "Set :CFBundleIdentifier $AGENT_ID.invite" "$plist" >/dev/null 2>&1 || "$pb" -c "Add :CFBundleIdentifier string $AGENT_ID.invite" "$plist" >/dev/null 2>&1 || true
@@ -604,7 +604,7 @@ if [ "$mode" = app ]; then
   info "It updates itself (Settings > Updates); you never need to run this again for that."
   if [ "$cloud" = 0 ]; then
     if [ -f "$DATA_DIR/sync/config.json" ]; then info "Cloud sync stays on (set up earlier); the app keeps it updated."
-    else info "Want them on your phone too? In the app: Settings > Sync > Set up sync (free Cloudflare account)."; fi
+    else info "Want them on your phone too? In the app: Settings > Sync & sharing > Set up sync (free Cloudflare account)."; fi
   fi
 fi
 }

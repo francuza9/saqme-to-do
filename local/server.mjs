@@ -8,9 +8,9 @@
 //   GET  /api/local/pairing       { link, code } that pair a phone with the cloud sync (when set up); code is a
 //                                  one-time pairing code from the cloud service (null when it can't be reached)
 //   POST /api/local/connect       { link }: start cloud sync with a pairing link from another device
-//   POST /api/local/cloud-setup   Settings > Sync > Set up sync: run the cloud setup (GET: its progress;
+//   POST /api/local/cloud-setup   Settings > Sync & sharing > Set up sync: run the cloud setup (GET: its progress;
 //                                  POST /api/local/cloud-setup/cancel stops it)
-//   POST /api/local/disconnect    Settings > Sync > Turn off sync (the lists stay)
+//   POST /api/local/disconnect    Settings > Sync & sharing > Advanced > Turn off sync (the lists stay)
 //   POST /api/local/allow-deletes confirm a paused mass delete in the lists folder
 //   POST /api/local/stop          shut down (used by setup when updating)
 // Updates (local/updater.mjs), for Settings > Updates and `saqme update`:
@@ -181,11 +181,11 @@ export function startServer(opts) {
         try { return json(res, 200, await run()); } catch (e) { return json(res, e.status ?? 400, { error: e.message }); }
       }
     }
-    if (url.pathname.startsWith('/api/shares')) return json(res, 404, { error: 'lists are shared through your cloud sync (Settings, Sync)' });
+    if (url.pathname.startsWith('/api/shares')) return json(res, 404, { error: 'lists are shared through your cloud sync (Settings, Sync & sharing)' });
     // (lists others share with this computer are synced by the app itself, local/shares.mjs, not relayed)
-    if (url.pathname.startsWith('/api/remotes')) return json(res, 404, { error: 'shared lists are joined in the window\'s Settings, Sync (or saqme join)' });
+    if (url.pathname.startsWith('/api/remotes')) return json(res, 404, { error: 'shared lists are joined in the window\'s Settings, Sync & sharing (or saqme join)' });
     if (url.pathname.startsWith('/api/push/')) return json(res, 404, { error: 'push is not used by the desktop app; reminders show as desktop notifications' });
-    if (url.pathname.startsWith('/api/pair/')) return json(res, 404, { error: 'pairing codes come from the cloud sync service (Settings > Sync > Pair phone)' });
+    if (url.pathname.startsWith('/api/pair/')) return json(res, 404, { error: 'pairing codes come from the cloud sync service (Settings > Sync & sharing > Pair a phone)' });
     if (req.method === 'OPTIONS') { res.writeHead(405); res.end(); return undefined; }   // no CORS: this server is for its own window only
     const response = await worker.fetch(request, env);
     if (route === 'POST /api/sync' && response.ok) {

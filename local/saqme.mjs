@@ -217,7 +217,7 @@ export function connectCloud(path, link) {
 }
 
 /**
- * Settings > Sync > Set up sync: runs scripts/cloud-setup.mjs (what setup.sh --cloud runs) from this server and
+ * Settings > Sync & sharing > Set up sync: runs scripts/cloud-setup.mjs (what setup.sh --cloud runs) from this server and
  * keeps its output for the window. The Cloudflare sign-in opens in the browser (its link is in the output too).
  * It writes sync/config.json when it succeeds; onDone() then wakes the cloud engine.
  */
@@ -237,7 +237,7 @@ export function cloudSetupRunner(p, { log = () => {}, onDone = () => {} } = {}) 
       // npm (for the Cloudflare tools) sits next to this Node.js; --yes: no questions, nobody is at a terminal
       const env = { ...process.env, NO_COLOR: '1', PATH: `${dirname(process.execPath)}${delimiter}${process.env.PATH ?? ''}` };
       const args = [script, '--state', cloudSetupStatePath(), '--desktop-config', p.cloudConfig,
-        '--pair-again', 'Settings > Sync > Pair phone', '--yes', '--result', resultFile];
+        '--pair-again', 'Settings > Sync & sharing > Pair a phone', '--yes', '--result', resultFile];
       const child = spawn(process.execPath, args, { cwd: dirname(dirname(script)), env, stdio: ['ignore', 'pipe', 'pipe'] });
       const r = { child, lines: [], result: null, done: false };
       run = r;
@@ -265,7 +265,7 @@ export function cloudSetupRunner(p, { log = () => {}, onDone = () => {} } = {}) 
   };
 }
 
-/** Settings > Sync > Turn off sync: this computer stops syncing; the lists and the cloud copy stay. */
+/** Settings > Sync & sharing > Advanced > Turn off sync: this computer stops syncing; the lists and the cloud copy stay. */
 export function disconnectCloud(path) {
   const c = readJsonFile(path);
   if (c) writePrivate(path, JSON.stringify({ ...c, enabled: false }, null, 2));
@@ -417,7 +417,7 @@ export async function startApp({ dataDir = defaultDataDir(), port, interval = 10
   /** The owner's side, for the window: the cloud Worker's share routes, with the window's project ids. */
   async function ownerApi(method, path, body) {
     const c = readCloudConfig(p.cloudConfig);
-    if (!c) throw Object.assign(new Error('Sharing needs cloud sync (Settings, Sync, Set up sync).'), { status: 409 });
+    if (!c) throw Object.assign(new Error('Sharing needs cloud sync (Settings, Sync & sharing, Set up sync).'), { status: 409 });
     let r;
     try {
       r = await fetch(`${c.url.replace(/\/+$/, '')}/api/${path}`, {
@@ -637,7 +637,7 @@ async function cmdPairPhone(opts) {
   console.log('  1. Scan the QR code with the phone camera and open the link (Safari on iPhone, Chrome on Android).');
   console.log('  2. Add it to the Home Screen (iPhone: Share > Add to Home Screen; Android: menu > Install app).');
   if (code) console.log(`  3. iPhone: open Saqme from the Home Screen and type the code ${code} (works once, for 10 minutes).`);
-  console.log(`  ${code ? 4 : 3}. Open Saqme from the Home Screen, then Settings > Notifications > Enable.\n`);
+  console.log(`  ${code ? 4 : 3}. Open Saqme from the Home Screen, then Settings > Notifications: switch Notifications on.\n`);
 }
 
 async function cmdConnect(opts) {
