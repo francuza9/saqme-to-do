@@ -69,8 +69,11 @@ for (const scheme of ['dark', 'light']) {
   await page.keyboard.press('Escape');
   await page.click('#logo'); await page.waitForTimeout(200); await axe(page, `${scheme} settings`);
   // every page of Settings (Sync & sharing with Advanced open too), and the views they open
-  for (const p of ['general', 'notifications', 'sync', 'lists', 'about']) {
-    await page.click(`[data-fk="open:${p}"]`); await page.waitForTimeout(150); await axe(page, `${scheme} settings ${p}`);
+  for (const p of ['general', 'notifications', 'sync', 'lists', 'updates', 'about']) {
+    await page.click(`[data-fk="open:${p}"]`); await page.waitForTimeout(p === 'updates' ? 600 : 150); await axe(page, `${scheme} settings ${p}`);
+    // (the sheet that takes the token for the sync service's own updates: with a dev Worker that knows its account,
+    // npm run dev -- --var SAQME_ACCOUNT_ID:x --var SAQME_WORKER_NAME:y)
+    if (p === 'updates' && await page.$('[data-fk="svc-token"]')) { await page.click('[data-fk="svc-token"]'); await page.waitForTimeout(200); await axe(page, `${scheme} token sheet`); await page.keyboard.press('Escape'); }
     if (p === 'sync') { await page.click('[data-fk="advanced"]'); await page.waitForTimeout(150); await axe(page, `${scheme} settings sync, advanced`); }
     if (p === 'lists') { await page.click('[data-fk="open:trash"]'); await page.waitForTimeout(150); await axe(page, `${scheme} recently deleted`); await page.click('.view-header .back'); }
     await page.click('.view-header .back');

@@ -2150,7 +2150,7 @@ function serviceSummary() {
   if (!s.token) return { short: v, text: `your sync service runs ${v}; it is updated from your computer` };
   return { short: s.auto ? 'Automatic' : 'Manual', text: `your sync service runs ${v}${s.auto ? ', and updates itself' : ''}` };
 }
-const SVC_HELP = 'Then it installs new versions of Saqme by itself, from this project\'s releases on GitHub, also when your computer is off. It needs a token from Cloudflare that only you can make (two minutes).';
+const SVC_HELP = 'It then installs new versions of Saqme by itself, from this project\'s releases on GitHub, also when your computer is off. That needs a token from Cloudflare that only you can make (two minutes).';
 /** Updates > Your sync service: its version; giving it a token, or how updating itself stands, Update now, its log. */
 function serviceUpdateSettings() {
   const out = [head(ui.local ? 'Your sync service' : 'Sync service')];
@@ -2170,7 +2170,7 @@ function serviceUpdateSettings() {
     return out;
   }
   if (!s.token) {
-    out.push(card(version, actionRow('Let it update itself…', () => tokenSheet(s), { help: SVC_HELP, fk: 'svc-token' })), foot(`${ui.local ? 'Now it updates with this app.' : 'Now it updates with the Saqme app on your computer.'} ${SVC_HELP}`));
+    out.push(card(version, actionRow('Let it update itself…', () => tokenSheet(s), { help: SVC_HELP, fk: 'svc-token' })), foot(`${ui.local ? 'Now it updates with this app.' : 'Now it updates with the Saqme app on your computer.'} Let it update itself, and ${SVC_HELP[0].toLowerCase()}${SVC_HELP.slice(1)}`));
     return out;
   }
   const newer = s.latest && s.latest !== s.version && !s.running ? s.latest : '';
