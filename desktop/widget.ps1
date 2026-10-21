@@ -4260,13 +4260,13 @@ if ($SmokeTest) {
     $keepCfg = ${function:Read-SyncConfigUi}
     ${function:script:Read-SyncConfigUi} = { @{ url = 'https://saqme.smoke.test'; token = 'k' } }
     try {
-      $script:svc.Status = @{ version = '1.2.0'; knowsItself = $true; token = $false; auto = $true; tokenUrl = 'https://dash.cloudflare.com/profile/api-tokens'; log = @() }
+      $script:svc.Status = @{ version = '0.8.0'; knowsItself = $true; token = $false; auto = $true; tokenUrl = 'https://dash.cloudflare.com/profile/api-tokens'; log = @() }
       Show-View 'updates'
       foreach ($k in 'Open Cloudflare''s token page', 'Cloudflare API token') { if (-not (& $find $list $k)) { throw "Updates > Your sync service: '$k' missing" } }
-      $script:svc.Status = @{ version = '1.2.0'; knowsItself = $true; token = $true; auto = $true; latest = '1.3.0'; checkedAt = 1; last = @{ ok = $true; message = 'Up to date (1.2.0).' }; log = @(@{ at = 1; text = 'checked' }) }
+      $script:svc.Status = @{ version = '0.8.0'; knowsItself = $true; token = $true; auto = $true; latest = '0.9.0'; checkedAt = 1; last = @{ ok = $true; message = 'Up to date (0.8.0).' }; log = @(@{ at = 1; text = 'checked' }) }
       Render
       foreach ($k in 'Update your sync service now', 'Update by itself', 'Remove the token') { if (-not (& $find $list $k)) { throw "Updates > Your sync service: '$k' missing" } }
-      if (-not (& $hasText $list '1.3.0 available')) { throw 'Updates > Your sync service does not say a new version is out' }
+      if (-not (& $hasText $list '0.9.0 available')) { throw 'Updates > Your sync service does not say a new version is out' }
     } finally { ${function:script:Read-SyncConfigUi} = $keepCfg; $script:svc.Status = $null }
     $script:upd.Latest = $null; Remove-Item -LiteralPath $InstallRoot -Recurse -Force; $InstallRoot = $keepRoot
     Show-View 'list'; Update-VersionDisplay

@@ -1,6 +1,6 @@
 # Changes
 
-## Unreleased
+## 1.2.0
 
 **Your sync service can update itself.** Until now your Worker, and the phone app it serves, got a new version
 only when the app on a computer updated it: with that computer off or away, phones stayed behind. Now you can give
