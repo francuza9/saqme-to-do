@@ -53,7 +53,7 @@ jobs:
         working-directory: worker
 
   windows:
-    name: Windows (PowerShell suites, widget self-check, installer)
+    name: Windows (PowerShell suites, widget self-check, installer and updater)
     runs-on: windows-latest
     timeout-minutes: 30
     defaults:

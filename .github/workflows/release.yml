@@ -1,0 +1,75 @@
+# Publishes a release when a version tag is pushed (CONTRIBUTING.md, "How to ship an update"):
+#   git tag v1.2.0 && git push origin v1.2.0
+# The tag must be the version in worker/package.json. The tests run first; then scripts/build-release.mjs builds
+# the zip, the manifest the apps' updaters read (saqme-release.json: size and SHA-256 of the zip) and the release
+# notes (that version's section of CHANGELOG.md), and they go up as a GitHub Release. Installed apps find it on
+# their next daily check (github.com/<repo>/releases/latest/download/saqme-release.json) and update themselves.
+# Who can push v* tags can ship code to every install: protect them (Settings > Rules > Rulesets, tags v*).
+name: Release
+
+on:
+  push:
+    tags: ['v*.*.*']
+
+permissions:
+  contents: write   # to create the release
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+jobs:
+  windows:
+    # what the Windows updater installs must pass there first (the same as tests.yml)
+    name: Windows (PowerShell suites, widget self-check, installer and updater)
+    runs-on: windows-latest
+    timeout-minutes: 30
+    defaults:
+      run:
+        shell: powershell
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262   # v4.4.0
+        with:
+          persist-credentials: false
+      - run: powershell -NoProfile -ExecutionPolicy Bypass -File desktop\tests\sync-core.tests.ps1
+      - run: powershell -NoProfile -ExecutionPolicy Bypass -File desktop\tests\shared-fixtures.tests.ps1
+      - name: Widget self-check
+        run: |
+          $out = powershell -NoProfile -ExecutionPolicy Bypass -STA -File desktop\widget.ps1 -DataDir "$env:RUNNER_TEMP\saqme-smoke" -SmokeTest 2>&1 | Out-String
+          Write-Output $out
+          if ($out -notmatch 'SMOKE OK') { exit 1 }
+      - run: powershell -NoProfile -ExecutionPolicy Bypass -File scripts\dev\test-setup.ps1
+
+  release:
+    needs: windows
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262   # v4.4.0
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020   # v4.4.0
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: worker/package-lock.json
+      - name: The tag is the version in worker/package.json
+        run: |
+          v="$(node -p "require('./worker/package.json').version")"
+          if [ "v$v" != "$GITHUB_REF_NAME" ]; then
+            echo "::error::The tag $GITHUB_REF_NAME is not the version in worker/package.json ($v). Bump it with: cd worker && npm version X.Y.Z --no-git-tag-version"
+            exit 1
+          fi
+          echo "VERSION=$v" >> "$GITHUB_ENV"
+      - run: npm ci --no-audit --no-fund
+        working-directory: worker
+      - run: npm test
+        working-directory: worker
+      - name: Build the release assets
+        run: node scripts/build-release.mjs --out dist --notes "https://github.com/${GITHUB_REPOSITORY}/releases/tag/${GITHUB_REF_NAME}"
+      - name: Publish the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" "dist/saqme-$VERSION.zip" dist/saqme-release.json dist/SHA256SUMS \
+            --repo "$GITHUB_REPOSITORY" --title "Saqme To Do $VERSION" --notes-file dist/notes.md --verify-tag --latest
