@@ -158,7 +158,7 @@ check(await title(page) === 'Errands' && (await listNames(page)).join() === 'Gen
 await openList(page, 'General');
 check(await title(page) === 'General' && await page.isHidden('#listMenuWrap') && (await page.getAttribute('#switcher', 'aria-expanded')) === 'false', 'choosing a list in the menu switches to it and closes the menu');
 await page.tap('.row:has-text("Buy milk") .more');
-await page.tap('.menu-item:has-text("Move to project")');
+await page.tap('.menu-item:has-text("Move to list")');
 await page.tap('.menu-item:has-text("Errands")');
 await page.waitForTimeout(100);
 check(!(await rows()).includes('Buy milk'), 'task left General');

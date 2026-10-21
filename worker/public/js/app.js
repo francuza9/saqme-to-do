@@ -1387,7 +1387,7 @@ function rowMenu(id) {
     i >= 0 && i < sibs.length - 1 && menuItem('down', 'Move down', () => nudge(id, 1)),
     i > 0 && menuItem('indent', 'Make subtask of the task above', () => shiftLevel(id, 1)),
     node?.parent && menuItem('outdent', 'Move out one level', () => shiftLevel(id, -1)),
-    others.length && menuItem('move', 'Move to project…', () => moveSheet(id), { keepOpen: true }),
+    others.length && menuItem('move', 'Move to list…', () => moveSheet(id), { keepOpen: true }),
     h('div', { class: 'menu-sep' }),
     menuItem('trash', node?.kids.length ? 'Delete (with subtasks)' : 'Delete', () => deleteWithUndo(id), { danger: true }),
   ]);
@@ -1398,7 +1398,7 @@ function moveSheet(id) {
   // (the Linux/macOS window moves tasks between its lists files; a shared one is synced by its own engine there,
   // so a move into or out of one is a copy plus a delete, like here, but done by the lists folder: not offered)
   const others = store.projects().filter((p) => p.id !== t.fields.place.v.project && !readOnly(p.id) && !(ui.local && sharing(p.id)?.withMe));
-  sheet('Move to project', others.map((p) => menuItem('move', listName(p), () => {
+  sheet('Move to list', others.map((p) => menuItem('move', listName(p), () => {
     store.moveTask(id, { projectId: p.id, parentId: null });
     toast(`Moved to ${listName(p)}`);
   }, { hint: sharing(p.id)?.withMe ? 'shared' : '' })));

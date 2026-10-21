@@ -22,7 +22,7 @@ Windows widget keeps its tabs.
 - **Keyboard:** Left / Right on the title switch lists, Enter or Down opens the menu; in it Up / Down, Home /
   End and a typed letter move, Enter switches, Esc closes, Ctrl+M (or Shift+F10) opens the list's own menu.
   Settings > General > Keyboard shortcuts lists them.
-- The new list, rename and delete sheets say "list" instead of "project".
+- The task menu's **Move to list…** and the new list, rename and delete sheets say "list" instead of "project".
 - Lifting the finger after a long press (on a task or a list) can no longer land on the menu it just opened and
   close it again.
 - Accessibility: the title is a menu button that says the list's name, and with the dot which list has
