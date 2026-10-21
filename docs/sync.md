@@ -463,7 +463,7 @@ more (D1, KV, R2, Pages, every account of the login) and break when it rotates. 
 *Create API token* page as a prefilled template:
 
 ```
-https://dash.cloudflare.com/profile/api-tokens?permissionGroupKeys=[{"key":"workers_scripts","type":"edit"}]&name=Saqme+sync+service+updates&accountId=<account>
+https://dash.cloudflare.com/profile/api-tokens?permissionGroupKeys=[{"key":"workers_scripts","type":"edit"}]&accountId=<account>&zoneId=all&name=Saqme+sync+service+updates
 ```
 
 The user checks it, clicks *Continue to summary* and *Create Token*, copies the token and pastes it into the app.

@@ -360,8 +360,9 @@ const lockedAt = async (env) => Number(await env.DB.prepare(`SELECT value FROM m
 export function tokenTemplateUrl(accountId) {
   const q = new URLSearchParams({
     permissionGroupKeys: JSON.stringify([{ key: 'workers_scripts', type: 'edit' }]),
-    name: 'Saqme sync service updates',
     accountId: accountId || '*',
+    zoneId: 'all', // Cloudflare's user-token template links need it, even for a token that touches no zone
+    name: 'Saqme sync service updates',
   });
   return `https://dash.cloudflare.com/profile/api-tokens?${q}`;
 }

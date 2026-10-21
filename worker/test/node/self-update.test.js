@@ -359,6 +359,7 @@ describe('the token', () => {
     expect(u.origin + u.pathname).toBe('https://dash.cloudflare.com/profile/api-tokens');
     expect(JSON.parse(u.searchParams.get('permissionGroupKeys'))).toEqual([{ key: 'workers_scripts', type: 'edit' }]);
     expect(u.searchParams.get('accountId')).toBe(ACCOUNT);
+    expect(u.searchParams.get('zoneId')).toBe('all');
   });
 });
 
