@@ -272,7 +272,7 @@ the browser's storage on that phone (offline, nothing is sent anywhere). Install
 above so the system keeps that storage.
 
 - **Back up and move lists:** **Settings > Your lists > Export lists** saves a zip of markdown files in the same
-  format as the desktop apps (one file per list, plus the tab order). Unzipped into a desktop lists folder,
+  format as the desktop apps (one file per list, plus the lists' order). Unzipped into a desktop lists folder,
   they just appear. **Import lists** takes such a zip or `.md` files; tasks that are already there (same
   `^id`) are skipped, nothing is deleted, so importing twice is harmless.
 - **Add sync later:** set up the cloud part from a computer, then paste the pairing link into
@@ -319,7 +319,8 @@ your list through their Worker.)
 
 **You (the owner):**
 
-1. Right-click the list's tab (phone: long-press it) and choose **Share…**. On Windows the current tab also
+1. On Windows right-click the list's tab; on a phone, Linux and macOS long-press (or right-click) the list's name
+   at the top, or the list in the lists menu that name opens. Choose **Share…**. On Windows the current tab also
    shows a share icon while the mouse is over it. Without sync of your own, Share is greyed out: a shared list
    needs your sync service to live on (**Set up sync**, in Settings > Sync & sharing).
 2. Type a **name** for the person (only you see it, to recognise them later) and pick **Can edit** or **Can
@@ -329,7 +330,8 @@ your list through their Worker.)
    Worker; each of their computers needs an invite of its own.
 4. The same **Share** view lists everyone the list is shared with, one row each (tap a person for their
    access). Change their access there, **Revoke** them (their key stops working at once; they keep the list as
-   their own unshared copy), or **Cancel** an invite nobody used yet. Shared tabs show a small people badge.
+   their own unshared copy), or **Cancel** an invite nobody used yet. A shared list shows a small people badge
+   after its name (its tab on Windows; the title and the lists menu elsewhere).
 
 **The other person:**
 
@@ -339,17 +341,18 @@ your list through their Worker.)
   (sent by the owner's sync service, at your summary time and in your time zone). The page also has the
   one-line installers, for later.
 - **Windows, macOS or Linux with Saqme installed:** open the link. The page asks the browser to open Saqme To
-  Do (allow it); the app asks *Join shared list?* and the list appears as a new tab (a list whose name you
+  Do (allow it); the app asks *Join shared list?* and the list appears among your lists (a list whose name you
   already have says whose it is: "Groceries (from nuca)"). If nothing opens, copy the link (**Copy invite** on
   that page) and paste it into **Settings > Sync & sharing**, under *Shared lists* (Linux/macOS: or run
   `saqme join '<link>'`). This works without sync of your own.
 - **The phone app, paired with your own sync:** a link from another site cannot open it. Tap **Copy invite**
   on the page, open Saqme, then **Settings > Sync & sharing**, under *Shared lists* **Paste**, **Join**. Your sync service
   keeps the list for all your phones and reminds you of its deadlines like of your own.
-- **Started in the browser, installed Saqme later:** in the browser, the list's menu (long-press its tab) has
-  **Move to my Saqme app**: open the link it shows in your Saqme (or scan its QR code). The list moves over
-  with no new invite, and the browser copy stops.
-- **Leave** a list from its tab's menu (it replaces Delete there): it goes from your device (to `lists/.trash`
+- **Started in the browser, installed Saqme later:** in the browser, the list's menu (long-press its name at the
+  top) has **Move to my Saqme app**: open the link it shows in your Saqme (or scan its QR code). The list moves
+  over with no new invite, and the browser copy stops.
+- **Leave** a list from its menu (its tab's on Windows, its name's elsewhere; Leave replaces Delete there): it
+  goes from your device (to `lists/.trash`
   on a computer; from all your paired phones at once); the owner's list is not touched.
 - A **view-only** list cannot be changed in the apps. Edited in its file anyway (an editor, an AI
   assistant), it goes back to the owner's version, and what was typed is kept under **Conflicts** as *Not
@@ -415,7 +418,7 @@ run from it) does not update itself: `git pull` and run setup.
 | Push test says "not subscribed" | Settings > Notifications: switch Notifications off, then on again (subscriptions can expire). |
 | Invite: "already used, has expired or was cancelled" | An invite works once, for 24 hours. Ask the owner for a new one (Share > Create invite link). |
 | Share says "this list is not on your sync service yet" | The list was made a moment ago: wait until it synced (the cloud icon), then open Share again. |
-| A shared list's tab vanished | Its owner deleted the list (it comes back if they restore it), or you left it (on a phone: maybe on another of your phones). If its owner stopped sharing it, it stays as your own list and the app says so. In the browser: it was moved to your Saqme app. |
+| A shared list vanished | Its owner deleted the list (it comes back if they restore it), or you left it (on a phone: maybe on another of your phones). If its owner stopped sharing it, it stays as your own list and the app says so. In the browser: it was moved to your Saqme app. |
 | Joining says "Open the invite link instead" | This copy of the app has no sync of its own and the list is on another address. Open the invite link itself and choose **Use it in this browser**, or pair the app first. |
 | A shared list says "Not synced while this app is not paired" | The phone was unpaired; its shared lists wait (with your changes) and go on once it is paired with the same sync service again. |
 | A shared list on a phone says the owner's Worker "could not be reached" | Your own sync service talks to theirs for your phone: check that their address still works in a browser. If it says "redirect" or "too much data", it is not a Saqme sync service. |

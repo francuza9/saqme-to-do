@@ -1,6 +1,7 @@
 # The list files
 
-Each project is one markdown file in the `lists` folder; the tab name is the file name. Project names leave
+Each project is one markdown file in the `lists` folder; the list's name in the apps (a tab on Windows) is the
+file name. Project names leave
 out what file names cannot hold everywhere (`\ / : * ? " < > |`, control characters, dots and spaces at the
 end) and stop at 100 characters; names Windows reserves for devices (`con`, `nul`, `lpt1`, …) get the file
 name `Project con.md`.
@@ -84,7 +85,7 @@ devices.
 Headings (`#`, `##`), paragraphs and blank lines are kept exactly where they are, and so are YAML front
 matter (`---` at the very top), fenced code blocks (between ``` or ~~~ lines) and horizontal rules
 (`* * *`, `---`): lines in them are never read as tasks. The first `# Heading`
-is hidden in the app (it would repeat the tab name); other headings show as small section labels. Tasks
+is hidden in the app (it would repeat the list's name); other headings show as small section labels. Tasks
 added on another device appear next to their neighbours (after the previous task's subtasks), so they stay
 in the right section.
 
@@ -97,7 +98,7 @@ Windows (`%APPDATA%\SaqmeToDo`):
 
 | File | What |
 |---|---|
-| `lists\.order` | tab order, one project name per line |
+| `lists\.order` | the lists' order (the tabs on Windows, the lists menu elsewhere), one project name per line |
 | `lists\.remotes.json` | lists shared with this PC: which file syncs with whose server (`id`, `file`, `server`, `project`, `access`, `name`, `joinedAt`; no keys). Changed only by the app ([shared lists](sync.md#shared-lists)) |
 | `lists\.state` | which tasks are open or closed (per device, not synced) |
 | `lists\.notified` | reminders already shown on this PC (dedupe, last 7 days) |
@@ -138,6 +139,6 @@ owner's address, `saqme.nuca.workers.dev`); that is only the file's name, the li
 It is bound in `lists/.remotes.json`; leave that file to the app. If the list is **view-only** for you, changes to the file
 are not sent: the file goes back to the owner's version and what you typed shows under **Conflicts** as
 *not saved* (copy it from there). Renaming or deleting the file does not rename or delete the list (that is
-its owner's): use **Leave** on its tab. Moving a line between a shared list and one of your own creates it on
+its owner's): use **Leave** in the list's menu. Moving a line between a shared list and one of your own creates it on
 the other server and deletes it on the first (restorable there), since each list syncs with its own server.
 See [sync.md](sync.md#shared-lists).

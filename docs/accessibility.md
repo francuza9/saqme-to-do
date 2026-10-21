@@ -5,20 +5,28 @@ part is checked; and what is not verified automatically. Target: WCAG 2.2 level 
 
 | | Phone app (iPhone, Android, browsers, and the window of the Linux/macOS app) | Windows widget |
 |---|---|---|
-| Checked with | `worker/test/ui/pwa-a11y-check.mjs`: axe-core 4 (WCAG 2.2 A/AA + best practices) on every main view and every page of Settings in both themes, plus keyboard, focus, announcement, motion and zoom checks in Chromium | `scripts/dev/uia-check.ps1`: reads the UI Automation tree, which is what Narrator and other Windows screen readers use, in the list, Settings and each of its pages, and the shortcuts view |
+| Checked with | `worker/test/ui/pwa-a11y-check.mjs`: axe-core 4 (WCAG 2.2 A/AA + best practices) on every main view, the lists menu and every page of Settings in both themes, plus keyboard, focus, announcement, motion and zoom checks in Chromium | `scripts/dev/uia-check.ps1`: reads the UI Automation tree, which is what Narrator and other Windows screen readers use, in the list, Settings and each of its pages, and the shortcuts view |
 | Result | no serious or critical axe findings; all behaviour checks pass | every control named, operable and focusable; structure and Tab order as below |
 | Colours | `worker/test/node/tokens.test.js` for both apps: text ≥ 4.5 : 1, status chips, their glyphs and the focus ring ≥ 3 : 1 (also on hovered and selected rows), in both themes | |
 
 ## Phone app
 
-- **Structure.** Header (banner) with the project tabs as a navigation landmark (the current one marked
-  `aria-current="page"`), the list as the main landmark with a hidden heading naming the project, and one list
+- **Structure.** Header (banner) with Settings, the list switcher and sync; the list as the main landmark with a
+  hidden heading naming the list, and one list
   per section (tasks, *Postponed*, *Completed*) under real headings. Each task is a list item with
   `aria-level` for nesting, so "level 2" tells a subtask apart. Settings, each of its pages (General,
   Notifications, Sync & sharing, Your lists, Updates in the Linux/macOS window, About), *Keyboard shortcuts*,
   *Recently deleted* and *Conflicts* have a Back button that says where it goes ("Back to Settings") and a
   level-1 heading; their cards have level-2 headings (level 3 in the Share sheet, under its title).
-- **Names and states.** Every icon button has a label (status, task menu, subtasks, sync, new project). The
+- **The list switcher.** The title is a menu button (`aria-haspopup="menu"`, `aria-expanded`) named by the
+  list ("Work", ", shared" for a shared one); its description says it shows your lists and, with the violet
+  dot, which other list has something due, so the dot is never colour alone. The lists menu is a `menu`: each
+  list a `menuitemradio`, the current one `aria-checked`, its name followed by its open tasks ("Home, 3 open")
+  or what is due ("Home, 2 due"; its tooltip and description add how many are overdue), and *New list* a
+  `menuitem` in a group of its own. Under the menu the list and the add line are inert. A swipe between lists
+  has keyboard and screen-reader ways too: the menu, and Left / Right on the title, which say the new list's
+  name through the live region.
+- **Names and states.** Every icon button has a label (status, task menu, subtasks, sync). The
   status chip says the status in words ("Status: In progress"); deadlines say "Deadline: Today 16:30" and add
   ", overdue" when they are late; "1/3" is read as "1 of 3 subtasks closed". The subtasks button reports
   `aria-expanded`; the theme choice and the *Completed* toggle report their state.
@@ -34,10 +42,16 @@ part is checked; and what is not verified automatically. Target: WCAG 2.2 level 
 - **Keyboard.** Everything is a real button, link or field, reachable with Tab. A task's text is a button
   that opens the editor. Up / Down select tasks and move keyboard focus to the task row, which reads as one
   phrase: text, status, deadline, subtasks. Shortcuts (Space done, Ctrl+D deadline, Ctrl+I notes, Ctrl+M menu,
-  Alt+Up / Down move) never take Enter or Space away from a focused control.
+  Alt+Up / Down move) never take Enter or Space away from a focused control. On the title, Left / Right go to the
+  previous / next list and Enter, Space or Down open the lists menu (Up opens it on *New list*); the arrows there
+  are the title's, not the task selection's. In the menu Up / Down move (round at the ends), Home / End and a
+  typed letter jump, Enter switches, Esc closes it, Tab closes it and moves on; Ctrl+M, Shift+F10 or the menu key
+  open the focused list's own menu (share, rename, move, delete).
 - **Focus.** A 2 px violet ring on everything focusable (`:focus-visible`; inside a card it is drawn inset,
   so the card's corners never cut it). Sheets (task menu, status, deadline, ...) are named modal dialogs: focus
-  moves in, Tab stays in, Escape closes, and focus returns to the control that opened them. The page is rebuilt
+  moves in, Tab stays in, Escape closes, and focus returns to the control that opened them. The lists menu opens
+  with focus on the current list and gives it back to the title when it closes (also after a list's own menu
+  opened from it). The page is rebuilt
   after every change; focus stays on the same control, and a text box keeps what was typed in it.
 - **Settings by keyboard.** Opening a view puts focus on its Back button, so a screen reader says where you
   are. Esc goes back one level (a page to Settings, Recently deleted to Your lists, Settings to the list) and
@@ -46,10 +60,12 @@ part is checked; and what is not verified automatically. Target: WCAG 2.2 level 
   them all.
 - **Announcements.** Messages ("Task deleted. Undo is available.") go to a live region that is always in the
   page; a message with an action stays while it has focus or the pointer.
-- **Motion and size.** No transitions with *reduce motion*. Touch targets are at least 24 px (most 44 px).
+- **Motion and size.** No transitions with *reduce motion*; a swipe between lists then changes the list without
+  it following the finger or sliding in. Touch targets are at least 24 px (most 44 px).
   At 200 % zoom on a 390 px phone (195 px wide) and at 320 px nothing scrolls sideways or gets cut off (the
-  list, Settings and Sync & sharing are checked); below 360 px the rows of Settings wrap their labels and values
-  instead of ending them in "…", and below 280 px the drag handle column is dropped and the indent halves.
+  list, the lists menu, Settings and Sync & sharing are checked); below 360 px the rows of Settings wrap their
+  labels and values instead of ending them in "…", and below 280 px the drag handle column is dropped and the
+  indent halves. The title ends a long list name in "…"; the lists menu always shows it whole (it wraps).
 - **Dragging** has alternatives for everyone: *Move up / down*, *Make subtask*, *Move out one level* in the task
   menu, and Alt+Up / Down.
 

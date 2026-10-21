@@ -24,7 +24,8 @@
   "fri 14:00" or "+3"), notes with links, drag to reorder, move tasks between projects.
 - **Reminders.** 15 minutes before a timed deadline and at the time, plus one daily summary of what is due:
   on the computer from the start, on phones once sync is set up.
-- **Shared lists.** Share one list with someone (right-click its tab, **Share…**): they get a one-time invite
+- **Shared lists.** Share one list with someone (on Windows right-click its tab; on a phone, Linux and macOS
+  long-press or right-click its name at the top; then **Share…**): they get a one-time invite
   link, can edit or only view, and you can revoke them at any time. The list stays on your sync service. They
   need no account and not even Saqme: the list works in their browser, and moves into their Saqme app later
   with one link. On their computer it is a markdown file like any other; on their phones it reminds them of

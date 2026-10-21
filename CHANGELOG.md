@@ -1,5 +1,35 @@
 # Changes
 
+## Unreleased
+
+**Phone, Linux and macOS: the list's name instead of tabs.** The phone app (also the window of the Linux/macOS
+app) has no tab strip any more: the title at the top is the current list's name, and it switches lists. The
+Windows widget keeps its tabs.
+
+- **The title** is the list's name in large type with a small ⌄. A violet dot after it says another list has
+  something due (a deadline today or earlier). A long name, Georgian too, ends in "…" (the menu shows it
+  whole); Settings and sync keep their places.
+- **Tap it for the lists menu**, under the title over a dimmed list: every list in its order, a violet check on
+  the current one, its open tasks on the right, or "2 due" when tasks are due (red when one is overdue, amber
+  when they are due today), and **New list** below them. Choose a list to switch to it; a tap outside or Esc
+  closes the menu.
+- **Each list's own menu** (Share, Rename, Move up / down, Delete; Leave and Move to my Saqme app for a list
+  shared with you) opens with a long press or a right-click on the list in that menu, or on the title for the
+  current list: everything the tabs offered is still there. After a move the lists menu opens again, in the new
+  order.
+- **Swipe** the list to the left or right for the next or previous list. Scrolling, dragging a task by its
+  handle and long presses work as before; with *reduce motion* the list just changes, without sliding.
+- **Keyboard:** Left / Right on the title switch lists, Enter or Down opens the menu; in it Up / Down, Home /
+  End and a typed letter move, Enter switches, Esc closes, Ctrl+M (or Shift+F10) opens the list's own menu.
+  Settings > General > Keyboard shortcuts lists them.
+- The new list, rename and delete sheets say "list" instead of "project".
+- Lifting the finger after a long press (on a task or a list) can no longer land on the menu it just opened and
+  close it again.
+- Accessibility: the title is a menu button that says the list's name, and with the dot which list has
+  something due; the menu is a real menu (the lists as radio items). The browser checks (`worker/test/ui`) cover
+  it: axe on the menu and a list's own menu in both themes, the keys, focus, *reduce motion*, 200 % zoom, and in
+  the touch walkthrough swipes, long presses, "1 due" and a long Georgian name.
+
 ## 1.1.1
 
 **Phone, Linux and macOS: the same grouped look and Settings pages as on Windows.** The phone app is also the

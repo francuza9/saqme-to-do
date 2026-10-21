@@ -228,8 +228,9 @@ reaches nothing else, next to (or without) their own sync.
 
 ### The owner's side
 
-The owner shares a list from its tab (right-click or long-press > **Share…**; on Windows also the share icon
-that shows on the current tab while the mouse is over it). Sharing needs the owner's own sync, since the
+The owner shares a list from its menu (**Share…**): on Windows a right-click on its tab, or the share icon that
+shows on the current tab while the mouse is over it; on a phone, Linux and macOS a long press or a right-click on
+the list's name at the top, or on the list in the lists menu. Sharing needs the owner's own sync, since the
 list must be on their Worker; without it the item is there but disabled, and says why.
 
 - **A name for the person** ("Nuca"), only ever shown to the owner, to recognise and revoke them later.
@@ -240,7 +241,8 @@ list must be on their Worker; without it the item is there but disabled, and say
   until claimed or cancelled.
 - The same view lists everyone the list is shared with: name, access (changeable), joined or invited and
   when. **Revoke** ends a person's key at once; **Cancel invite** voids an unclaimed invite. Shared lists show
-  a small badge on their tab, for the owner and for the people they are shared with.
+  a small badge after their name (on their tab on Windows), for the owner and for the people they are shared
+  with.
 
 Owner routes (owner's key): `POST /api/shares/invite { projectId, alias, access }`, `GET /api/shares?project=`,
 `POST /api/shares/update { id, access }`, `POST /api/shares/revoke { id }`. The owner's `/api/sync` responses
@@ -346,8 +348,9 @@ relay, in a table of its own, never in the synced rows).
   server, access, projectId, pos, cursor, dbId, … }`, synced through the relay above (no key on the phone).
   Not paired, used from the owner's address: `{ via: 'direct', token, … }`, synced with that origin directly;
   when such an app gets paired, the key goes to its own Worker (`/api/remotes/adopt`). Unpairing keeps relayed
-  lists and what was typed into them; they wait (the tab says so) and go on when the app is paired again. A
-  shared tab's place is kept on the device only, and a list whose name another list here has shows whose it is:
+  lists and what was typed into them; they wait (the list says so) and go on when the app is paired again. A
+  shared list's place in the order is kept on the device only, and a list whose name another list here has
+  shows whose it is:
   "Groceries (from nuca)" (`pairing.js serverLabel`: the account part of a workers.dev address, else the host).
   A view-only list is read-only in the app (and the store refuses changes to it); moving a task between one's
   own list and a shared one is a copy there with new ids plus a delete here (restorable), since neither server
@@ -357,7 +360,7 @@ relay, in a table of its own, never in the synced rows).
   servers ([file-format.md](file-format.md#other-files-in-the-data-folder)); the key is in `sync/remotes.json`.
   The engine for one's own server leaves bound files out; each bound file has an engine of its own
   (`Invoke-SyncCycle` / `syncCycle` with a scope: that one file is that project; nothing about the list
-  itself is sent; its file comes back if it is removed by hand; the tab order keeps every other list's
+  itself is sent; its file comes back if it is removed by hand; the lists' order keeps every other list's
   place). The owner renaming the list renames the file, and the binding follows in the same step. A name another
   list has already (at join, or the owner's rename) becomes "Groceries (from nuca)" before it gets a number.
   Every change to `.remotes.json` happens in the sync loop's thread (Windows) or synchronously between engine
@@ -383,7 +386,7 @@ relay, in a table of its own, never in the synced rows).
 - **Local-only devices** can join: a device without its own sync syncs just its shared lists (the Windows sync
   loop runs whenever there is a shared list; the Linux/macOS app always runs an engine per shared list; the
   phone app, in the browser from the owner's address). Sharing one's *own* lists needs one's own sync.
-- **Leave** (instead of Delete, on a shared tab) takes the list off the device: its file goes to
+- **Leave** (instead of Delete, in a shared list's menu) takes the list off the device: its file goes to
   `lists/.trash`, the binding, key and engine state go, and the key is ended on the owner's server. Nothing
   else changes there. On a paired phone it leaves for all of that person's phones (one key, kept by their
   Worker), not their computers (each has a key of its own).

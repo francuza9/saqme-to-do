@@ -18,11 +18,13 @@ The people (one person can play several roles on different devices):
 
 ## 1. Sharing (A)
 
-- [ ] Without sync, **Share…** in a tab's menu is greyed out and says why.
-- [ ] With sync: right-click the tab (phone: long-press) > **Share…**; on Windows also the share icon on the
-      current tab while the mouse is over it. Name the person, pick *Can edit* (hover both choices: the
-      tooltips say what they mean), **Create invite link**: the link is copied, shown, and a QR code on desktop.
-- [ ] The person shows as *invited, not joined yet*; the tab gets a badge.
+- [ ] Without sync, **Share…** in a list's menu is greyed out and says why.
+- [ ] With sync: Windows, right-click the tab (also the share icon on the current tab while the mouse is over
+      it); phone, Linux, macOS, long-press or right-click the list's name at the top, or the list in the lists
+      menu. **Share…**. Name the person, pick *Can edit* (hover both choices: the tooltips say what they mean),
+      **Create invite link**: the link is copied, shown, and a QR code on desktop.
+- [ ] The person shows as *invited, not joined yet*; the list gets a badge (its tab; its name at the top and in
+      the lists menu).
 - [ ] Opening the same link a second time, after someone joined, says it was already used.
 
 ## 2. Someone with no Saqme (C, phone browser)
@@ -37,7 +39,8 @@ The people (one person can play several roles on different devices):
       arrives. The deadline in 20 minutes reminds C about 15 minutes before and at the time, by C's clock (try C
       in another time zone than A if you can). The daily summary comes at C's **Daily summary** time and lists only
       tasks of this list. A's own reminders still reach A as before, once.
-- [ ] C's tab menu has **Leave this list** and **Move to my Saqme app**, no Rename or Delete.
+- [ ] The list's menu (long-press its name at the top) has **Leave this list** and **Move to my Saqme app**, no
+      Rename or Delete.
 
 ## 3. Moving from the browser into Saqme (C, after installing)
 
@@ -71,11 +74,12 @@ The people (one person can play several roles on different devices):
       sees the other's list, and edits never cross into the wrong list.
 - [ ] B joins a list called *Groceries* from A and another *Groceries* from a third person: B sees both,
       named apart, plus B's own *Groceries* if there is one.
-- [ ] B unpairs a phone: the shared tab says it waits; changes made meanwhile arrive at A after pairing again.
+- [ ] B unpairs a phone: the shared list says it waits; changes made meanwhile arrive at A after pairing again.
 
 ## 7. The owner changes things (A)
 
-- [ ] Rename the list: B's file and tabs follow (a name B already has gets "(from …)"); C's tab follows.
+- [ ] Rename the list: B's file, tabs and lists menus follow (a name B already has gets "(from …)"); C's
+      follows.
 - [ ] Move a task to another of A's lists: it disappears for the others, without a trace of where it went.
 - [ ] Switch someone to **Can view**: from their next sync the list is read-only for them (the phone says
       *View only*). An edit to the file on a computer goes back, and what was typed shows under Conflicts as
