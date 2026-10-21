@@ -1,6 +1,6 @@
 # Changes
 
-## Unreleased
+## 1.1.1
 
 **Phone, Linux and macOS: the same grouped look and Settings pages as on Windows.** The phone app is also the
 window of the Linux/macOS app, so this one change covers all three.
