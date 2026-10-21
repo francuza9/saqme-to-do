@@ -93,7 +93,7 @@ Prefer to look first? Download the repository as a ZIP and run **`setup.cmd`** (
    **Notifications**, and switch **Notifications** on (iOS 16.4 or later).
 
 <p align="center">
-  <img src="docs/images/phone-settings-dark.png" width="300" alt="Phone app settings with the button that enables notifications">
+  <img src="docs/images/phone-settings-dark.png" width="300" alt="Phone app Settings, Notifications page, with the switch that turns notifications on">
 </p>
 
 Your lists are already there, and they stay available offline. No Cloudflare account? The phone app also

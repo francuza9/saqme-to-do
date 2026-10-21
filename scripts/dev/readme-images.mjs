@@ -2,12 +2,13 @@
 // Builds the README images in docs/images from the real apps and the sample lists:
 //   logo.png                         the app icon at 2x for a ~120 px header
 //   hero-dark.png / hero-light.png   desktop widget + phone side by side (dark UI; transparent, or on a plum panel)
-//   phone-settings-dark/-light.png   small phone Settings shot for the setup steps
+//   phone-settings-dark/-light.png   small phone shot of Settings > Notifications for the setup steps
 // The README shows the -dark files with plain <img> tags (they read well on light pages too). Not <picture>
 // with light/dark <source>s: the GitHub mobile app shows those as broken images (worker/test/node/repository.test.js
 // fails on them); try a variant in that app before using it.
-// Needs a local `npm run dev` server and the desktop render first:
-//   powershell -File scripts\dev\render-widget.ps1 -Out <shots>          (writes <shots>\desktop-dark.png)
+// Needs a local `npm run dev` server (a fresh database) and the desktop render first, 480 px wide so that the
+// sample's three tabs all show (the hero takes the window's size from the PNG):
+//   powershell -File scripts\dev\render-widget.ps1 -Out <shots> -Width 480     (writes <shots>\desktop-dark.png)
 //   cd <folder with playwright> && node <repo>/scripts/dev/readme-images.mjs --shots <shots>
 import { readFileSync, mkdirSync } from 'node:fs';
 import { join, dirname, resolve } from 'node:path';
@@ -34,11 +35,14 @@ let { ctx, page } = await phonePage(browser, { base, token, projectId: projectId
 const phoneList = await page.screenshot({ type: 'png' });
 await ctx.close();
 const settings = {};
+const SETTINGS_H = 420;   // (down to the version line under Notifications)
 for (const scheme of ['dark', 'light']) {
   ({ ctx, page } = await phonePage(browser, { base, token, projectId: projectIds.Work, scheme, scale: 2, standalone: true }));
+  // (the README's step: the logo opens Settings, then Notifications, where the switch turns them on)
   await page.click('#logo');
+  await page.click('[data-fk="open:notifications"]');
   await page.waitForTimeout(400);
-  settings[scheme] = await page.screenshot({ type: 'png', clip: { x: 0, y: 0, width: 390, height: 470 } });
+  settings[scheme] = await page.screenshot({ type: 'png', clip: { x: 0, y: 0, width: 390, height: SETTINGS_H } });
   await ctx.close();
 }
 
@@ -72,7 +76,10 @@ const phone = `
       </div>
     </div>
   </div>`;
-const desktop = `<img src="${dataUrl(join(shots, 'desktop-dark.png'))}" style="display:block;width:440px;height:660px;flex:none">`;
+// the window's size: the render's (a PNG's width and height are at bytes 16 and 20), at 2x
+const desktopPng = readFileSync(join(shots, 'desktop-dark.png'));
+const [deskW, deskH] = [desktopPng.readUInt32BE(16) / 2, desktopPng.readUInt32BE(20) / 2];
+const desktop = `<img src="${dataUrl(join(shots, 'desktop-dark.png'))}" style="display:block;width:${deskW}px;height:${deskH}px;flex:none">`;
 const stage = (bg) => `<div id="hero" style="width:920px;height:740px;display:flex;align-items:center;justify-content:center;gap:48px;
   background:${bg};border-radius:28px">${desktop}${phone}</div>`;
 await shoot(stage('transparent'), '#hero', 'hero-dark.png');
@@ -81,7 +88,7 @@ await shoot(stage('#261F2C'), '#hero', 'hero-light.png');
 for (const scheme of ['dark', 'light']) {
   const edge = scheme === 'dark' ? 'rgba(239,234,244,.16)' : 'rgba(37,33,28,.16)';
   await shoot(`<div id="s" style="display:inline-block;padding:2px"><img src="${b64(settings[scheme])}"
-    style="display:block;width:390px;height:470px;border-radius:28px;box-shadow:0 0 0 1px ${edge}"></div>`, '#s', `phone-settings-${scheme}.png`);
+    style="display:block;width:390px;height:${SETTINGS_H}px;border-radius:28px;box-shadow:0 0 0 1px ${edge}"></div>`, '#s', `phone-settings-${scheme}.png`);
 }
 await browser.close();
 console.log(`wrote logo.png, hero-dark.png, hero-light.png, phone-settings-dark.png, phone-settings-light.png to ${out}`);
