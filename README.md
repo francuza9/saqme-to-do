@@ -59,6 +59,11 @@ and keep every id. **Save them as a file…** writes the same text as `SAQME.md`
 
 ## Get started in one command
 
+**No account needed.** Setup installs the app, and your lists stay on this computer as markdown files.
+Nothing is sent anywhere until you choose to turn on sync. On a phone, open
+<https://francuza9.github.io/saqme-to-do/> and tap **Use it on this device**. What works where without an
+account: [docs/local-only.md](docs/local-only.md).
+
 **Windows:** paste this into PowerShell (or a Command Prompt).
 
 ```powershell
@@ -71,8 +76,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -Command "irm https://raw.githubus
 curl -fsSL https://raw.githubusercontent.com/francuza9/saqme-to-do/main/scripts/setup.sh | bash
 ```
 
-Setup installs the app with your lists on this computer; no account is needed. To have them on your phone
-too, open the app's **Settings > Sync & sharing** and choose **Set up sync**. It creates your own free sync service in your Cloudflare account and uploads your lists (nothing is
+To have your lists on your phone too, open the app's **Settings > Sync & sharing** and choose **Set up sync**. It creates your own free sync service in your Cloudflare account and uploads your lists (nothing is
 deleted). The one step it cannot do for you is the Cloudflare login: a browser window opens, you sign in (or
 create a free account) and click **Allow**. Then the app shows a QR code for your phone. From then on the app
 updates itself, your sync service and the phone app with it (**Settings > Updates**); running setup again is
@@ -82,7 +86,7 @@ still safe at any time and repairs the app.
 |---|---|---|
 | **Windows** | desktop widget, lists in a folder | the same lists on your phones and other computers |
 | **macOS, Linux** | app window, lists in a folder, reminders | the same |
-| **iPhone, Android** | the phone app, lists on the phone (export and import as markdown) | pair it with the QR code |
+| **iPhone, Android** | the phone app, lists on the phone (export and import as markdown), works offline | pair it with the QR code; reminders |
 
 Prefer to look first? Download the repository as a ZIP and run **`setup.cmd`** (Windows) or
 `scripts/setup.sh`. Every step, requirement and manual click is in [docs/setup.md](docs/setup.md).
@@ -190,6 +194,7 @@ notification settings. More in [docs/setup.md](docs/setup.md#windows-notificatio
 ## Documentation
 
 - [docs/setup.md](docs/setup.md): every setup step, updating, troubleshooting, removing everything
+- [docs/local-only.md](docs/local-only.md): using Saqme without any account, per platform, and what needs sync
 - [docs/sync.md](docs/sync.md): the sync protocol and conflict rules
 - [docs/ai.md](docs/ai.md): using Saqme with an AI assistant: setup per assistant, what it can and can't do
 - [docs/file-format.md](docs/file-format.md): the markdown format and the data folder

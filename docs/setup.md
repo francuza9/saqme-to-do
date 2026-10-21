@@ -18,7 +18,8 @@ This page lists every step, including the few clicks only you can do, and what t
 
 Every platform works without any account. Sync is an extra you can add at any time from the app
 (**Set up sync** in **Settings > Sync & sharing**, on Windows and in the Linux/macOS window) or with the same
-setup command; it runs in your own free Cloudflare account.
+setup command; it runs in your own free Cloudflare account. What each platform does without one, and what
+only works with sync: [local-only.md](local-only.md).
 
 | Platform | On its own (no account) | With sync | How |
 |---|---|---|---|
@@ -454,6 +455,7 @@ run from it) does not update itself: `git pull` and run setup.
 | Linux/macOS window says it is "not connected" | It was opened from a bookmark. Open Saqme from the menu (or `saqme open`); that hands the window its key. |
 | Linux/macOS: "Port 47613 is used by another program" | Run setup again with `--port 47700` (any free port). |
 | Linux: no reminders | Install `libnotify-bin` (Debian/Ubuntu) or `libnotify` (Fedora) for `notify-send`, and check that `saqme status` says it is running. |
+| macOS: no reminders | They are shown through AppleScript (`osascript`), which macOS lists as **Script Editor**: allow it in System Settings > Notifications, and check that `saqme status` says it is running. |
 | `npm` fails during setup | Usually network/proxy. Check that `https://registry.npmjs.org` opens in a browser, then re-run. |
 | Setup cannot create the database | The free plan allows 10 D1 databases; delete unused ones in the dashboard (Storage & Databases > D1) or use another Worker name. |
 | Push test says "not subscribed" | Settings > Notifications: switch Notifications off, then on again (subscriptions can expire). |
