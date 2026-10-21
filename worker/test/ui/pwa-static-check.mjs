@@ -1,13 +1,13 @@
 #!/usr/bin/env node
 // The phone app served as plain static files from a sub-folder, as GitHub Pages does (.github/workflows/pages.yml):
 // local-only use, export / import as markdown, offline start, and pairing with a Worker on another origin.
-// Optional QA tool like pwa-ui-check.mjs (Playwright is not a dependency):
-//   cd worker && npm i --no-save playwright@1 && npx playwright install chromium     (once)
+// Optional QA tool like pwa-ui-check.mjs (Playwright is a devDependency of worker/):
+//   cd worker && npm install && npx playwright install chromium     (once)
 //   npm run dev                                                                       (another terminal; for the pairing step)
 //   node test/ui/pwa-static-check.mjs
 let chromium, devices;
 try { ({ chromium, devices } = await import('playwright')); } catch {
-  console.error('Playwright is not installed. In worker/: npm i --no-save playwright@1 && npx playwright install chromium');
+  console.error('Playwright is not installed. In worker/: npm install && npx playwright install chromium');
   process.exit(2);
 }
 import { createServer } from 'node:http';

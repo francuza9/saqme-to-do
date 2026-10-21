@@ -797,7 +797,7 @@ function New-Row($node) {
   $tb = New-Object System.Windows.Controls.TextBlock
   $tb.Text = $it.Text; $tb.TextWrapping = 'Wrap'; $tb.FontFamily = $UI; $tb.FontSize = $TypeSize.body
   $tb.LineHeight = $Tokens.Type.body.Line; $tb.LineStackingStrategy = 'BlockLineHeight'
-  $tb.Foreground = Brush $st.Text; $tb.Cursor = $(if ($ro) { 'Arrow' } else { 'IBeam' }); $tb.Tag = $it; $tb.Background = $Clear
+  $tb.Foreground = $(if ($st.Strike -and $it -eq $script:sel) { $Faint } else { Brush $st.Text }); $tb.Cursor = $(if ($ro) { 'Arrow' } else { 'IBeam' }); $tb.Tag = $it; $tb.Background = $Clear
   if ($st.Strike) { $tb.TextDecorations = [System.Windows.TextDecorations]::Strikethrough }
   if ($st.Italic) { $tb.FontStyle = 'Italic' }
   $tb.Add_MouseLeftButtonUp({ param($s, $e) $e.Handled = $true; Begin-Edit $s })
@@ -884,6 +884,11 @@ function Paint-TaskRow($row, [bool]$sel) {
   $bg = $(if ($sel) { $GroupSel } elseif ($row.IsMouseOver) { $GroupHover } else { $GroupBg })
   $row.Background = $bg
   $row.BorderBrush = $(if ($sel) { $Accent } else { $bg })
+  # closed grey is under 4.5 : 1 on the selection tint (3.9 dark, 4.3 light): a selected closed task is drawn in smoke
+  # (the strike-through still says closed), as in the phone app
+  if ($row.Child -is [System.Windows.Controls.Grid] -and $row.Child.Children.Count -ge 3 -and $row.Tag -and (St $row.Tag.Mark).Strike) {
+    $row.Child.Children[2].Foreground = $(if ($sel) { $Faint } else { Brush (St $row.Tag.Mark).Text })
+  }
 }
 
 # ---------------------------------------------------------------- drag to reorder
@@ -1541,18 +1546,20 @@ function New-TitleButton {
   if ($script:HasA11y) { $b.IsExpanded = $open }
   $b.CornerRadius = New-Object System.Windows.CornerRadius($Tokens.Radius.control); $b.Padding = '8,4,8,4'; $b.Cursor = 'Hand'; $b.Background = $Clear
   $dp = New-Object System.Windows.Controls.DockPanel
-  $chev = New-Object System.Windows.Controls.TextBlock
-  $chev.Text = G 0xE70D; $chev.FontFamily = $MDL2; $chev.FontSize = 9; $chev.Foreground = $TabInk; $chev.VerticalAlignment = 'Center'; $chev.Margin = '8,2,0,0'
-  $chev.RenderTransformOrigin = New-Object System.Windows.Point(0.5, 0.5)
-  $chev.RenderTransform = New-Object System.Windows.Media.RotateTransform($(if ($open) { 180 } else { 0 }))
-  [System.Windows.Controls.DockPanel]::SetDock($chev, 'Right'); [void]$dp.Children.Add($chev)
-  $script:titleChev = $chev
+  # (docked to the right, so the first one added is the rightmost: the violet dot, then the chevron, then the badge;
+  # the phone reads name, badge, chevron, dot)
   $tip = $name; $help = 'Shows your lists'
   if ($other.Count) {
     $dot = New-Object System.Windows.Shapes.Ellipse; $dot.Width = 7; $dot.Height = 7; $dot.Fill = $Accent; $dot.VerticalAlignment = 'Center'; $dot.Margin = '8,2,0,0'
     [System.Windows.Controls.DockPanel]::SetDock($dot, 'Right'); [void]$dp.Children.Add($dot)
     $tip += "`nDue today or earlier in: " + ($other -join ', '); $help = 'Shows your lists. Something is due in ' + ($other -join ', ')
   }
+  $chev = New-Object System.Windows.Controls.TextBlock
+  $chev.Text = G 0xE70D; $chev.FontFamily = $MDL2; $chev.FontSize = 9; $chev.Foreground = $TabInk; $chev.VerticalAlignment = 'Center'; $chev.Margin = '8,2,0,0'
+  $chev.RenderTransformOrigin = New-Object System.Windows.Point(0.5, 0.5)
+  $chev.RenderTransform = New-Object System.Windows.Media.RotateTransform($(if ($open) { 180 } else { 0 }))
+  [System.Windows.Controls.DockPanel]::SetDock($chev, 'Right'); [void]$dp.Children.Add($chev)
+  $script:titleChev = $chev
   $label = $name
   $bd = New-ShareBadge $name $Faint
   if ($bd) { $bd.Margin = '8,2,0,0'; [System.Windows.Controls.DockPanel]::SetDock($bd, 'Right'); [void]$dp.Children.Add($bd); $label += ', ' + ([string]$bd.Tag).Split(':')[0].ToLower() }
@@ -4219,6 +4226,15 @@ if ($SmokeTest) {
       $ok = $(if ($e.Row.Tag.Id -eq 'gggggg04') { $e.Row.Background -eq $GroupSel -and $e.Row.BorderBrush -eq $Accent } else { $e.Row.BorderBrush -eq $e.Row.Background })
       if (-not $ok) { throw "the selection paints '$($e.Row.Tag.Text)' wrong" }
     }
+    # a selected closed task is drawn in smoke (closed grey is under 4.5 : 1 on the selection tint), and back in closed grey
+    $doneRow = $cards[0][3].Row
+    if ($doneRow.Tag.Id -ne 'gggggg03') { throw 'the done subtask is not where the check looks' }
+    $closedGrey = (Brush (St 'x').Text).Color
+    if ($doneRow.Child.Children[2].Foreground.Color -ne $closedGrey) { throw 'a closed task is not in closed grey' }
+    Set-Sel $doneRow.Tag
+    if ($doneRow.Child.Children[2].Foreground.Color -ne $Faint.Color -or $doneRow.Child.Children[2].TextDecorations.Count -ne 1) { throw 'a selected closed task is not in smoke grey with its strike-through' }
+    Set-Sel $cards[0][4].Row.Tag
+    if ($doneRow.Child.Children[2].Foreground.Color -ne $closedGrey) { throw 'a closed task stays smoke grey after the selection moved' }
     $doneHead = $null
     foreach ($c in (Get-Controls $list)) { if ([System.Windows.Automation.AutomationProperties]::GetName($c) -eq 'Completed, 1 task') { $doneHead = $c } }
     if (-not $doneHead -or ($script:HasA11y -and ($doneHead.Role -ne 'disclosure' -or -not $doneHead.IsExpanded))) { throw 'the Completed heading is not an open disclosure' }
@@ -4348,6 +4364,8 @@ if ($SmokeTest) {
     if ([System.Windows.Automation.AutomationProperties]::GetName($tb) -ne $swHome -or $tb.Child.Children[$tb.Child.Children.Count - 1].Text -ne $swHome) { throw 'the title is not the current list' }
     if ($script:HasA11y -and ($tb.Role -ne 'disclosure' -or $tb.IsExpanded)) { throw 'the title is not a closed menu button' }
     if ((& $dotOf $tb) -ne 1 -or ([string]$tb.ToolTip) -notlike '*Switch check*') { throw 'no dot for a list with something due' }
+    # (docked right, so the first child is the rightmost: the title reads name, chevron, dot, as on the phone)
+    if ($tb.Child.Children[0] -isnot [System.Windows.Shapes.Ellipse] -or -not [object]::ReferenceEquals($tb.Child.Children[1], $script:titleChev)) { throw 'the title does not read name, chevron, dot' }
     Show-ListsMenu
     $swNames = @(Get-ProjectNames)
     if (-not $script:listsPopup.IsOpen -or $script:listsRows.Count -ne $swNames.Count + 1) { throw "the lists menu has $($script:listsRows.Count) rows for $($swNames.Count) lists" }

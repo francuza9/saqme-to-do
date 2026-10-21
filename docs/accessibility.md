@@ -167,7 +167,7 @@ All in `design/tokens.json`, shared by both apps and tested on every run:
 ## Running the checks
 
 ```bash
-cd worker && npm i --no-save playwright@1 axe-core@4 && npx playwright install chromium   # once
+cd worker && npm install && npx playwright install chromium   # once (Playwright and axe-core are devDependencies)
 npm run dev                                         # another terminal, fresh database
 node test/ui/pwa-a11y-check.mjs
 npx vitest run test/node/tokens.test.js             # contrast (also part of npm test)

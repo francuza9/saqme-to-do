@@ -117,6 +117,17 @@ describe('design tokens', () => {
     for (const line of read('desktop/widget.ps1').split('\n').filter((l) => /Colors\]::Black/.test(l))) expect(line).toMatch(/GradientStop/);
   });
 
+  it('the widget draws a selected closed task in Faint, which is smoke (closed grey is under 4.5:1 on the selection tint)', () => {
+    for (const [name, p] of [['dark', dark], ['light', light]]) {
+      const block = new RegExp(`\\b${name} = @\\{[\\s\\S]*?\\n  \\}`).exec(ps1)[0];
+      expect(block, name).toContain(`\n    Faint = '#FF${p.smoke.slice(1).toUpperCase()}'`);
+      expect(contrast(p.smoke, p.cardSelected), `${name}: Faint on the selected row`).toBeGreaterThanOrEqual(4.5);
+    }
+    const widget = read('desktop/widget.ps1');
+    expect(widget).toMatch(/\$st\.Strike -and \$it -eq \$script:sel\) \{ \$Faint \}/);
+    expect(widget).toMatch(/function Paint-TaskRow[\s\S]*?Foreground = \$\(if \(\$sel\) \{ \$Faint \}/);
+  });
+
   it('every bundled font file exists and is a TrueType font', () => {
     for (const f of tokens.font.files) {
       const head = readFileSync(new URL(`../../public/fonts/${f.file}`, import.meta.url)).subarray(0, 4);

@@ -5,9 +5,9 @@
 **Windows: the list's name instead of tabs.** The widget now has the same list switcher as the phone, Linux and
 macOS apps: its tab strip is gone, and the title at the top is the current list's name.
 
-- **The title** is the list's name with a small ⌄ (it turns while the menu is open), a shared list's badge, and
-  a violet dot when another list has something due (a deadline today or earlier; its tooltip says which). A long
-  name ends in "…".
+- **The title** is the list's name, a shared list's badge, a small ⌄ (it turns while the menu is open) and a
+  violet dot when another list has something due (a deadline today or earlier; its tooltip says which), in the
+  phone's order. A long name ends in "…".
 - **Click it for the lists menu**, under the title: every list in its order, a violet check on the current one,
   its open tasks on the right, or "2 due" (red when one is overdue, amber when they are due today), and **New
   list** below them. Choose a list to switch to it; a click outside or Esc closes the menu.
@@ -24,6 +24,11 @@ macOS apps: its tab strip is gone, and the title at the top is the current list'
   `scripts/dev/uia-check.ps1` checks both. `scripts/dev/render-widget.ps1 -Menu` renders the open menu. Shift+F10 on the title
   now opens the list's own menu (it used to open the selected task's).
 - The README images show the new look.
+- A selected closed task (done, failed, abandoned) is drawn in smoke grey instead of closed grey, which was under
+  4.5 : 1 on the selection tint (3.9 dark, 4.3 light); the strike-through still says closed. The phone app did
+  this already.
+- `playwright` and `axe-core` are devDependencies of `worker/`, so `npm install` is all the browser checks need
+  (plus `npx playwright install chromium`).
 
 ## 1.1.2
 

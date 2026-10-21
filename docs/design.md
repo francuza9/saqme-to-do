@@ -54,7 +54,7 @@ derive from the card:
 The dark card lifts only 3.5 %: more, and closed (struck-through) text and the status chips on a selected row
 fall under their contrast minimums. The tests check every text colour on the card at rest, hovered, pressed
 and selected, and the chips on all of them. Closed grey itself stays under 4.5 : 1 on the selected tint (3.9 dark,
-4.3 light), so the phone app draws a selected closed task in smoke (the strike-through still says closed).
+4.3 light), so the phone app and the Windows widget draw a selected closed task in smoke (the strike-through still says closed).
 
 **Status chips** keep their meanings and colours: to do = outlined, in progress = amber half-fill,
 done = grey with a check, postponed = blue with a clock, blocked = indigo with "!", failed / rejected =

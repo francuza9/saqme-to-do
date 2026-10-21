@@ -1,13 +1,13 @@
 #!/usr/bin/env node
 // Scripted interaction pass over the phone app at iPhone size (touch emulation) against `npm run dev`.
-// Optional QA tool: Playwright is deliberately not a dependency of this repo.
-//   cd worker && npm i --no-save playwright@1 && npx playwright install chromium     (once)
+// Optional QA tool: Playwright is a devDependency of worker/ (`npm install`), its browser is not.
+//   cd worker && npm install && npx playwright install chromium     (once)
 //   npm run dev                                                                       (another terminal)
 //   node test/ui/pwa-ui-check.mjs
 // Uses the dev server's database: run it on a fresh one (delete worker/.wrangler/state, then npm run dev).
 let chromium, devices;
 try { ({ chromium, devices } = await import('playwright')); } catch {
-  console.error('Playwright is not installed. In worker/: npm i --no-save playwright@1 && npx playwright install chromium');
+  console.error('Playwright is not installed. In worker/: npm install && npx playwright install chromium');
   process.exit(2);
 }
 import { readFileSync } from 'node:fs';

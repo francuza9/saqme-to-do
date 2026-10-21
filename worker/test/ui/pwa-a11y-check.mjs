@@ -2,13 +2,13 @@
 // Accessibility check of the phone app (docs/accessibility.md): axe-core on every main view in both themes,
 // plus what axe cannot see: keyboard focus in and out of sheets, focus kept across re-renders, rows
 // announced as they are selected, status in words, reduced motion, and reflow at 200% zoom / 320 px.
-// Optional QA tool like pwa-ui-check.mjs (Playwright and axe-core are not dependencies of this repo):
-//   cd worker && npm i --no-save playwright@1 axe-core@4 && npx playwright install chromium     (once)
+// Optional QA tool like pwa-ui-check.mjs (Playwright and axe-core are devDependencies of worker/, so `npm install` has them):
+//   cd worker && npm install && npx playwright install chromium     (once)
 //   npm run dev                                                                                  (another terminal, fresh database)
 //   node test/ui/pwa-a11y-check.mjs
 let chromium;
 try { ({ chromium } = await import('playwright')); } catch {
-  console.error('Playwright is not installed. In worker/: npm i --no-save playwright@1 axe-core@4 && npx playwright install chromium');
+  console.error('Playwright is not installed. In worker/: npm install && npx playwright install chromium');
   process.exit(2);
 }
 import { readFileSync } from 'node:fs';
@@ -19,7 +19,7 @@ import { seed } from '../../../scripts/dev/screenshots.mjs';
 
 let axeSource;
 try { axeSource = readFileSync(createRequire(import.meta.url).resolve('axe-core/axe.min.js'), 'utf8'); } catch {
-  console.error('axe-core is not installed. In worker/: npm i --no-save axe-core@4');
+  console.error('axe-core is not installed. In worker/: npm install');
   process.exit(2);
 }
 const token = /^AUTH_TOKEN=(.*)$/m.exec(readFileSync(join(dirname(fileURLToPath(import.meta.url)), '..', '..', '.dev.vars'), 'utf8'))[1];
