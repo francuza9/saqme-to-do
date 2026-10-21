@@ -1,6 +1,6 @@
 # Changes
 
-## Unreleased
+## 1.1.2
 
 **Phone, Linux and macOS: the list's name instead of tabs.** The phone app (also the window of the Linux/macOS
 app) has no tab strip any more: the title at the top is the current list's name, and it switches lists. The
