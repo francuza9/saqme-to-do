@@ -1,5 +1,5 @@
 // Stand-in for wrangler used by test/node/cloud-setup.test.js: same commands and output shapes as the
-// real CLI (whoami --json, d1 list --json, d1 create, migrations apply, secret list, deploy [--secrets-file]),
+// real CLI (whoami --json, d1 list --json, d1 create, migrations apply, secret list | bulk, deploy [--secrets-file]),
 // backed by a JSON file instead of Cloudflare. st.worker: the deployed Worker ({ secrets: [names] }), if any;
 // like Cloudflare it keeps its secrets across deploys without a secrets file.
 import { readFileSync, writeFileSync, existsSync } from 'node:fs';
@@ -42,6 +42,13 @@ if (cmd === 'd1' && sub === 'execute') {
 if (cmd === 'secret' && sub === 'list') {
   if (!st.worker) exit(1, '', '✘ [ERROR] This Worker does not exist on your account. [code: 10007]\n');
   exit(0, JSON.stringify(st.worker.secrets.map((name) => ({ name, type: 'secret_text' })), null, 2) + '\n');
+}
+if (cmd === 'secret' && sub === 'bulk') {   // the keys only: a new version of the code that runs
+  if (!st.worker) exit(1, '', '✘ [ERROR] This Worker does not exist on your account. [code: 10007]\n');
+  const secrets = JSON.parse(readFileSync(args[2], 'utf8'));
+  st.worker.secrets = [...new Set([...st.worker.secrets, ...Object.keys(secrets)])];
+  st.bulk = [...(st.bulk ?? []), secrets];
+  exit(0, `✨ ${Object.keys(secrets).length} secrets successfully uploaded\n`);
 }
 if (cmd === 'deploy') {
   const toml = readFileSync('wrangler.toml', 'utf8');
