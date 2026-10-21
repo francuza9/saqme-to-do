@@ -1,8 +1,8 @@
 // Saqme To Do Worker: serves the PWA (static assets) and the single-user sync/push API.
 //
-//   GET  /api/health              liveness, no auth
-//   GET  /api/config              { vapidPublicKey, version }
-//   POST /api/sync                { deviceId, cursor, changes[] } -> { cursor, more, changes[], rejected[], serverTime, dbId }
+//   GET  /api/health              { ok, version, api }: liveness and which release this is, no auth
+//   GET  /api/config              { vapidPublicKey, version, api }
+//   POST /api/sync                { deviceId, cursor, changes[] } -> { cursor, more, changes[], rejected[], serverTime, dbId, api, version }
 //   POST /api/push/subscribe      { deviceId, subscription }
 //   POST /api/push/unsubscribe    { endpoint }
 //   POST /api/push/test           { endpoint? }
@@ -22,8 +22,12 @@
 // The API answers cross-origin requests too (CORS), so a copy of the app served from elsewhere (a static
 // host such as GitHub Pages) can sync with this Worker. That gives other sites nothing: there are no
 // cookies, and every call needs a key.
+// `api` (src/version.js) lets apps that are older or newer than this Worker tell "not updated yet" from an
+// error. The database updates itself on the first request or cron run after a deploy (src/schema.js).
 
 import { handleSync, HttpError } from './sync.js';
+import { VERSION, API_VERSION } from './version.js';
+import { ensureSchema } from './schema.js';
 import { pushToAll, pushToShare, runReminders } from './reminders.js';
 import { createPairingCode, claimPairingCode } from './pairing.js';
 import {
@@ -42,8 +46,8 @@ export function isPushService(endpoint) {
   } catch { return false; }
 }
 
-const VERSION = '1.0.0';
 const MAX_BODY = 1_000_000;
+const RELEASE = { version: VERSION, api: API_VERSION };
 
 const JSON_HEADERS = {
   'content-type': 'application/json; charset=utf-8',
@@ -106,7 +110,7 @@ async function rememberOrigin(env, origin) {
 
 async function handleApi(request, env, url) {
   const route = `${request.method} ${url.pathname.replace(/\/+$/, '')}`;
-  if (route === 'GET /api/health') return json({ ok: true, version: VERSION });
+  if (route === 'GET /api/health') return json({ ok: true, ...RELEASE });
   if (route === 'POST /api/pair/claim') {
     const code = (await readJson(request))?.code;
     if (!env.AUTH_TOKEN || env.AUTH_TOKEN.length < 32 || !(await claimPairingCode(env, code))) {
@@ -131,7 +135,7 @@ async function handleApi(request, env, url) {
 
   switch (route) {
     case 'GET /api/config':
-      return json({ vapidPublicKey: env.VAPID_PUBLIC_KEY || null, version: VERSION });
+      return json({ vapidPublicKey: env.VAPID_PUBLIC_KEY || null, ...RELEASE });
 
     case 'POST /api/sync': {
       // the owner's apps also learn which of their lists are shared (a badge on them), and their phone apps which
@@ -139,7 +143,7 @@ async function handleApi(request, env, url) {
       const now = Date.now();
       return json(await handleSync(env, await readJson(request), {
         now, extra: [sharedProjectsQuery(env.DB, now), remotesQuery(env.DB)],
-        annotate: ([s, r]) => ({ shared: s.results.map((x) => x.project_id), remotes: r.results.map(remoteView) }),
+        annotate: ([s, r]) => ({ shared: s.results.map((x) => x.project_id), remotes: r.results.map(remoteView), ...RELEASE }),
       }));
     }
 
@@ -213,7 +217,7 @@ async function shareApi(request, env, url, route, share) {
       // used through its person's own Worker: that one reminds them of this list from now on (shares.js)
       if (request.headers.get('x-saqme-relay') === '1') await markRelayed(env, share);
       return json(await handleSync(env, await readJson(request), {
-        scope: share, annotate: () => ({ share: { projectId: share.projectId, access: share.access } }),
+        scope: share, annotate: () => ({ share: { projectId: share.projectId, access: share.access }, ...RELEASE }),
       }));
     }
     case 'POST /api/shares/leave':
@@ -221,7 +225,7 @@ async function shareApi(request, env, url, route, share) {
     case 'POST /api/shares/transfer':
       return json(await createMoveCode(env, share, url.origin));
     case 'GET /api/config':
-      return json({ vapidPublicKey: env.VAPID_PUBLIC_KEY || null, version: VERSION });
+      return json({ vapidPublicKey: env.VAPID_PUBLIC_KEY || null, ...RELEASE });
     case 'POST /api/push/subscribe': {
       const body = await readJson(request);
       checkSubscription(body);
@@ -246,6 +250,15 @@ export default {
     if (!url.pathname.startsWith('/api/')) return env.ASSETS.fetch(request);
     if (request.method === 'OPTIONS') return new Response(null, { status: 204, headers: PREFLIGHT_HEADERS });
     try {
+      await ensureSchema(env.DB);
+    } catch (e) {
+      console.error('database update failed', e?.stack || e);
+      return json({
+        error: 'Your sync service could not update its database. It tries again with the next request; if this stays, see Troubleshooting in docs/setup.md.',
+        code: 'schema', detail: String(e?.message ?? e).slice(0, 300), ...RELEASE,
+      }, 503);
+    }
+    try {
       return await handleApi(request, env, url);
     } catch (e) {
       if (e instanceof HttpError || e instanceof ShareError) return json({ error: e.message }, e.status);
@@ -255,6 +268,6 @@ export default {
   },
 
   async scheduled(controller, env, ctx) {
-    ctx.waitUntil(runReminders(env, controller.scheduledTime).catch((e) => console.error('reminders failed', e)));
+    ctx.waitUntil(ensureSchema(env.DB).then(() => runReminders(env, controller.scheduledTime)).catch((e) => console.error('reminders failed', e)));
   },
 };
