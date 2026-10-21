@@ -426,6 +426,8 @@ $script:ShareNeedsSync = 'Sharing needs sync with your own Cloudflare account (S
 # a Worker below this API has no shared lists (worker/src/version.js SHARING_API; the phone app's store.js says the same)
 $script:SharingApi = 2
 $script:WorkerTooOld = 'Your sync service runs an older version, without shared lists yet. It is updated together with this app (Settings > Updates); then try again.'
+# from this API on the Worker can update itself, given a token (worker/src/version.js SELF_UPDATE_API; store.js too)
+$script:SelfUpdateApi = 4
 function Save-Order($names) { try { Write-Utf8 $orderFile ((@($names) -join "`n") + "`n") } catch {} }
 function Open-Count([string]$name) {
   $n = 0
@@ -3376,6 +3378,7 @@ function Render-UpdateSettings {
   Add-CardRow (New-InfoRow 'Version' $cur -Tip (Get-VersionText))
   if (-not $InstallRoot) {
     Add-Footnote 'This copy runs from a folder of its own, not an installed one, so it does not update itself. setup.cmd installs it.'
+    Render-ServiceUpdate
     return
   }
   $running = Test-UpdateRunning
@@ -3429,6 +3432,102 @@ function Render-UpdateSettings {
     Render
   } 'When the app is idle. It restarts by itself; your lists stay as they are.')
   Add-Footnote 'When the app is idle. It restarts by itself; your lists stay as they are.'
+  Render-ServiceUpdate
+}
+
+# Updates > Your sync service: with a Cloudflare API token it updates itself, also while this PC is off
+# (worker/src/selfupdate.js; docs/sync.md, "The sync service updates itself"). What it says comes from the Worker
+# (GET /api/update, off the UI thread: Start-OwnApi), asked when the page opens, then every minute, every few seconds
+# while it updates. The token goes to the Worker, which checks it with Cloudflare and keeps it; this PC keeps nothing.
+$script:svc = @{ Status = $null; Error = ''; Msg = ''; Done = ''; Busy = $false; Asking = $false; At = 0; Box = $null }
+function Step-ServiceStatus {
+  $sv = $script:svc
+  if ($sv.Asking -or -not (Read-SyncConfigUi)) { return }
+  if ($script:sync -and $script:sync.WorkerApi -and $script:sync.WorkerApi -lt $script:SelfUpdateApi) { return }
+  $wait = $(if ($sv.Status -and $sv.Status['running']) { 3000 } else { 60000 })
+  if ((Get-NowMs) - $sv.At -lt $wait) { return }
+  $sv.Asking = $true; $sv.At = Get-NowMs
+  Start-OwnApi 'GET' 'update' $null {
+    param($r)
+    $sv = $script:svc; $sv.Asking = $false
+    if ($r.Status -eq 200 -and $r.Data) { $sv.Status = $r.Data; $sv.Error = '' } else { $sv.Error = Get-ApiError $r }
+    if ($script:view -eq 'updates') { Render }
+  }
+}
+# a change: the token, the switch, Update now. $done: what to say when it worked
+function Send-ServiceUpdate([string]$path, $body, [string]$done = '') {
+  $sv = $script:svc
+  $sv.Busy = $true; $sv.Msg = ''; $sv.Done = $done; Render
+  Start-OwnApi 'POST' $path $body {
+    param($r)
+    $sv = $script:svc; $sv.Busy = $false; $sv.At = Get-NowMs
+    if ($r.Status -eq 200 -and $r.Data) {
+      $sv.Status = $r.Data; $sv.Msg = ''
+      if ($sv.Box) { $sv.Box.Text = '' }
+      if ($sv.Done) { Show-Notice $sv.Done }
+    } else { $sv.Msg = Get-ApiError $r }
+    if ($script:view -eq 'updates') { Render }
+  }
+}
+function Save-ServiceToken {
+  $t = ([string]$script:svc.Box.Text).Trim()
+  if (-not $t) { Set-BoxError $script:svc.Box; return }
+  Send-ServiceUpdate 'update/token' @{ token = $t } 'Your sync service updates itself from now on.'
+}
+function Render-ServiceUpdate {
+  if (-not (Read-SyncConfigUi)) { return }
+  $sv = $script:svc; $s = $sv.Status
+  Add-Heading 'Your sync service'
+  $wv = $(if ($script:sync -and $script:sync.WorkerVersion) { [string]$script:sync.WorkerVersion } else { '' })
+  if ($script:sync -and $script:sync.WorkerApi -and $script:sync.WorkerApi -lt $script:SelfUpdateApi) {
+    Add-CardRow (New-InfoRow 'Version' $(if ($wv) { $wv } else { 'An older one' }))
+    Add-Footnote 'It updates with this app (above). From its next update on, it can also update itself.'
+    return
+  }
+  if (-not $s) {
+    Add-CardRow (New-InfoRow 'Version' $wv)
+    Add-Footnote $(if ($sv.Error) { "Could not ask your sync service: $($sv.Error)" } else { 'Asking your sync service...' }) $(if ($sv.Error) { $Red } else { $Faint })
+    return
+  }
+  Add-CardRow (New-InfoRow 'Version' ([string]$s['version']))
+  if (-not $s['knowsItself']) {
+    Add-Footnote 'It updates with this app (above). Once this app has updated it, it can also update itself (it then knows its Cloudflare account).'
+    return
+  }
+  if (-not $s['token']) {
+    # making the token is the one step only the user can do: Cloudflare's page, filled in; then paste it here
+    Add-CardRow (New-ActionRow 'Open Cloudflare''s token page' { try { Start-Process ([string]$script:svc.Status['tokenUrl']) } catch {} } -Help 'In the browser, filled in already: Workers Scripts, Edit, on your account only')
+    $box = New-Object System.Windows.Controls.TextBox
+    Set-Name $box 'Cloudflare API token' 'The token Cloudflare showed after Create Token'
+    $sv.Box = $box
+    $box.Add_PreviewKeyDown({ param($s, $e) if ($e.Key -eq 'Return') { $e.Handled = $true; Save-ServiceToken } })
+    Add-CardRow (New-InputRow $box 'Paste the token' (New-TextButton 'Save' { Save-ServiceToken }))
+    if ($sv.Busy) { Add-Footnote 'Checking it with Cloudflare...' }
+    elseif ($sv.Msg) { Add-Footnote $sv.Msg $Red }
+    Add-Footnote ('Let it update itself: it then installs new versions by itself, from this project''s releases on GitHub, also when this PC is off. ' +
+      'It needs a token from Cloudflare that may change the Workers of your account, and nothing else: open the page above (signed in), click Continue to summary and Create Token, copy the token and paste it here. ' +
+      '(No permission shown on that page? Create Custom Token; Permissions: Account, Workers Scripts, Edit; Account Resources: Include, your account.)')
+    return
+  }
+  $steps = @{ checking = 'Checking...'; downloading = 'Downloading...'; uploading = 'Uploading...'; switching = 'Switching over...' }
+  $run = [string]$s['running']
+  $newer = $(if (-not $run -and $s['latest'] -and [string]$s['latest'] -ne [string]$s['version']) { [string]$s['latest'] } else { '' })
+  $state = $(if ($run) { $(if ($steps[$run]) { $steps[$run] } else { 'Updating...' }) } elseif ($newer) { "$newer available" } elseif ($s['checkedAt']) { 'Up to date' } else { 'Not checked yet' })
+  Add-CardRow (New-InfoRow 'Status' $state -Dot:([bool]$newer) -LongValue -Tip $state)
+  Add-CardRow (New-ActionRow 'Update now' { Send-ServiceUpdate 'update/now' @{} 'Your sync service is looking for a new version.' } -Name 'Update your sync service now' -Help 'Looks for a new version now and installs it')
+  Add-CardRow (New-SwitchRow 'Update by itself' ([bool]$s['auto']) { param($on) Send-ServiceUpdate 'update/auto' @{ on = [bool]$on } } 'Looks every 6 hours and installs a new version. Off: only with Update now.')
+  $last = $(if (-not $run -and $s['last']) { $s['last'] } else { $null })
+  if ($sv.Msg) { Add-Footnote $sv.Msg $Red }
+  elseif ($last -and -not $last['ok']) { Add-Footnote ([string]$last['message']) $Red }
+  else {
+    $when = $(if ($s['checkedAt']) { "Checked at $(Format-Ms ([long]$s['checkedAt']) 'H:mm'); " } else { '' })
+    Add-Footnote ("$(if ($last) { "$($last['message']) " })$when$(if ($s['auto']) { 'it looks every 6 hours by itself.' } else { 'it looks only with Update now.' })")
+  }
+  Add-CardRow (New-ActionRow 'Remove the token' {
+      $r = [System.Windows.MessageBox]::Show($w, "Remove the token?`n`nYour sync service then stops updating itself; this app updates it again, as before.", 'Saqme To Do', 'YesNo', 'Question')
+      if ("$r" -eq 'Yes') { Send-ServiceUpdate 'update/token' @{ token = '' } 'The token is removed.' } } -Danger -Help 'It stops updating itself; this app updates it again')
+  $lines = @(@($s['log']) | Where-Object { $_ } | Select-Object -Last 5 | ForEach-Object { "$(Format-Ms ([long]$_['at']) 'd MMM H:mm')  $($_['text'])" })
+  Add-Footnote ((@("The token is kept by your sync service on Cloudflare, not on this PC; it can change the Workers of your account and nothing else.") + $(if ($lines.Count) { @('What it did:') + $lines } else { @() })) -join "`n")
 }
 
 # ---------------------------------------------------------------- sharing a list (the owner's side)
@@ -3985,6 +4084,7 @@ $timer.Add_Tick({
   if ($script:pairReq) { Receive-PairCode }
   elseif ($script:view -eq 'pair' -and $script:pairCode -and $script:pairCode.Until -lt (Get-Date)) { Render }   # a fresh code
   if ($script:apiReqs.Count) { Receive-OwnApi }
+  if ($script:view -eq 'updates' -and -not $SmokeTest) { Step-ServiceStatus }
   if ($script:joining) { Receive-JoinResult }
   while ($script:sync -and $script:sync.Ended.Count) {
     # its owner stopped sharing a list with this PC: it stays, as one of this PC's own lists
@@ -4155,6 +4255,19 @@ if ($SmokeTest) {
     Remove-Item -LiteralPath (Join-Path $InstallRoot 'update\result.json') -Force   # signed in: only available now
     Show-View 'about'
     if ((& $nameOf (& $find $verBar 'version')) -notmatch 'Update available: 99\.0\.0' -or -not (& $find $list 'open-updates')) { throw 'About and the version line: update available' }
+    # Updates > Your sync service (with sync of its own): the token to paste, then how updating itself stands. (What
+    # the Worker answers is set here: the smoke test has no Worker; worker/test/node/self-update.test.js has it.)
+    $keepCfg = ${function:Read-SyncConfigUi}
+    ${function:script:Read-SyncConfigUi} = { @{ url = 'https://saqme.smoke.test'; token = 'k' } }
+    try {
+      $script:svc.Status = @{ version = '1.2.0'; knowsItself = $true; token = $false; auto = $true; tokenUrl = 'https://dash.cloudflare.com/profile/api-tokens'; log = @() }
+      Show-View 'updates'
+      foreach ($k in 'Open Cloudflare''s token page', 'Cloudflare API token') { if (-not (& $find $list $k)) { throw "Updates > Your sync service: '$k' missing" } }
+      $script:svc.Status = @{ version = '1.2.0'; knowsItself = $true; token = $true; auto = $true; latest = '1.3.0'; checkedAt = 1; last = @{ ok = $true; message = 'Up to date (1.2.0).' }; log = @(@{ at = 1; text = 'checked' }) }
+      Render
+      foreach ($k in 'Update your sync service now', 'Update by itself', 'Remove the token') { if (-not (& $find $list $k)) { throw "Updates > Your sync service: '$k' missing" } }
+      if (-not (& $hasText $list '1.3.0 available')) { throw 'Updates > Your sync service does not say a new version is out' }
+    } finally { ${function:script:Read-SyncConfigUi} = $keepCfg; $script:svc.Status = $null }
     $script:upd.Latest = $null; Remove-Item -LiteralPath $InstallRoot -Recurse -Force; $InstallRoot = $keepRoot
     Show-View 'list'; Update-VersionDisplay
     if ($null -eq $InstallRoot -and $tray.Text -ne $ver) { throw "tray tooltip after the update: $($tray.Text)" }

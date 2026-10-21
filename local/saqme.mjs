@@ -415,13 +415,13 @@ export async function startApp({ dataDir = defaultDataDir(), port, interval = 10
     invite: pendingInvite,
   });
   /** The owner's side, for the window: the cloud Worker's share routes, with the window's project ids. */
-  async function ownerApi(method, path, body) {
+  async function ownerApi(method, path, body, { need = 'Sharing needs cloud sync (Settings, Sync & sharing, Set up sync).', timeoutMs = 15_000 } = {}) {
     const c = readCloudConfig(p.cloudConfig);
-    if (!c) throw Object.assign(new Error('Sharing needs cloud sync (Settings, Sync & sharing, Set up sync).'), { status: 409 });
+    if (!c) throw Object.assign(new Error(need), { status: 409 });
     let r;
     try {
       r = await fetch(`${c.url.replace(/\/+$/, '')}/api/${path}`, {
-        method, headers: { authorization: `Bearer ${c.token}`, 'content-type': 'application/json' }, body: body ? JSON.stringify(body) : undefined, signal: AbortSignal.timeout(15_000),
+        method, headers: { authorization: `Bearer ${c.token}`, 'content-type': 'application/json' }, body: body ? JSON.stringify(body) : undefined, signal: AbortSignal.timeout(timeoutMs),
       });
     } catch { throw Object.assign(new Error(`Could not reach ${new URL(c.url).host}. Are you online?`), { status: 503 }); }
     const data = await r.json().catch(() => ({}));
@@ -461,6 +461,15 @@ export async function startApp({ dataDir = defaultDataDir(), port, interval = 10
     decline() { pendingInvite = null; return { ok: true }; },
   };
 
+  // the sync service updating itself (worker/src/selfupdate.js), for Settings > Updates: the Worker's own routes
+  const noSync = { need: 'Your sync service can update itself once sync is set up (Settings, Sync & sharing).' };
+  const workerUpdate = {
+    status: () => ownerApi('GET', 'update', undefined, noSync),
+    token: (token) => ownerApi('POST', 'update/token', { token }, { ...noSync, timeoutMs: 60_000 }),   // (Cloudflare checks it)
+    auto: (on) => ownerApi('POST', 'update/auto', { on }, noSync),
+    now: () => ownerApi('POST', 'update/now', {}, noSync),
+  };
+
   let updater = null;   // (created once the port is known)
   const info = () => ({
     lists: p.lists,
@@ -486,7 +495,7 @@ export async function startApp({ dataDir = defaultDataDir(), port, interval = 10
     worker: () => { if (!updater) return { supported: false }; updater.retryWorker().catch((e) => log(`update: ${e?.message ?? e}`)); return updater.status(); },
   };
   const srv = await startServer({
-    port: port ?? portSetting(p), token, d1, publicDir: appPaths.public, version: VERSION, info, updates: updateRoutes,
+    port: port ?? portSetting(p), token, d1, publicDir: appPaths.public, version: VERSION, info, updates: updateRoutes, workerUpdate,
     onSync: () => { files.wake(); updater?.touch(); },
     onAllowDeletes: () => {
       for (const l of [files, cloud, ...[...shareLoops.values()].map((s) => s.loop)]) { l.allowMassDelete = true; l.wake(); }

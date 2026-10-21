@@ -1,5 +1,27 @@
 # Changes
 
+## Unreleased
+
+**Your sync service can update itself.** Until now your Worker, and the phone app it serves, got a new version
+only when the app on a computer updated it: with that computer off or away, phones stayed behind. Now you can give
+it a Cloudflare API token once, and it updates itself (opt-in).
+
+- **Settings > Updates** on a paired phone, and under *Your sync service* on Windows, Linux and macOS: its version,
+  and *Let it update itself…*: Cloudflare's token page opens filled in (*Workers Scripts: Edit*, on your account
+  only), you create the token and paste it, and the sync service checks it with Cloudflare and keeps it as its own
+  secret. Setup offers the same in a terminal (or takes `SAQME_UPDATE_TOKEN`).
+- Then it looks for a new release every 6 hours, and **Update now** looks at once (at most every 10 minutes).
+  **Update by itself** switches the automatic part off; **Remove the token** ends it. The page says how the last
+  update went in plain words, and what it did.
+- Same rules as the apps' updaters: only this repository's releases, SHA-256 checked, never an older version (and
+  never one with a lower API). Each release now carries `saqme-worker-X.Y.Z.bundle`, the Worker as it deploys
+  itself.
+- Never half updated: the code and the phone app go up as a new version that only one switch makes live, with
+  the bindings and secrets kept; the version before stays, and a new version whose database update fails goes back
+  to it by itself.
+- The apps' updaters, and setup run again from an older copy, leave a sync service that already runs that version
+  or a newer one alone. API 4.
+
 ## 1.1.3
 
 **Windows: the list's name instead of tabs.** The widget now has the same list switcher as the phone, Linux and

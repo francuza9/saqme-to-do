@@ -25,6 +25,7 @@
 | `desktop/update-core.ps1`, `update.ps1` | The Windows updater: version rules, the release manifest, checked downloads (`update-core.ps1`), and the run that hands a verified release to its own `setup.ps1 -Update` (`update.ps1`). See [Updates](#updates). |
 | `worker/src/index.js` | Worker entry: routing, bearer auth, cron handler. |
 | `worker/src/version.js` | The release (`VERSION`, read from `worker/package.json`) and the API version apps check ([sync.md](sync.md#versions-and-updates)). |
+| `worker/src/selfupdate.js` | The Worker updating itself, with a Cloudflare API token its owner gave it: the release checks, the bundle, the deploy through Cloudflare's API, going back ([sync.md](sync.md#the-sync-service-updates-itself)). |
 | `worker/src/schema.js`, `migrations.js` | The Worker updates its own database on the first request after a deploy (the migrations of `worker/migrations/`, recorded in wrangler's `d1_migrations`). |
 | `worker/src/pairing.js` | One-time pairing codes for phones (the app on an iPhone's Home Screen). |
 | `worker/src/shares.js` | Shared lists: invites, claims, the people a list is shared with, share keys, move codes, a share's browser reminders ([sync.md](sync.md#shared-lists)). The scope a share key gets is in `sync.js`. |
@@ -35,7 +36,7 @@
 | `worker/public/` | The PWA: `index.html`, `js/app.js` (UI), `js/store.js` (data + sync, one session per server), `js/model.js`, `js/dates.js`, `js/keys.js`, `js/markdown.js` (list format, shared with the Linux/macOS app), `js/zip.js` (export / import), `sw.js`; `join.html` + `js/join.js`, the page a shared list's invite link opens. |
 | `local/` | The Linux/macOS app (Node.js 22.13+, no dependencies): `saqme.mjs` (commands, the app process), `server.mjs` (local server), `d1.mjs` (D1 API on `node:sqlite`), `engine.mjs` (lists folder engine, a port of `sync-core.ps1`), `shares.mjs` (lists shared with this computer), `desktop.mjs` (notifications, app window), `update.mjs` (the updater's rules, downloads and install layout; also run by `setup.sh`), `updater.mjs` (the app's side: checks, *Update now*, idle updates), `paths.mjs`, `icns.mjs`. |
 | `worker/migrations/` | D1 schema (the Worker applies it itself, from `worker/src/migrations.js`). |
-| `scripts/` | `setup.ps1` (Windows), `setup.sh` (Linux, macOS, WSL), `cloud-setup.mjs` (provisioning; `--update` deploys code only, keeping the keys), `build-release.mjs` (the release assets), dev helpers. |
+| `scripts/` | `setup.ps1` (Windows), `setup.sh` (Linux, macOS, WSL), `cloud-setup.mjs` (provisioning; `--update` deploys code only, keeping the keys), `build-release.mjs` (the release assets, the Worker's bundle among them), dev helpers. |
 | `shared/fixtures/` | Input → expected output for every rule that exists in both languages; see below. |
 | `.github/workflows/pages.yml` | Publishes `worker/public` as a static site (GitHub Pages) for using the phone app without a Cloudflare account. |
 | `.github/workflows/release.yml` | On a `vX.Y.Z` tag: tests, builds the release zip and its manifest, publishes the GitHub Release the updaters read ([CONTRIBUTING.md](../CONTRIBUTING.md#how-to-ship-an-update)). |
@@ -144,7 +145,8 @@ device id), `sync\state.json` (sync engine state), `sync\sync.log`, `cloud.json`
   then reads open tasks with deadlines up to tomorrow (yours and theirs), evaluates the reminder rules in the
   time zone the phone reported, claims dedupe keys first (`INSERT … ON CONFLICT DO NOTHING RETURNING`) and
   sends Web Push; then the same for each share's browser subscriptions, in their time zone, for that list
-  only. Subscriptions the push service reports as gone are removed.
+  only. Subscriptions the push service reports as gone are removed. Every 6 hours, when the Worker has an update
+  token, the run looks for a new release instead (and installs it; the reminders then wait for the next run).
 
 - **Its own database updates:** each request and cron run first calls `ensureSchema` (`worker/src/schema.js`):
   one read of `meta.schema_version`, remembered for the isolate's life; only after a deploy with a new migration
@@ -156,7 +158,8 @@ The apps update themselves from GitHub Releases ([setup.md](setup.md#updating) f
 [CONTRIBUTING.md](../CONTRIBUTING.md#how-to-ship-an-update) for publishing one).
 
 ```
- GitHub Release vX.Y.Z: saqme-X.Y.Z.zip, saqme-release.json { version, api, minWorkerApi, asset { name, size, sha256 } }
+ GitHub Release vX.Y.Z: saqme-X.Y.Z.zip, saqme-worker-X.Y.Z.bundle,
+                        saqme-release.json { version, api, minWorkerApi, asset { name, size, sha256 }, worker { … } }
       │ the app: start + about once a day (fixed URLs on github.com; the manifest only names the version)
       ▼
  download -> size + SHA-256 = manifest? -> unpack -> the NEW release's installer, outside the app's process:
@@ -175,6 +178,19 @@ The apps update themselves from GitHub Releases ([setup.md](setup.md#updating) f
 | Checks and *Update now* | `widget.ps1` (Settings > Updates), a background runspace | `local/updater.mjs` in `saqme serve` |
 | Installs it | `desktop\update.ps1` -> the release's `scripts\setup.ps1 -Update` | the release's `local/update.mjs apply` (via `systemd-run --user` under systemd, else detached) |
 | What it says | `update\status.json`, `update\result.json` | the same, in `update/` |
+
+**The Worker updates itself** too, when its owner gave it a token (opt-in; [sync.md](sync.md#the-sync-service-updates-itself)):
+
+```
+ the Worker's cron, every 6 hours (or Update now on any app: POST /api/update/now)
+   -> the same manifest, the same rules (and never a lower API) -> saqme-worker-X.Y.Z.bundle: size, header SHA-256,
+   each part's SHA-256 as it is used -> Cloudflare's API with the token: upload session (the phone app's new files),
+   a new version (not deployed; bindings and secrets kept) -> one deployment switches to it
+   -> the new version checks itself on its first run; its database update failing -> back to the version before
+```
+
+A Worker that runs a version already is left alone by the apps' updaters and by `cloud-setup.mjs` (which never
+deploys over a newer one).
 
 Lists and the data folder are never part of it. The release has no signature of its own: it is checked
 against the SHA-256 in its manifest, both come over HTTPS from the repository's GitHub Releases at addresses the
@@ -201,7 +217,7 @@ test suites load: `worker/test/node/shared-fixtures.test.js` (Vitest) and
 | Links: pairing links, invite links, a sync server's short name ("Groceries (from nuca)") | `sync-core.ps1` `Get-PairingLink`, `Get-InviteLink`, `Get-ServerLabel` | `public/js/pairing.js` `parsePairingLink`, `parseInviteLink`, `serverLabel` | `text.json` |
 | The lists-folder engine: files → changes, server rows → file plans | `sync-core.ps1` `Add-LocalDiff`, `Get-RemotePlan`, `Invoke-PlanOps` | `local/engine.mjs` (a port) | `engine.json`; the end-to-end test also runs both engines against one Worker |
 | QR codes for pairing | `desktop/qr.ps1` | `public/js/qr.js` | `qr.test.js` checks that both build the same matrix (when `powershell.exe` is there) |
-| Updates: version order, the release manifest, whether the apps may switch while the Worker is behind | `update-core.ps1` `Compare-SaqmeVersion`, `Test-ReleaseManifest`, `Get-UpdateDecision` | `local/update.mjs` `compareVersions`, `checkManifest`, `updateDecision` | `update.json` |
+| Updates: version order, the release manifest, whether the apps may switch while the Worker is behind | `update-core.ps1` `Compare-SaqmeVersion`, `Test-ReleaseManifest`, `Get-UpdateDecision` | `local/update.mjs` `compareVersions`, `checkManifest`, `updateDecision`; the Worker's own copy in `src/selfupdate.js` (with `selfUpdateDecision`, JavaScript only) | `update.json` |
 | Colours, type, spacing | `desktop/tokens.ps1` | `public/css/tokens.css` | both generated from `design/tokens.json`; `tokens.test.js` fails if they are stale or a colour is written anywhere else |
 
 Decisions the fixtures pin down, where the two languages behave differently by default:
@@ -256,6 +272,11 @@ disagree, decide which side is right, fix the other one and keep the case in the
   with the token, usable once, for 10 minutes, at most 5 open; 10 wrong guesses drop every open code, so a
   guess has about 10 in 8·10¹¹ chances per code. Stored as SHA-256 digests in D1's `meta` table. With no
   code open a claim writes nothing, so strangers cannot run up the database's write quota.
+- **The update token** (opt-in, `worker/src/selfupdate.js`): a Cloudflare API token with *Workers Scripts: Edit*
+  on the owner's account, checked with Cloudflare and stored as the Worker secret `UPDATE_TOKEN` by the Worker
+  itself; no route returns it, no app or D1 row keeps it. Its routes (`/api/update/…`) take the owner's key
+  only. The Worker uses it for Cloudflare's API alone, and installs only releases of this repository checked by
+  SHA-256; what it can do and what it trusts: [sync.md](sync.md#the-sync-service-updates-itself).
 - **CORS:** the Worker's API answers cross-origin requests, so a copy of the app on a static host can pair
   with it. That gives other sites nothing: there are no cookies, and every call needs the token (the
   pairing code claim needs an open code).

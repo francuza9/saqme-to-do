@@ -5,8 +5,8 @@ import { describe, it, expect, vi, afterEach } from 'vitest';
 import { mkdirSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { Store, OLDER_SERVER, SHARING_API } from '../../public/js/store.js';
-import { SHARING_API as WORKER_SHARING_API, API_VERSION, MIN_WORKER_API } from '../../src/version.js';
+import { Store, OLDER_SERVER, SHARING_API, SELF_UPDATE_API } from '../../public/js/store.js';
+import { SHARING_API as WORKER_SHARING_API, SELF_UPDATE_API as WORKER_SELF_UPDATE_API, API_VERSION, MIN_WORKER_API } from '../../src/version.js';
 import { newState, syncCycle } from '../../../local/engine.mjs';
 
 /** A sync service that answers every sync with `extra` on top of an empty answer, and 404 to anything else. */
@@ -27,6 +27,9 @@ describe('API versions', () => {
     expect(SHARING_API).toBe(WORKER_SHARING_API);
     const widget = readFileSync(new URL('../../../desktop/widget.ps1', import.meta.url), 'utf8');
     expect(Number(widget.match(/^\$script:SharingApi = (\d+)/m)?.[1])).toBe(WORKER_SHARING_API);
+    // and what "your sync service updates itself" needs
+    expect(SELF_UPDATE_API).toBe(WORKER_SELF_UPDATE_API);
+    expect(Number(widget.match(/^\$script:SelfUpdateApi = (\d+)/m)?.[1])).toBe(WORKER_SELF_UPDATE_API);
     expect(MIN_WORKER_API).toBeLessThanOrEqual(API_VERSION);
   });
 

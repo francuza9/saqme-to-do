@@ -20,10 +20,14 @@
 //                     for the apps
 //
 // Steps: Node check -> npm ci (worker/) -> wrangler login (the one manual step) -> D1 database ->
-// worker/wrangler.toml -> token + VAPID keys -> deploy -> health check -> desktop config -> pairing link + QR.
+// worker/wrangler.toml -> token + VAPID keys -> deploy -> health check -> updating itself (asks) -> desktop config
+// -> pairing link + QR.
 // The keys (Worker secrets) are sent only with a first setup, a rotation, or to a Worker that has none: they
 // stay on the Worker across deploys, so every other deploy is code only. The database's tables are made and
-// updated by the Worker itself (worker/src/schema.js), on its first request after a deploy.
+// updated by the Worker itself (worker/src/schema.js), on its first request after a deploy. A Worker that runs a
+// newer release than this copy (it updated itself: worker/src/selfupdate.js) keeps its code; only keys go up.
+// Updating itself needs a Cloudflare API token, which only you can make: setup asks (in a terminal) and hands it
+// to the Worker, or takes it from the environment variable SAQME_UPDATE_TOKEN; the apps offer it later too.
 import { spawn, spawnSync } from 'node:child_process';
 import { existsSync, mkdirSync, readFileSync, writeFileSync, rmSync, mkdtempSync, chmodSync, openSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -32,6 +36,9 @@ import { fileURLToPath } from 'node:url';
 import { randomBytes } from 'node:crypto';
 import { createInterface } from 'node:readline';
 import { ReadStream } from 'node:tty';
+
+// (worker/src is imported when needed: an old Node.js gets checkNode's message instead of a syntax error)
+const compareVersions = async (a, b) => (await import('../worker/src/selfupdate.js')).compareVersions(a, b);
 
 const here = dirname(fileURLToPath(import.meta.url));
 const repo = resolve(here, '..');
@@ -83,11 +90,16 @@ function terminalInput() {
   } catch { return null; }
 }
 
-async function ask(question, { yes, fallback = '' } = {}) {
+async function ask(question, { yes, fallback = '', secret = false } = {}) {
   const term = yes ? null : terminalInput();
   if (!term) return fallback;
-  const rl = createInterface({ input: term.input, output: process.stdout });
-  const answer = await new Promise((r) => rl.question(`      ${question} `, r));
+  const rl = createInterface({ input: term.input, output: process.stdout, terminal: secret ? true : undefined });
+  // a secret: what is typed (pasted) is not shown; the question goes out, then nothing until Enter
+  let muted = false;
+  const write = rl._writeToOutput?.bind(rl);
+  if (secret && write) rl._writeToOutput = (s) => { if (!muted) write(s); };
+  const answer = await new Promise((r) => { rl.question(`      ${question} `, r); muted = secret; });
+  if (secret) process.stdout.write('\n');
   rl.close();
   term.close();
   return answer.trim() || fallback;
@@ -307,6 +319,65 @@ async function tokenWorks(url, token) {
   } catch { return null; }
 }
 
+/** What the Worker at url runs -> { version, api }, or null (not reachable: a new Worker, offline). */
+async function workerRelease(url) {
+  if (!url) return null;
+  try {
+    const r = await fetch(`${url.replace(/\/+$/, '')}/api/health`, { cache: 'no-store', signal: AbortSignal.timeout(Number(process.env.SAQME_HEALTH_TIMEOUT_MS || 8000)) });
+    const d = await r.json();
+    return typeof d.version === 'string' ? { version: d.version, api: Number.isInteger(d.api) ? d.api : 1 } : null;
+  } catch { return null; }
+}
+
+/** wrangler secret bulk: the keys only, on the code that runs (a Worker newer than this copy keeps its code). */
+async function putSecrets(workerDir, secrets, accountEnv) {
+  const dir = mkdtempSync(join(tmpdir(), 'saqme-'));
+  const file = join(dir, 'secrets.json');
+  try {
+    writeFileSync(file, JSON.stringify({ AUTH_TOKEN: secrets.token, VAPID_PUBLIC_KEY: secrets.vapidPublicKey, VAPID_PRIVATE_KEY: secrets.vapidPrivateKey }), { mode: 0o600 });
+    const r = await run(workerDir, ['secret', 'bulk', file], { env: accountEnv });
+    if (r.code !== 0) throw new SetupError('The new keys could not be sent to your sync service.', `Wrangler said:\n${lastLines(r.out)}`);
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+}
+
+/**
+ * Updating itself (worker/src/selfupdate.js): offered when the Worker can and has no token yet. The token comes from
+ * Cloudflare's token page (prefilled; only the user can create it), pasted here, or from SAQME_UPDATE_TOKEN; the
+ * Worker checks it and keeps it as its secret (POST /api/update/token). Under --yes, or without a terminal, it only
+ * says where the apps offer it.
+ */
+async function offerSelfUpdate(url, token, opts) {
+  let status = null;
+  try {
+    const r = await fetch(`${url}/api/update`, { headers: { authorization: `Bearer ${token}` }, signal: AbortSignal.timeout(10_000) });
+    if (r.ok) status = await r.json();
+  } catch { /* not reachable yet: the apps offer it later */ }
+  if (!status?.knowsItself || status.token) return;
+  let t = process.env.SAQME_UPDATE_TOKEN?.trim() ?? '';
+  if (!t) {
+    const later = 'Your sync service can also update itself, even when this computer is off: Settings > Updates in the app sets it up.';
+    if (opts.yes || !terminalInput()) { say.info(later); return; }
+    say.info('Your sync service can update itself when a new version is out, even when this computer is off.');
+    say.info('It needs a Cloudflare API token that may change the Workers of this account, and nothing else.');
+    if (!/^y/i.test(await ask('Set that up now? [y/N]', { fallback: 'n' }))) { say.info(later); return; }
+    say.info('1. Open this page (signed in to Cloudflare): it is filled in already.');
+    console.log(`\n      ${status.tokenUrl}\n`);
+    say.info('2. Click "Continue to summary", then "Create Token", and copy the token it shows.');
+    say.info('   (If the page shows no permission: Create Custom Token; Permissions: Account, Workers Scripts, Edit;');
+    say.info('   Account Resources: Include, your account.)');
+    t = await ask('3. Paste the token here (it is not shown), then press Enter:', { secret: true });
+    if (!t) { say.info(later); return; }
+  }
+  try {
+    const r = await fetch(`${url}/api/update/token`, {
+      method: 'POST', headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' }, body: JSON.stringify({ token: t }), signal: AbortSignal.timeout(60_000),
+    });
+    const d = await r.json().catch(() => ({}));
+    if (r.ok) say.ok('your sync service updates itself from now on (Settings > Updates in the app can turn it off)');
+    else say.warn(`The token was not taken: ${d.error || `HTTP ${r.status}`} Settings > Updates in the app can try again.`);
+  } catch (e) { say.warn(`Could not give the token to your sync service (${e.cause?.code || e.message}); Settings > Updates in the app can do it later.`); }
+}
+
 /** saqme.<subdomain>.workers.dev -> saqme (the Worker's name), else ''. */
 function workerNameOf(url) {
   try {
@@ -479,7 +550,15 @@ async function updateMain(opts, workerDir) {
   const secrets = await workerSecrets(workerDir, accountEnv);
   if (secrets === 'missing') throw new SetupError(`There is no sync service called "${workerName}" in this Cloudflare account.`, 'Set up sync again (Settings > Sync & sharing) to make it. Nothing was changed.');
   if (secrets && !secrets.has('AUTH_TOKEN')) throw new SetupError('Your sync service has no access key on Cloudflare, so updating it would leave it locked.', 'Set up sync again (Settings > Sync & sharing). Nothing was changed.');
-  const url = await deploy(workerDir, null, accountEnv, { ...opts, knownUrl: state.url || desktop?.url || '' });
+  const knownUrl = state.url || desktop?.url || '';
+  const running = await workerRelease(knownUrl);
+  if (running && (await compareVersions(running.version, version)) >= 0) {
+    // (it updated itself, or another computer did: never back to an older version)
+    say.ok(`your sync service runs ${running.version} already; left as it is`);
+    writeResult(opts.result, { ok: true, url: knownUrl, version: running.version, reachable: true });
+    return;
+  }
+  const url = await deploy(workerDir, null, accountEnv, { ...opts, knownUrl });
   say.ok('code and phone app updated; your keys and lists stay as they are');
   Object.assign(state, { accountId: account.id, workerName, databaseName: db.name, databaseId: db.id, url, updatedAt: new Date().toISOString() });
   writePrivateJson(opts.state, state);
@@ -566,13 +645,23 @@ async function main(opts) {
     send = names === 'missing' || (names instanceof Set && !names.has('AUTH_TOKEN'));
   }
   if (send && !(secrets.vapidPublicKey && secrets.vapidPrivateKey)) { await newPushKeys(secrets); Object.assign(state, secrets); writePrivateJson(opts.state, state); }
-  const url = await deploy(workerDir, send ? secrets : null, accountEnv, opts);
+  // a Worker that runs a newer release than this copy (it updated itself) keeps its code: never back to an older one
+  const version = readJson(join(workerDir, 'package.json'))?.version ?? '';
+  const knownUrl = state.url || (opts.desktopConfig ? readJson(opts.desktopConfig)?.url : '') || '';
+  const running = db.existed ? await workerRelease(knownUrl) : null;
+  let url;
+  if (running && (await compareVersions(running.version, version)) > 0) {
+    say.ok(`your sync service runs ${running.version}, newer than this copy (${version}): its code stays as it is`);
+    if (send) await putSecrets(workerDir, secrets, accountEnv);
+    url = knownUrl.replace(/\/+$/, '');
+  } else url = await deploy(workerDir, send ? secrets : null, accountEnv, opts);
   say.ok(send ? 'the keys went up with it' : 'the keys on your Worker stay as they are');
   Object.assign(state, { url, updatedAt: new Date().toISOString() });
   writePrivateJson(opts.state, state);
 
   say.step(6, total, 'Checking it works');
   const reachable = await verify(url, secrets.token);
+  if (reachable) await offerSelfUpdate(url, secrets.token, opts);
   if (opts.desktopConfig) writeDesktopConfig(opts.desktopConfig, url, secrets.token);
   else say.info('(no desktop app on this machine - on Windows, paste the link below into Settings > Sync & sharing)');
   if (opts.rotateToken) await forgetPushSubscriptions(workerDir, db, accountEnv);

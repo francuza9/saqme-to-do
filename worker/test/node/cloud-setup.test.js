@@ -1,6 +1,7 @@
 // scripts/cloud-setup.mjs end to end against a fake wrangler (no Cloudflare involved).
-import { describe, it, expect, beforeAll } from 'vitest';
-import { spawnSync } from 'node:child_process';
+import { describe, it, expect, beforeAll, afterAll } from 'vitest';
+import { spawn, spawnSync } from 'node:child_process';
+import { createServer } from 'node:http';
 import { mkdtempSync, readFileSync, writeFileSync, copyFileSync, existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, dirname } from 'node:path';
@@ -22,12 +23,48 @@ function runSetup(d, extra = [], fakeInit) {
   if (fakeInit) writeFileSync(d.fakeState, JSON.stringify({ loggedIn: false, dbs: [], deploys: [], subdomain: true, calls: [], ...fakeInit }));
   // setup as run on someone's own computer: a CI=true from the test runner would reach the wrangler setup runs
   // interactively, and wrangler (the fake too) never asks anything under CI
-  const env = { ...process.env, SAQME_WRANGLER_JS: fake, FAKE_WRANGLER_STATE: d.fakeState, SAQME_VERIFY_ATTEMPTS: '1', NO_COLOR: '1' };
-  delete env.CI;
   const r = spawnSync(process.execPath, [script, '--state', d.state, '--desktop-config', d.desktop, '--worker-dir', d.worker, '--skip-install', '--yes', ...extra], {
-    encoding: 'utf8', env,
+    encoding: 'utf8', env: setupEnv(d),
   });
   return { ...r, fakeState: JSON.parse(readFileSync(d.fakeState, 'utf8')) };
+}
+function setupEnv(d, extra = {}) {
+  const env = { ...process.env, SAQME_WRANGLER_JS: fake, FAKE_WRANGLER_STATE: d.fakeState, SAQME_VERIFY_ATTEMPTS: '1', SAQME_HEALTH_TIMEOUT_MS: '1500', NO_COLOR: '1', ...extra };
+  delete env.CI;
+  delete env.SAQME_UPDATE_TOKEN;
+  return { ...env, ...extra };
+}
+/** The same, while this process answers as the Worker (a stand-in on 127.0.0.1): it must not block on the setup. */
+function runSetupAsync(d, extra = [], env = {}) {
+  return new Promise((resolveRun) => {
+    const child = spawn(process.execPath, [script, '--state', d.state, '--desktop-config', d.desktop, '--worker-dir', d.worker, '--skip-install', '--yes', ...extra], { env: setupEnv(d, env) });
+    let stdout = '';
+    let stderr = '';
+    child.stdout.on('data', (c) => { stdout += c; });
+    child.stderr.on('data', (c) => { stderr += c; });
+    child.on('close', (status) => resolveRun({ status, stdout, stderr, fakeState: JSON.parse(readFileSync(d.fakeState, 'utf8')) }));
+  });
+}
+/** A Worker on 127.0.0.1 that says it runs `version`; it records what it was asked. */
+async function standInWorker(version, { token = 'k'.repeat(43), selfUpdate = { knowsItself: true, token: false, tokenUrl: 'https://dash.cloudflare.com/profile/api-tokens?x' } } = {}) {
+  const seen = [];
+  const server = createServer((req, res) => {
+    let body = '';
+    req.on('data', (c) => { body += c; });
+    req.on('end', () => {
+      seen.push({ method: req.method, path: req.url, auth: req.headers.authorization, body });
+      const send = (status, data) => { res.writeHead(status, { 'content-type': 'application/json' }); res.end(JSON.stringify(data)); };
+      const owner = req.headers.authorization === `Bearer ${token}`;
+      if (req.url === '/api/health') return send(200, { ok: true, version, api: 4 });
+      if (!owner) return send(401, { error: 'unauthorized' });
+      if (req.url === '/api/config') return send(200, { version, api: 4 });
+      if (req.url === '/api/update' && req.method === 'GET') return send(200, selfUpdate);
+      if (req.url === '/api/update/token') return JSON.parse(body).token === 'good-token-0123456789abcdef' ? send(200, { ...selfUpdate, token: true }) : send(400, { error: 'Cloudflare does not know this token.' });
+      return send(404, { error: 'not found' });
+    });
+  });
+  await new Promise((r) => server.listen(0, '127.0.0.1', r));
+  return { url: `http://127.0.0.1:${server.address().port}`, seen, close: () => new Promise((r) => server.close(r)) };
 }
 const json = (p) => JSON.parse(readFileSync(p, 'utf8'));
 
@@ -219,6 +256,57 @@ describe('cloud setup', () => {
       expect(noWorker.status).toBe(1);
       expect(json(join(w.dir, 'r3.json')).message).toMatch(/no sync service called "saqme"/);
       expect(noWorker.fakeState.deploys).toHaveLength(0);
+    });
+  });
+
+  describe('a Worker that updated itself (it runs a newer release than this copy)', () => {
+    let w;
+    let worker;
+    beforeAll(async () => {
+      w = setupDirs();
+      expect(runSetup(w, [], {}).status).toBe(0);
+      worker = await standInWorker('99.0.0', { token: json(w.state).token });
+      writeFileSync(w.state, JSON.stringify({ ...json(w.state), url: worker.url }));
+    });
+    afterAll(() => worker.close());
+
+    it('keeps its code: setup run again from this copy does not deploy over it', async () => {
+      const deploys = json(w.fakeState).deploys.length;
+      const r = await runSetupAsync(w);
+      expect(r.status, r.stdout + r.stderr).toBe(0);
+      expect(r.stdout).toMatch(/runs 99\.0\.0, newer than this copy .*: its code stays as it is/);
+      expect(r.fakeState.deploys).toHaveLength(deploys);
+      // (and where updating itself is set up, since this one has no token yet: under --yes it only says so)
+      expect(r.stdout).toMatch(/can also update itself, even when this computer is off: Settings > Updates/);
+    });
+
+    it('the apps\' updater leaves it as it is too', async () => {
+      const deploys = json(w.fakeState).deploys.length;
+      const r = await runSetupAsync(w, ['--update', '--result', join(w.dir, 'upd.json')]);
+      expect(r.status, r.stdout + r.stderr).toBe(0);
+      expect(r.fakeState.deploys).toHaveLength(deploys);
+      expect(json(join(w.dir, 'upd.json'))).toMatchObject({ ok: true, version: '99.0.0' });
+    });
+
+    it('a token for updating itself goes to the Worker, which checks it; one it refuses is said so', async () => {
+      let r = await runSetupAsync(w, [], { SAQME_UPDATE_TOKEN: 'good-token-0123456789abcdef' });
+      expect(r.status, r.stdout + r.stderr).toBe(0);
+      const post = worker.seen.filter((s) => s.path === '/api/update/token').at(-1);
+      expect(JSON.parse(post.body)).toEqual({ token: 'good-token-0123456789abcdef' });
+      expect(post.auth).toBe(`Bearer ${json(w.state).token}`);
+      expect(r.stdout).toMatch(/updates itself from now on/);
+      expect(json(w.state)).not.toHaveProperty('updateToken');   // (kept by the Worker only)
+      expect(readFileSync(w.state, 'utf8')).not.toContain('good-token');
+      r = await runSetupAsync(w, [], { SAQME_UPDATE_TOKEN: 'bad-token-0123456789abcdef0' });
+      expect(r.stdout).toMatch(/The token was not taken: Cloudflare does not know this token/);
+    });
+
+    it('new keys go up on their own (a rotation): still no deploy of the older code', async () => {
+      const deploys = json(w.fakeState).deploys.length;
+      const r = await runSetupAsync(w, ['--rotate-token']);
+      expect(r.status, r.stdout + r.stderr).toBe(0);
+      expect(r.fakeState.deploys).toHaveLength(deploys);
+      expect(r.fakeState.bulk.at(-1).AUTH_TOKEN).toBe(json(w.state).token);
     });
   });
 

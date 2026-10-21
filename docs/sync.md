@@ -402,7 +402,8 @@ checklist for trying it by hand with a second person: [testing-shared-lists.md](
 ## Versions and updates
 
 The apps update themselves and the user's Worker ([setup.md, "Updating"](setup.md#updating)), one device at a
-time, so for a while a newer Worker serves older apps, or the other way round. Both must keep syncing.
+time, and a Worker given a token updates itself ([below](#the-sync-service-updates-itself)), so for a while a newer
+Worker serves older apps, or the other way round. Both must keep syncing.
 
 **API version.** `worker/src/version.js` has the release (`VERSION`, from `worker/package.json`, the one place
 it is written) and `API_VERSION`, a whole number that goes up when the Worker learns something apps rely on:
@@ -412,6 +413,7 @@ it is written) and `API_VERSION`, a whole number that goes up when the Worker le
 | 1 | before 1.1.0 (it sends no `api`) | sync, pairing codes, reminders |
 | 2 | 1.1.0 | shared lists (`/api/shares/*`, `/api/join/*`) |
 | 3 | 1.1.0 | the relay for lists shared with a phone that has sync of its own (`/api/remotes/*`) |
+| 4 | 1.2.0 | the Worker updates itself (`/api/update/*`, [below](#the-sync-service-updates-itself)) |
 
 Every `/api/health`, `/api/config` and `/api/sync` answer carries `version` and `api` (the local server of the
 Linux/macOS app says the same about itself). An answer without `api` comes from a Worker before 1.1.0: API 1.
@@ -424,7 +426,8 @@ Linux/macOS app says the same about itself). An answer without `api` comes from 
   know. Nothing a Worker answers is ever renamed or removed without an API version that says so.
 - **The updater's rule** (`shared/fixtures/update.json`, the same in `local/update.mjs` and
   `desktop/update-core.ps1`): each release's manifest says the oldest Worker API its apps need
-  (`minWorkerApi`, from `MIN_WORKER_API`). The Worker is updated first; if that worked (or there is no Worker),
+  (`minWorkerApi`, from `MIN_WORKER_API`). The Worker is updated first (left as it is when it runs that version or
+  a newer one already: it updated itself, or another computer did); if that worked (or there is no Worker),
   the apps switch. If it did not (signed out of Cloudflare, an error), the apps still switch when the Worker that
   runs has at least `minWorkerApi` (the Worker is tried again later), and otherwise the whole update waits.
   So sync never runs with apps that need a Worker it does not have.
@@ -444,6 +447,101 @@ applies what is missing on the first request or cron run after a deploy (`worker
   reason ("Your sync service could not update its database…"); the next request tries again.
 
 New installs still create the database the same way; the Worker fills it on its first request.
+
+### The sync service updates itself
+
+Without it, the Worker (and with it the phone app it serves) gets a release only when a computer's app updates
+and deploys it: a phone whose computer is off or away stays on the old version. So the Worker can also update
+**itself** (`worker/src/selfupdate.js`), from 1.2.0 on. It is opt-in: it needs a Cloudflare API token, which only
+the owner can make.
+
+**The token.** One permission: *Account · Workers Scripts · Edit*, on the one account the Worker is in, nothing
+else (no zones, no D1, no other account). It is kept as the Worker secret `UPDATE_TOKEN` and never leaves the
+Worker again (no route returns it; it is not in D1). It cannot be made for the user from `wrangler login`: that
+sign-in's OAuth scopes cannot create API tokens, and handing the Worker the OAuth token itself would give it far
+more (D1, KV, R2, Pages, every account of the login) and break when it rotates. So the apps open Cloudflare's
+*Create API token* page as a prefilled template:
+
+```
+https://dash.cloudflare.com/profile/api-tokens?permissionGroupKeys=[{"key":"workers_scripts","type":"edit"}]&name=Saqme+sync+service+updates&accountId=<account>
+```
+
+The user checks it, clicks *Continue to summary* and *Create Token*, copies the token and pastes it into the app.
+(If Cloudflare ever stops filling in the template, the apps say what to pick by hand: *Create Custom Token*,
+Permissions *Account · Workers Scripts · Edit*, Account Resources *Include · <the account>*.) The app sends it to
+its own Worker, `POST /api/update/token { token }` (owner's key), and the Worker checks it (Cloudflare knows it and
+it is active: `GET /accounts/<id>/tokens/verify`, else `/user/tokens/verify`; it opens this Worker:
+`GET …/workers/scripts/<name>/settings`) and stores it with that same token (`PUT …/secrets`), which proves it
+may change the Worker. One route for every app: setup (new installs, `cloud-setup.mjs` asks), Settings > Updates
+on Windows, Linux and macOS (through their own server), and the phone app. The Worker knows its account and name
+from two variables in `wrangler.toml` (`SAQME_ACCOUNT_ID`, `SAQME_WORKER_NAME`); a Worker deployed before 1.2.0
+learns them with its next update from a computer.
+
+**When.** The cron (every 5 minutes) looks at GitHub every 6 hours; **Update now** looks at once (at most every 10
+minutes: `429` with "try again in N minutes" otherwise) and runs after the answer. One run at a time (a lock in
+D1). A run that installs leaves that cron run's reminders to the next one, 5 minutes later (late reminders are
+still sent): a run has at most 50 subrequests and 50 D1 queries on the free plan, and an install needs about 15 +
+one per changed file of the phone app.
+
+**The rules** are the apps' (`shared/fixtures/update.json`, `selfUpdate` cases): the manifest at
+`github.com/<repo>/releases/latest/download/saqme-release.json`, `<repo>` from `worker/package.json` only; every
+download from `github.com/<repo>/releases/download/<tag>/` with a name the manifest's version fixes; https only;
+a newer version only (never the same or older); and never a release whose `api` is lower than the running
+Worker's (`minWorkerApi` is about the apps; a Worker is always updated before or with them). A version that went
+back by itself (below) is not tried again by the cron, only with Update now.
+
+**What it deploys.** Each release carries `saqme-worker-X.Y.Z.bundle` (`scripts/build-release.mjs`): the Worker's
+code bundled as wrangler bundles it (esbuild, one module), the phone app's files with wrangler's own asset hash
+(BLAKE3 of base64 + extension) and content type, and the settings from `wrangler.toml.template` (compatibility
+date and flags, `run_worker_first`, `_headers`, crons, which bindings and variables the code needs). The manifest
+gives its size, its SHA-256, and the SHA-256 of its header; the header gives each part's SHA-256. The Worker checks
+the size and the header, then each part as it uploads it (hashing all 2 MB would take a good part of the 10 ms of
+CPU a free-plan Worker gets; it reads only what it sends). The deploy is the one `wrangler deploy` (4.151) makes,
+through Cloudflare's API with the token:
+
+1. `GET …/settings` (the bindings it has; a release that needs one the Worker lacks stops here: "the app on your
+   computer updates it") and `GET …/deployments` (the version that runs: the one to go back to).
+2. `POST …/assets-upload-session` with the files' hashes and sizes; Cloudflare answers which it lacks, in buckets.
+   Each bucket: `POST /accounts/<id>/workers/assets/upload?base64=true` with the session's JWT (or one file per
+   request when the JWT says so). The last answer is the assets' completion token. Unchanged files are not sent.
+3. `POST …/versions?bindings_inherit=strict`: a **new version, not deployed**, multipart (`metadata` + the module):
+   the bundle's code and settings, D1 and variables as the settings say, `keep_bindings: [secret_text,
+   secret_key]` (AUTH_TOKEN, the push keys, UPDATE_TOKEN stay), the assets binding with the completion token.
+   Cloudflare starts the code before it accepts it.
+4. `POST …/deployments` `{ strategy: percentage, versions: [{ new, 100 }] }`: code and phone app switch together.
+5. `PUT …/schedules` only if the release changed the cron (the schedule is not part of a version).
+
+**Never half updated.** Until step 4 nothing serves the new version: a run that stops anywhere before it (no
+network, the 30 s after an Update now answer, a token without the permission, a bad download) changes nothing that
+runs, and is tried again. Step 4 is one switch of code and files. The version before stays on Cloudflare and its id
+is in D1 (`meta.update.deployed`). The new version **checks itself** on its first run (the cron, or Settings asking
+how it stands): its database update must succeed; if it fails, it deploys the version before by itself (whose
+database is as it was: migrations roll back whole, and an older Worker works on a newer schema), logs why, and
+that version is not tried again by itself. By hand: the dashboard's *Deployments > Rollback*, or
+`npx wrangler rollback`. (Right after the switch the old Worker cannot ask the new one how it is: a Worker cannot
+fetch its own workers.dev address, error 1042.)
+
+**Off, and what happened.** *Update by itself* (Settings > Updates, `POST /api/update/auto`) stops the cron's runs;
+**Update now** still works. *Remove the token* deletes the secret (`DELETE …/secrets/UPDATE_TOKEN`); so does
+`npx wrangler secret delete UPDATE_TOKEN`, or deleting the token in the Cloudflare dashboard (the Worker then says
+the token was not accepted). Every step goes to the Worker's log (`npx wrangler tail`, the dashboard's Logs) and the
+last 30 to `meta.update`, which Settings shows (`GET /api/update`: version, token yes/no, running, the newest
+release seen, how the last run ended).
+
+**Trust.** The token can do what *Workers Scripts: Edit* allows on that account: upload, deploy, roll back and
+delete Workers *of that account*, change their secrets, settings and schedules (including any other Worker there,
+not just Saqme's), read their code and settings. It cannot read the secrets' values, the D1 data directly, other
+accounts, DNS or zones. Whoever has the Worker's code running has it, which is the same as before: the Worker
+already holds the owner's key and all lists. What the Worker installs is exactly what the apps' updaters install:
+a release of this repository, built by its release workflow, checked by SHA-256 against the manifest of the same
+release. If the repository (or the account that can push `v*` tags) were compromised, a malicious release would
+reach self-updating Workers within 6 hours, as it would reach every app that updates itself within a day; the
+token would then also be in that code's hands (for this account's Workers). Tag protection (`release.yml`) is the
+defence, for both. Not opting in leaves the Worker as before: updated only by a computer's app.
+
+The Cloudflare API calls above follow wrangler 4.151's own deploy code (`worker/node_modules/wrangler`), which uses
+the same versions and deployments endpoints; covered by `worker/test/node/self-update.test.js` against a stand-in
+Cloudflare and GitHub.
 
 ## Guarantees and limits
 

@@ -355,6 +355,25 @@ describe('several owners, this computer\'s own cloud, the same names, moves', ()
     await vi.waitFor(async () => expect((await transportTo(OWNER, first)({ deviceId: 'pc', cursor: 0, changes: [] })).status).toBe(401));
   });
 
+  it('Settings > Updates asks this computer\'s own sync service how updating itself stands, through the local server', async () => {
+    const data = join(dir, 'app-updates');
+    mkdirSync(join(data, 'lists'), { recursive: true });
+    app = await startApp({ dataDir: data, port: 0, interval: 150, cloudInterval: 150, settleMs: 0, reminders: false, watchFiles: false });
+    const localApi = async (path, body) => {
+      const r = await realFetch(`${app.url}/api/${path}`, { method: body === undefined ? 'GET' : 'POST', headers: { authorization: `Bearer ${app.token}`, 'content-type': 'application/json' }, body: body && JSON.stringify(body) });
+      return { status: r.status, data: await r.json() };
+    };
+    expect(await localApi('local/worker-update')).toMatchObject({ status: 409, data: { error: expect.stringMatching(/once sync is set up/) } });
+    mkdirSync(join(data, 'sync'), { recursive: true });
+    writeFileSync(join(data, 'sync', 'config.json'), JSON.stringify({ url: MINE, token: MY_KEY }));
+    Object.assign(mine.env, { SAQME_ACCOUNT_ID: 'acc', SAQME_WORKER_NAME: 'mine' });
+    expect(await localApi('local/worker-update')).toMatchObject({ status: 200, data: { knowsItself: true, token: false, auto: true } });
+    expect((await localApi('local/worker-update/auto', { on: false })).data.auto).toBe(false);
+    expect(await localApi('local/worker-update/now', {})).toMatchObject({ status: 409, data: { error: expect.stringMatching(/no update token/) } });
+    expect((await localApi('local/worker-update/token', { token: 'nope' })).status).toBe(400);
+    expect((await localApi('local/worker-update', undefined)).data).not.toHaveProperty('error');
+  });
+
   it('with cloud sync: the shared file stays out of it; turning cloud sync off and on keeps the share', async () => {
     const data = join(dir, 'app-cloud');
     mkdirSync(join(data, 'lists'), { recursive: true });

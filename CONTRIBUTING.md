@@ -57,14 +57,15 @@ Installed apps update themselves from this repository's GitHub Releases ([docs/s
    ```
 
 `.github/workflows/release.yml` then checks that the tag is the version in `worker/package.json`, runs the
-tests, builds `saqme-1.2.0.zip`, its manifest `saqme-release.json` (version, API, `minWorkerApi`, size and
-SHA-256 of the zip) and `SHA256SUMS` with `scripts/build-release.mjs`, and publishes the release with them as
-*latest*. Apps see it within a day (on start, then daily). `node scripts/build-release.mjs --out /tmp/rel`
+tests, builds `saqme-1.2.0.zip`, the Worker's bundle `saqme-worker-1.2.0.bundle` (what a sync service that updates
+itself deploys), their manifest `saqme-release.json` (version, API, `minWorkerApi`, sizes and SHA-256) and
+`SHA256SUMS` with `scripts/build-release.mjs`, and publishes the release with them as *latest*. Apps see it within
+a day (on start, then daily), Workers that update themselves within 6 hours. `node scripts/build-release.mjs --out /tmp/rel`
 builds the same files locally to look at.
 
 Once per repository: **Settings > Rules > Rulesets**, a tag ruleset for `v*` that restricts creation, update
-and deletion to you (and requires the tests). Whoever can push such a tag ships code to every install: the
-updater checks the download against the release's checksum and only takes releases from this repository, but
+and deletion to you (and requires the tests). Whoever can push such a tag ships code to every install (and to every Worker
+given a token to update itself, which then holds that token): the updater checks the download against the release's checksum and only takes releases from this repository, but
 it trusts what this repository publishes. Releases are not signed with a key of their own, on purpose: a key
 in the Actions secrets protects nothing a tag rule does not, and one kept off GitHub would make every release
 a manual step.

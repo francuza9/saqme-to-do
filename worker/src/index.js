@@ -16,6 +16,7 @@
 //     /api/shares/transfer, GET /api/config, POST /api/push/subscribe | unsubscribe | test (that list's reminders)
 //   POST /api/remotes/join | adopt, GET /api/remotes, POST /api/remotes/<id>/sync | leave: lists others share
 //     with you, which this Worker syncs for your phone app (src/remotes.js)
+//   GET  /api/update, POST /api/update/token | auto | now: the Worker updating itself (src/selfupdate.js)
 // Every /api call except health and the two claims needs `Authorization: Bearer <AUTH_TOKEN>`. A shared
 // list's key works for the routes above only, and only for its one project; once revoked it gets 401 like a
 // wrong key, and one replaced by a move gets 401 'transferred'.
@@ -35,6 +36,7 @@ import {
   subscribeSharePush, unsubscribeSharePush, updateShare, ShareError,
 } from './shares.js';
 import { adoptRemote, joinRemote, leaveRemote, relaySync, remotesQuery, remoteView } from './remotes.js';
+import { afterSchemaFailure, confirmUpdate, saveToken, scheduledUpdate, setAuto, startNow, updateStatus, UpdateError } from './selfupdate.js';
 
 // The push services browsers use (Chrome and other Chromium browsers, Firefox, Safari, legacy Edge): the
 // cron sends requests to subscription endpoints, so a subscription may only point at one of these.
@@ -108,7 +110,7 @@ async function rememberOrigin(env, origin) {
     .bind(origin).run();
 }
 
-async function handleApi(request, env, url) {
+async function handleApi(request, env, url, ctx) {
   const route = `${request.method} ${url.pathname.replace(/\/+$/, '')}`;
   if (route === 'GET /api/health') return json({ ok: true, ...RELEASE });
   if (route === 'POST /api/pair/claim') {
@@ -167,6 +169,16 @@ async function handleApi(request, env, url) {
 
     case 'POST /api/pair/code':
       return json(await createPairingCode(env));
+
+    case 'GET /api/update':
+      await confirmUpdate(env);
+      return json(await updateStatus(env));
+    case 'POST /api/update/token':
+      return json(await saveToken(env, (await readJson(request)).token));
+    case 'POST /api/update/auto':
+      return json(await setAuto(env, (await readJson(request)).on !== false));
+    case 'POST /api/update/now':
+      return json(await startNow(env, ctx));
 
     case 'POST /api/push/subscribe': {
       const body = await readJson(request);
@@ -245,7 +257,7 @@ async function shareApi(request, env, url, route, share) {
 }
 
 export default {
-  async fetch(request, env) {
+  async fetch(request, env, ctx) {
     const url = new URL(request.url);
     if (!url.pathname.startsWith('/api/')) return env.ASSETS.fetch(request);
     if (request.method === 'OPTIONS') return new Response(null, { status: 204, headers: PREFLIGHT_HEADERS });
@@ -253,21 +265,31 @@ export default {
       await ensureSchema(env.DB);
     } catch (e) {
       console.error('database update failed', e?.stack || e);
+      // (a version that just updated itself goes back to the one before, whose database is as it was)
+      ctx?.waitUntil?.(afterSchemaFailure(env, e).catch(() => {}));
       return json({
         error: 'Your sync service could not update its database. It tries again with the next request; if this stays, see Troubleshooting in docs/setup.md.',
         code: 'schema', detail: String(e?.message ?? e).slice(0, 300), ...RELEASE,
       }, 503);
     }
     try {
-      return await handleApi(request, env, url);
+      return await handleApi(request, env, url, ctx);
     } catch (e) {
-      if (e instanceof HttpError || e instanceof ShareError) return json({ error: e.message }, e.status);
+      if (e instanceof HttpError || e instanceof ShareError || e instanceof UpdateError) return json({ error: e.message }, e.status);
       console.error(e?.stack || e);
       return json({ error: 'internal error' }, 500);
     }
   },
 
   async scheduled(controller, env, ctx) {
-    ctx.waitUntil(ensureSchema(env.DB).then(() => runReminders(env, controller.scheduledTime)).catch((e) => console.error('reminders failed', e)));
+    // a run that updates the Worker leaves the reminders to the next one (5 minutes later; late ones are still sent)
+    const now = controller.scheduledTime;
+    ctx.waitUntil(ensureSchema(env.DB)
+      .catch(async (e) => { await afterSchemaFailure(env, e).catch(() => {}); throw e; })
+      .then(async () => {
+        const updated = await scheduledUpdate(env, { now }).catch((e) => { console.error('self-update failed', e); return false; });
+        if (!updated) await runReminders(env, now);
+      })
+      .catch((e) => console.error('reminders failed', e)));
   },
 };

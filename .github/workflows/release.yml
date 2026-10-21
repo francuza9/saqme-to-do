@@ -1,9 +1,10 @@
 # Publishes a release when a version tag is pushed (CONTRIBUTING.md, "How to ship an update"):
 #   git tag v1.2.0 && git push origin v1.2.0
 # The tag must be the version in worker/package.json. The tests run first; then scripts/build-release.mjs builds
-# the zip, the manifest the apps' updaters read (saqme-release.json: size and SHA-256 of the zip) and the release
-# notes (that version's section of CHANGELOG.md), and they go up as a GitHub Release. Installed apps find it on
-# their next daily check (github.com/<repo>/releases/latest/download/saqme-release.json) and update themselves.
+# the zip, the Worker's bundle (what a sync service that updates itself deploys), the manifest the updaters read
+# (saqme-release.json: sizes and SHA-256 of both) and the release notes (that version's section of CHANGELOG.md),
+# and they go up as a GitHub Release. Installed apps, and Workers given a token to update themselves, find it on
+# their next check (github.com/<repo>/releases/latest/download/saqme-release.json) and update themselves.
 # Who can push v* tags can ship code to every install: protect them (Settings > Rules > Rulesets, tags v*).
 name: Release
 
@@ -71,5 +72,5 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh release create "$GITHUB_REF_NAME" "dist/saqme-$VERSION.zip" dist/saqme-release.json dist/SHA256SUMS \
+          gh release create "$GITHUB_REF_NAME" "dist/saqme-$VERSION.zip" "dist/saqme-worker-$VERSION.bundle" dist/saqme-release.json dist/SHA256SUMS \
             --repo "$GITHUB_REPOSITORY" --title "Saqme To Do $VERSION" --notes-file dist/notes.md --verify-tag --latest
