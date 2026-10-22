@@ -219,6 +219,27 @@ describe('local app server', () => {
   });
 });
 
+describe('started from inside another app\'s sandbox (local/paths.mjs sandboxOf)', () => {
+  it('names a Flatpak, a strictly confined Snap and a macOS sandbox; a classic Snap or a plain shell is none', async () => {
+    const { sandboxOf } = await import('../../../local/paths.mjs');
+    expect(sandboxOf({ FLATPAK_ID: 'com.visualstudio.code' }, '/home/u')).toMatch(/com\.visualstudio\.code/);
+    expect(sandboxOf({ SNAP_NAME: 'claude', SNAP_USER_DATA: '/home/u/snap/claude/12' }, '/home/u/snap/claude/12')).toMatch(/claude/);
+    expect(sandboxOf({ SNAP_NAME: 'code', SNAP_USER_DATA: '/home/u/snap/code/12' }, '/home/u')).toBe('');   // classic: the real HOME
+    expect(sandboxOf({ APP_SANDBOX_CONTAINER_ID: 'com.example.app' }, '/Users/u/Library/Containers/com.example.app/Data')).toMatch(/com\.example\.app/);
+    expect(sandboxOf({}, '/home/u')).toBe('');
+  });
+  it('saqme serve refuses to start on the usual data folder there, and says why; --data still works', async () => {
+    const cli = fileURLToPath(new URL('../../../local/saqme.mjs', import.meta.url));
+    const env = { ...process.env, FLATPAK_ID: 'org.example.Editor' };
+    delete env.SAQME_DATA;
+    const r = await promisify(execFile)(process.execPath, [cli, 'serve', '--port', '1'], { env }).catch((e) => e);
+    expect(r.code).toBe(3);
+    expect(r.stderr).toMatch(/org\.example\.Editor.*second, empty lists folder/s);
+    const ok = await promisify(execFile)(process.execPath, [cli, 'ai-prompt', '--data', dir, '--port', '1'], { env });   // (an explicit folder is fine)
+    expect(ok.stdout).toContain(join(dir, 'lists'));
+  });
+});
+
 describe('export and import (phone app)', () => {
   it('exports every list in the desktop format and imports them into another device without duplicates', async () => {
     const a = new Store({ autoSync: false });

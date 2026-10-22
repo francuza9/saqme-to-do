@@ -14,6 +14,18 @@ export function defaultDataDir() {
   return join(process.env.XDG_DATA_HOME || join(homedir(), '.local', 'share'), 'saqme');
 }
 
+/**
+ * Started from inside a sandboxed app (a Flatpak, a strictly confined Snap, a macOS App Sandbox container: an editor's
+ * or an AI assistant's terminal), this process gets that app's own data folders, not the user's: the app would run on
+ * a second, empty lists folder. -> what the sandbox is ('' = none). (Windows has its own: sync-core.ps1 Get-AppDataRedirect.)
+ */
+export function sandboxOf(env = process.env, home = homedir()) {
+  if (env.FLATPAK_ID) return `the Flatpak app ${env.FLATPAK_ID}`;
+  if (env.SNAP_NAME && env.SNAP_USER_DATA && home.startsWith(env.SNAP_USER_DATA)) return `the Snap app ${env.SNAP_NAME}`;   // (strict: its HOME)
+  if (env.APP_SANDBOX_CONTAINER_ID) return `the sandboxed app ${env.APP_SANDBOX_CONTAINER_ID}`;
+  return '';
+}
+
 export function dataPaths(dataDir = defaultDataDir()) {
   return {
     data: dataDir,

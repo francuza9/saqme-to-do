@@ -31,7 +31,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 import { D1 } from './d1.mjs';
 import { startServer } from './server.mjs';
 import { notify, openWindow } from './desktop.mjs';
-import { APP_DIR, DEFAULT_PORT, appPaths, cloudSetupStatePath, dataPaths, defaultDataDir } from './paths.mjs';
+import { APP_DIR, DEFAULT_PORT, appPaths, cloudSetupStatePath, dataPaths, defaultDataDir, sandboxOf } from './paths.mjs';
 import { applyPlanToFolder, openConflicts, readState, saveState, syncCycle } from './engine.mjs';
 import { Shares } from './shares.mjs';
 import { aiPrompt } from './ai-prompt.mjs';
@@ -595,7 +595,17 @@ function runningPort(p, override) {
   return override ? Number(override) : (readJsonFile(p.server)?.port ?? portSetting(p));
 }
 
+/** The usual data folder, from inside another app's sandbox, is not the user's (paths.mjs sandboxOf): refuse, say why. */
+function refuseSandbox(opts) {
+  if (opts.dataGiven || process.env.SAQME_DATA) return;
+  const sb = sandboxOf();
+  if (!sb) return;
+  console.error(`Saqme To Do was started from inside ${sb}, which gives the programs it starts data folders of their own: Saqme would run on a second, empty lists folder instead of yours. Start it from your app menu or a normal terminal (or name the folder with --data).`);
+  process.exit(3);
+}
+
 async function cmdServe(opts) {
+  refuseSandbox(opts);
   const p = dataPaths(opts.data);
   const port = portSetting(p, opts.port);
   if (await ping(port)) { console.log(`Saqme To Do is already running on http://127.0.0.1:${port}`); return; }
@@ -611,6 +621,7 @@ async function cmdServe(opts) {
 }
 
 async function cmdOpen(opts) {
+  refuseSandbox(opts);
   const p = dataPaths(opts.data);
   let port = runningPort(p, opts.port);
   if (!(await ping(port))) {
@@ -781,6 +792,7 @@ function parseArgs(argv) {
     else if (argv[i].startsWith('--')) throw new Error(`unknown option ${argv[i]}`);
     else opts.args.push(argv[i]);
   }
+  opts.dataGiven = opts.data != null;   // (refuseSandbox: a folder named on purpose is fine anywhere)
   opts.data = opts.data ?? defaultDataDir();
   return opts;
 }
