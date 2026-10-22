@@ -245,7 +245,7 @@ foreach ($c in $engine['restore']) {
     try {
       $st = New-FixtureState $c $c['S'] 100
       $st.Guard = @{ ids = @($c['guard']) }
-      $rp = Get-RestorePlan $st (Read-LocalLists $lists) $lists
+      $rp = Get-RestorePlan $st (Read-LocalLists $lists) $lists $(if ($c.ContainsKey('keys')) { @($c['keys']) } else { $null })
       Assert-True ($null -ne $rp.Plan) 'a plan'
       Assert-Eq $rp.Count ([int]$c['count']) 'tasks put back'
       Assert-Eq (Invoke-PlanOps $rp.Plan.Ops $lists) $rp.Plan.Ops.Count 'ops done'
@@ -274,7 +274,8 @@ foreach ($c in $engine['diff']) {
       if ($c.ContainsKey('missing')) { foreach ($id in $c['missing'].Keys) { $st.Missing[$id] = $clock - 1000 * [long]$c['missing'][$id] } }
       if ($c.ContainsKey('guard')) { $st.Guard = @{ ids = @($c['guard']) } }
       $local = Read-LocalLists $lists
-      $out = Add-LocalDiff $st $local '' -AllowMassDelete:($c.ContainsKey('allow') -and $c['allow']) -Clock $clock
+      $exp = $null; if ($c.ContainsKey('expected')) { $exp = @{}; foreach ($k in $c['expected']) { $exp[$k] = $true } }
+      $out = Add-LocalDiff $st $local '' -AllowMassDelete:($c.ContainsKey('allow') -and $c['allow']) -Clock $clock -Expected $exp
       $got = @{}
       foreach ($e in $st.Outbox) { foreach ($n in $e['fields'].Keys) { $got[(ConvertTo-Canon @($e['kind'], $e['id'], $n, $e['fields'][$n]['v']))] = $e['fields'][$n] } }
       $want = @(foreach ($ch in $c['changes']) { ConvertTo-Canon @($ch[0], $ch[1], $ch[2], $ch[3]) })
@@ -292,6 +293,35 @@ foreach ($c in $engine['diff']) {
         $after = @(if ($st.Guard) { $st.Guard['ids'] })
         Assert-Eq ((Get-Sorted $after) -join ',') ((Get-Sorted @($c['guardAfter'])) -join ',') 'held back afterwards'
       }
+    } finally { Remove-Item -LiteralPath (Split-Path $lists) -Recurse -Force -ErrorAction SilentlyContinue }
+  }
+}
+
+foreach ($c in $engine['replay']) {
+  Test-Case "replay: $($c['name'])" {
+    $lists = New-FixtureFolder $c
+    try {
+      $st = New-FixtureState $c $c['S'] 100
+      $st.dbId = 'db1'
+      $script:replaySent = New-Object System.Collections.ArrayList
+      $script:replayDir = $lists
+      $start = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()
+      $got = @()
+      foreach ($sec in $c['cycles']) {
+        # a server that has everything (S) and answers with nothing new
+        $ctx = @{ State = $st; StatePath = (Join-Path (Split-Path $lists) 'state.json'); ListsDir = $lists; Url = 'https://x.example'; Token = 't'; DeviceId = 'replay'
+                  NotifyAt = ''; SettleMs = 0; Clock = [scriptblock]::Create([string]($start + 1000 * [long]$sec))
+                  ApplyPlan = { param($plan) return ((Invoke-PlanOps $plan.Ops $script:replayDir) -eq @($plan.Ops).Count) }
+                  Transport = { param($body) foreach ($e in @($body.changes)) { [void]$script:replaySent.Add($e) }
+                                return @{ Status = 200; Data = @{ cursor = 5; more = $false; changes = @(); rejected = @(); serverTime = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds(); dbId = 'db1' } } } }
+        $res = Invoke-SyncCycle $ctx
+        Assert-Eq $res.Status 'synced' "cycle at $sec s"
+        foreach ($x in @($res.Rewritten)) { if ($x) { $got += "$($x.Name) $($x.Count)" } }
+      }
+      Assert-Eq (ConvertTo-Canon (Get-FolderFiles $lists)) (ConvertTo-Canon $c['after']) 'files afterwards'
+      Assert-True ($null -eq $st.Guard) 'nothing held back afterwards'
+      foreach ($e in $script:replaySent) { if ($e['fields'].ContainsKey('deleted') -and $e['fields']['deleted']['v']) { throw "a delete reached the server: $($e['kind']) $($e['id'])" } }
+      Assert-Eq ((Get-Sorted $got) -join ',') ((Get-Sorted @($c['rewritten'] | ForEach-Object { "$($_[0]) $($_[1])" })) -join ',') 'written again'
     } finally { Remove-Item -LiteralPath (Split-Path $lists) -Recurse -Force -ErrorAction SilentlyContinue }
   }
 }

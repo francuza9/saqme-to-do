@@ -96,6 +96,7 @@ export class EngineLoop {
     this.state = null;
     this.allowMassDelete = false;
     this.restoreHeld = false;   // "Restore them": put the held-back deletes back into the files
+    this.rewritten = [];        // [{ name, count, at }]: lists whose file was gone, written again from the last sync
     this.expected = null;
     this.stopped = false;
     this.wakeTimer = null;
@@ -135,6 +136,10 @@ export class EngineLoop {
     if (allow) this.allowMassDelete = false;
     if (restore && !res.restorePending) this.restoreHeld = false;
     if (res.restored) this.log(`${this.name}: put ${res.restored} held-back tasks back into their lists`);
+    for (const x of res.rewritten ?? []) {
+      this.log(`${this.name}: the file of the list ${x.name} was gone (not deleted in the app): written again from the last sync, ${x.count} tasks; nothing deleted`);
+      this.rewritten = [...this.rewritten, { ...x, at: Date.now() }].slice(-10);
+    }
     if (res.api) { this.status.workerApi = res.api; this.status.workerVersion = res.workerVersion; }   // (the server it syncs with: older or newer than this app)
     this.status.guarded = res.guarded;
     this.status.conflicts = openConflicts(this.state).length;
@@ -484,6 +489,9 @@ export async function startApp({ dataDir = defaultDataDir(), port, interval = 10
     files: files.status,
     cloud: cloud.status.state === 'off' ? null : cloud.status,
     guarded: Math.max(files.status.guarded, cloud.status.guarded, ...[...shareLoops.values()].map((s) => s.loop.status.guarded)),
+    // lists written again in the last day (both engines may notice the same file: one entry per list and minute)
+    rewritten: [...new Map([...files.rewritten, ...cloud.rewritten].filter((x) => Date.now() - x.at < 86_400_000)
+      .sort((a, b) => a.at - b.at).map((x) => [`${x.name}|${Math.floor(x.at / 60_000)}`, x])).values()].slice(-10),
     update: updater?.status() ?? null,
     ...shareInfo(),
   });
@@ -644,6 +652,7 @@ async function cmdStatus(opts) {
     console.log(`Shared with you: ${s.file} from ${new URL(s.server).host} (${s.access === 'edit' ? 'can edit' : 'view only'}): ${s.status?.state ?? 'starting'}${s.status?.message ? ` - ${s.status.message}` : ''}`);
   }
   if (i.guarded) console.log(`${i.guarded} tasks vanished from the lists folder at once; deleting them is paused. Put them back with: saqme restore-deletes, or delete them everywhere with: saqme allow-deletes`);
+  for (const x of i.rewritten ?? []) console.log(`${new Date(x.at).toLocaleTimeString()}: the file of ${x.name} was gone (not deleted in the app), so it was written again from the last sync (${x.count} tasks). Nothing was deleted.`);
 }
 
 async function cmdPairPhone(opts) {

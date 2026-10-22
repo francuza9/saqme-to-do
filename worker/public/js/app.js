@@ -1828,6 +1828,7 @@ function syncPage() {
     ...(ui.local ? localSyncSettings() : phoneSyncSettings()),
     ...sharedListSettings(),
     ...(ui.local?.guarded ? guardedSettings() : []),
+    ...(ui.local?.rewritten?.length ? rewrittenSettings() : []),
     ...advancedSettings(),
   ];
 }
@@ -2080,6 +2081,16 @@ function guardedSettings() {
         try { await api('local/allow-deletes', {}); toast('Confirmed. They will be deleted everywhere.'); } catch (e) { toast(`Could not confirm: ${e.message}`); }
       }, { danger: true, help: 'Confirms the paused deletions: the tasks are deleted everywhere' })),
     foot(msg),
+  ];
+}
+
+/** Lists whose file vanished without being deleted in an app: the local app wrote them again from the last sync (docs/sync.md). */
+function rewrittenSettings() {
+  const time = (at) => new Date(at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+  return [
+    head('Lists written again'),
+    card(...ui.local.rewritten.map((x) => infoRow(x.name, `${x.count} ${x.count === 1 ? 'task' : 'tasks'}, ${time(x.at)}`))),
+    foot('Their files vanished from the lists folder without being deleted in the app, so Saqme wrote them again from the last sync instead of deleting anything. To delete a list, use Delete list in its menu.'),
   ];
 }
 
@@ -2341,6 +2352,11 @@ async function loadLocalInfo() {
     if (JSON.stringify(ui.local) !== was && ui.view !== 'list' && !ui.editing) requestRender();
     // lists shared with this computer (and by it) change the lists, their badges and what can be edited: everywhere
     else if (JSON.stringify([ui.local?.shares, ui.local?.sharedByMe, ui.local?.notices]) !== sharesWere) requestRender();
+    for (const x of ui.local?.rewritten ?? []) {
+      if (ls.get(`rewritten.${x.name}.${x.at}`)) continue;
+      ls.set(`rewritten.${x.name}.${x.at}`, '1');
+      toast(`'${x.name}' was missing from the lists folder, so it was written again from the last sync. Nothing was deleted.`);
+    }
     for (const ended of ui.local?.ended ?? []) {
       if (ls.get(`ended.${ended.id}`)) continue;
       ls.set(`ended.${ended.id}`, '1');

@@ -147,8 +147,11 @@ describe('lists folder <-> local store (local/engine.mjs)', () => {
     await e.cycle(3);
     await p.sync();
     expect(p.project('Gone').fields.deleted.v).toBe(false);   // a list gone for a moment is no delete yet...
-    await e.cycle(2, { clock: () => Date.now() + 11_000 });
-    await p.sync();                                           // ...one gone for two cycles and 10 seconds is
+    const back = await e.cycle(1, { clock: () => Date.now() + 11_000 });
+    await e.cycle(1, { clock: () => Date.now() + 12_000 });
+    await p.sync();                                           // ...nor one gone for good (only lists/.trash deletes):
+    expect(back.rewritten).toEqual([{ name: 'Gone', count: 1 }]);   // it is written again from the last sync
+    expect(f.read('Gone')).toMatch(/^- \[ \] Will vanish \^[0-9a-z]{8}\n$/);
     expect(p.rows.get(`task:${ids.B}`).fields.text.v).toBe('B edited');
     expect(p.rows.get(`task:${ids.B}`).fields.place.v.parent).toBe(ids.C);
     expect(p.rows.get(`task:${ids.A}`).fields.status.v).toBe('x');
@@ -156,7 +159,8 @@ describe('lists folder <-> local store (local/engine.mjs)', () => {
     expect([...top].sort()).toEqual(top);   // file order = position order
     expect(p.project('Renamed').id).toBe(oldProject);   // a renamed file keeps its project (and tasks)
     expect(p.liveTexts('Renamed')).toEqual(['Old task']);
-    expect(p.project('Gone').fields.deleted.v).toBe(true);
+    expect(p.project('Gone').fields.deleted.v).toBe(false);
+    expect(p.liveTexts('Gone')).toEqual(['Will vanish']);
     expect(f.read('Work')).toMatch(/- \[ \] Brand new \^[0-9a-z]{8}\n$/);   // got its id
   });
 
@@ -216,7 +220,32 @@ describe('lists folder <-> local store (local/engine.mjs)', () => {
     expect(f.read('General')).toBe(after);
   });
 
-  it('Restore them: a list file gone for good comes back with its tasks, and its project is not deleted', async () => {
+  it('a list file gone for good is written again by itself, in its place, and its project is never deleted', async () => {
+    const f = folder();
+    const s = store();
+    f.write('Work', '- [ ] W\n');
+    f.write('Old', `${Array.from({ length: 3 }, (_, i) => `- [ ] Old ${i}`).join('\n')}\n`);
+    f.write('Home', '- [ ] H\n');
+    writeFileSync(join(f.lists, '.order'), 'Work\nOld\nHome\n');
+    const e = engine(f, s);
+    await e.cycle(3);
+    const old = f.read('Old');
+    unlinkSync(f.path('Old'));   // another program, a sync client, another app's private copy of the folder...
+    expect((await e.cycle(1)).rewritten).toBeUndefined();   // (gone for a moment: nothing decided yet)
+    const r = await e.cycle(1, { clock: () => Date.now() + 11_000 });
+    expect(r.rewritten).toEqual([{ name: 'Old', count: 3 }]);
+    expect(r.guarded).toBe(0);
+    expect(f.read('Old')).toBe(old);   // the same lines and ids
+    expect(readFileSync(join(f.lists, '.order'), 'utf8')).toBe('Work\nOld\nHome\n');
+    expect(e.state.Guard).toBeNull();
+    expect((await e.cycle(2, { clock: () => Date.now() + 22_000 })).guarded).toBe(0);
+    const p = phone(s);
+    await p.sync();
+    expect(p.project('Old').fields.deleted.v).toBe(false);
+    expect(p.liveTexts('Old')).toHaveLength(3);
+  });
+
+  it('Restore them: a vanished list that could not be written again yet stays held, then comes back', async () => {
     const f = folder();
     const s = store();
     f.write('Work', '- [ ] W\n');
@@ -226,7 +255,11 @@ describe('lists folder <-> local store (local/engine.mjs)', () => {
     const old = f.read('Old');
     unlinkSync(f.path('Old'));
     await e.cycle(1);
-    expect((await e.cycle(1, { clock: () => Date.now() + 11_000 })).guarded).toBe(6);
+    // the app was busy (a list being edited): nothing is written, the delete stays held back
+    const busy = await e.cycle(1, { clock: () => Date.now() + 11_000, applyPlan: () => false });
+    expect(busy.guarded).toBe(6);
+    expect(busy.rewritten).toBeUndefined();
+    expect(f.exists('Old')).toBe(false);
     expect((await e.cycle(1, { restore: true })).restored).toBe(6);
     expect(f.read('Old')).toBe(old);
     expect((await e.cycle(2, { clock: () => Date.now() + 22_000 })).guarded).toBe(0);
@@ -321,7 +354,7 @@ describe('lists folder <-> local store (local/engine.mjs)', () => {
     expect(f.read('Work')).toBe('# Work\n- [x] Pay rent ^aaaaaaa1\n  > paid via transfer\n- [ ] Call bank today ^aaaaaaa2\n- [ ] Added on the phone ^bbbbbbb1\n');
   });
 
-  it('a list gone for a moment is no delete; gone for good, a big one waits for confirmation', async () => {
+  it('a list gone for a moment is no delete; gone for good, it is written again, never deleted', async () => {
     const f = folder();
     const s = store();
     f.write('Work', `# Work\nSome prose.\n${Array.from({ length: 60 }, (_, i) => `- [ ] task ${i}\n`).join('')}`);
@@ -337,14 +370,15 @@ describe('lists folder <-> local store (local/engine.mjs)', () => {
     await p.sync();
     expect(p.project('Work').fields.deleted.v).toBe(false);
     expect(p.liveTexts('Work')).toHaveLength(60);
-    renameSync(f.path('Work'), away);   // gone for good: a whole list of 5+ tasks waits for a confirmation
+    renameSync(f.path('Work'), away);   // gone for good: held back, and written again from the last sync
     await e.cycle(1);
-    expect((await e.cycle(1, { clock: () => Date.now() + 11_000 })).guarded).toBe(60);
+    const r = await e.cycle(1, { clock: () => Date.now() + 11_000 });
+    expect(r.rewritten).toEqual([{ name: 'Work', count: 60 }]);
+    expect(f.read('Work')).toMatch(/^- \[ \] task 0 \^[0-9a-z]{8}\n/);   // (its prose was never synced: only tasks come back)
+    await e.cycle(1, { clock: () => Date.now() + 12_000, allowMassDelete: true });   // nothing is held: nothing to confirm
     await p.sync();
     expect(p.project('Work').fields.deleted.v).toBe(false);
-    await e.cycle(1, { clock: () => Date.now() + 11_000, allowMassDelete: true });
-    await p.sync();
-    expect(p.project('Work').fields.deleted.v).toBe(true);
+    expect(p.liveTexts('Work')).toHaveLength(60);
   });
 
   it('a list moved to lists/.trash (how the apps delete one) deletes its project at once', async () => {

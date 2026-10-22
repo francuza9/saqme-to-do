@@ -8,6 +8,8 @@
 #                                    file changes the UI thread applies between edits (see Apply-SyncPlan in widget.ps1)
 #   Conflicts, Guarded, AllowMassDelete, Queue (requests from the UI), NotifyAt
 #   RestoreHeld                      "Restore them": put the held-back deletes back into the files (Get-RestorePlan)
+#   Removed                          Queue of "task:<id>" the user deleted in the app: never held back as vanished
+#   Rewritten                        Queue of @{ Name; Count } lists whose file was gone, written again (Restore-VanishedLists)
 #   WorkerApi, WorkerVersion         what this PC's own Worker runs, once it answered (an older one: API 1)
 # Lists shared with this PC (docs/sync.md, "Shared lists") each sync with their owner's server, in an engine of their
 # own after this PC's own one (sync-core.ps1 Read-ShareBindings); the own one leaves their files out:
@@ -26,6 +28,8 @@ $logPath = Join-Path $shared.SyncDir 'sync.log'
 $sharesDir = Join-Path $shared.SyncDir 'shares'
 $state = $null
 $shareStates = @{}   # binding id -> its engine state
+$expected = @{}      # "task:<id>" the user deleted in the app -> when (ms): their deletes are never held back
+$ExpectedKeepMs = 10 * 60000
 
 function Write-SyncLog([string]$msg) {
   try {
@@ -169,6 +173,7 @@ function Invoke-ShareCycle($b) {
   $ctx = @{
     State = $st; StatePath = (Join-Path $sharesDir "$id.json"); ListsDir = $shared.ListsDir; Url = [string]$b['server']; Token = [string]$token
     DeviceId = (Get-ShareDeviceId); NotifyAt = ''; AllowMassDelete = [bool]$shared.AllowMassDelete; Restore = [bool]$shared.RestoreHeld; ApplyPlan = $applySharePlan
+    Expected = $expected
     View = @{ Only = [string]$b['file'] }; Scope = @{ Project = $proj; File = [string]$b['file']; ReadOnly = ([string]$b['access'] -ne 'edit'); Label = (Get-ServerLabel ([string]$b['server'])) }
   }
   $res = Invoke-SyncCycle $ctx
@@ -225,6 +230,10 @@ while (-not $shared.Stop) {
   if ($woken) { Start-Sleep -Milliseconds 1600 }   # let a burst of edits settle (lists written <1.5 s ago are skipped)
   $cfg = Read-SyncConfig
   try {
+    # tasks deleted in the app (Save-Items): expected to vanish from the files, so never held back as if lost
+    $nowMs = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()
+    while ($shared.Removed -and $shared.Removed.Count -gt 0) { $expected[[string]$shared.Removed.Dequeue()] = $nowMs }
+    foreach ($k in @($expected.Keys)) { if ($nowMs - [long]$expected[$k] -gt $ExpectedKeepMs) { [void]$expected.Remove($k) } }
     # what the UI asked for, in order: joins and leaves first, then the rest goes to the engine it belongs to
     $requests = New-Object System.Collections.ArrayList
     while ($shared.Queue.Count -gt 0) { [void]$requests.Add($shared.Queue.Dequeue()) }
@@ -260,12 +269,17 @@ while (-not $shared.Stop) {
       $ctx = @{
         State = $state; StatePath = $statePath; ListsDir = $shared.ListsDir; Url = [string]$cfg['url']; Token = [string]$cfg['token']
         DeviceId = [string]$cfg['deviceId']; NotifyAt = [string]$shared.NotifyAt; AllowMassDelete = $allow; Restore = $restore; ApplyPlan = $applyPlan
-        View = @{ Exclude = (Get-SharedFileSet $shared.ListsDir) }
+        View = @{ Exclude = (Get-SharedFileSet $shared.ListsDir) }; Expected = $expected
       }
       $res = Invoke-SyncCycle $ctx
       $guarded += $res.Guarded
       if ($res.RestorePending) { $restorePending = $true }
       if ($res.Restored) { Write-SyncLog "put $($res.Restored) held-back tasks back into their lists" }
+      foreach ($x in @($res.Rewritten)) {
+        if (-not $x) { continue }
+        Write-SyncLog "the file of the list $($x.Name) was gone (not deleted in the app): written again from the last sync, $($x.Count) tasks; nothing deleted"
+        if ($shared.Rewritten) { $shared.Rewritten.Enqueue($x) }
+      }
       $shared.Pending = $state.Outbox.Count
       if ($res.Api) { $shared.WorkerApi = $res.Api; $shared.WorkerVersion = $res.WorkerVersion }   # (Settings, the Share view)
       $worst = $res

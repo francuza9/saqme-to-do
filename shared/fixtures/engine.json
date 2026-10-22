@@ -9,9 +9,13 @@
     "value, {base?, ts?}?] (any order; base / ts checked when given), with \"guarded\" (deletes held back) and \"skipped\" (some",
     "list was not usable, or one is briefly missing) when given. State before the diff: \"missing\" (project id -> seconds its",
     "list has been missing), \"planned\" (task id -> {age: seconds since the plan, added?, addedTs?, fields: {field: [value",
-    "before the plan, its ts]}}), \"guard\" (keys held back last time) and \"allow\" (the user confirmed them); \"guardAfter\":",
-    "the keys held back afterwards. restore (\"Restore them\" under Deletions paused): with base S, the folder and \"guard\" (the",
-    "keys held back), build the restore plan and apply it; \"count\" = tasks put back, after / filesAfter as for plan."
+    "before the plan, its ts]}}), \"guard\" (keys held back last time), \"allow\" (the user confirmed them) and \"expected\"",
+    "(keys of deletes made in the app, never held back); \"guardAfter\": the keys held back afterwards. restore (\"Restore",
+    "them\" under Deletions paused): with base S, the folder and \"guard\" (the keys held back), build the restore plan (only",
+    "for \"keys\" when given: a vanished list written again by itself) and apply it; \"count\" = tasks put back, after /",
+    "filesAfter as for plan. replay: whole sync cycles against a server that has S, with the clock \"cycles\" seconds after",
+    "the start for each; afterwards every file is \"after\", nothing is held back, no delete reached the server, and the",
+    "lists written again (name, tasks) are \"rewritten\"."
   ],
   "plan": [
     {
@@ -413,7 +417,7 @@
       "skipped": true
     },
     {
-      "name": "a list gone for two cycles and 10 seconds deletes its project",
+      "name": "a list gone for two cycles and 10 seconds is held back, however small: only lists/.trash says a list was deleted",
       "lists": { "Work.md": "- [ ] A ^aaaaaaaa\n" },
       "files": { "pwork001": "Work", "pold0001": "Old" },
       "S": [
@@ -423,7 +427,72 @@
         { "t": "oooooooo", "in": "pold0001", "pos": "a0", "text": "O" }
       ],
       "missing": { "pold0001": 20 },
-      "changes": [["project", "pold0001", "deleted", true]]
+      "changes": [],
+      "guarded": 1,
+      "guardAfter": ["project:pold0001"]
+    },
+    {
+      "name": "a list shared with others gone for good is held back too, and so is an empty one (nothing to count, still not deleted)",
+      "lists": { "Work.md": "- [ ] A ^aaaaaaaa\n" },
+      "files": { "pwork001": "Work", "pnuca001": "Nuca", "pempty01": "Empty" },
+      "S": [
+        { "p": "pwork001", "name": "Work", "pos": "a0" },
+        { "p": "pnuca001", "name": "Nuca", "pos": "a1" },
+        { "p": "pempty01", "name": "Empty", "pos": "a2" },
+        { "t": "aaaaaaaa", "in": "pwork001", "pos": "a0", "text": "A" },
+        { "t": "nnnnnnn1", "in": "pnuca001", "pos": "a0", "text": "N1" },
+        { "t": "nnnnnnn2", "in": "pnuca001", "pos": "a1", "text": "N2" }
+      ],
+      "missing": { "pnuca001": 20, "pempty01": 20 },
+      "changes": [],
+      "guarded": 2,
+      "guardAfter": ["project:pnuca001", "project:pempty01"]
+    },
+    {
+      "name": "every task of a list gone at once (its file emptied) is held back, however few",
+      "lists": { "Work.md": "", "Home.md": "- [ ] H0 ^hhhhhh00\n- [ ] H1 ^hhhhhh01\n- [ ] H2 ^hhhhhh02\n- [ ] H3 ^hhhhhh03\n", ".order": "Work\nHome\n" },
+      "files": { "pwork001": "Work", "phome001": "Home" },
+      "S": [
+        { "p": "pwork001", "name": "Work", "pos": "a0" },
+        { "p": "phome001", "name": "Home", "pos": "a1" },
+        { "t": "aaaaaaaa", "in": "pwork001", "pos": "a0", "text": "A" },
+        { "t": "bbbbbbbb", "in": "pwork001", "pos": "a1", "text": "B" },
+        { "t": "hhhhhh00", "in": "phome001", "pos": "a0", "text": "H0" },
+        { "t": "hhhhhh01", "in": "phome001", "pos": "a1", "text": "H1" },
+        { "t": "hhhhhh02", "in": "phome001", "pos": "a2", "text": "H2" },
+        { "t": "hhhhhh03", "in": "phome001", "pos": "a3", "text": "H3" }
+      ],
+      "changes": [],
+      "guarded": 2,
+      "guardAfter": ["task:aaaaaaaa", "task:bbbbbbbb"]
+    },
+    {
+      "name": "a list written over by another program: its new lines are sent, its old tasks are held back",
+      "lists": { "Work.md": "- [ ] Smoke task ^smoke001\n" },
+      "files": { "pwork001": "Work" },
+      "S": [
+        { "p": "pwork001", "name": "Work", "pos": "a0" },
+        { "t": "aaaaaaaa", "in": "pwork001", "pos": "a0", "text": "A" },
+        { "t": "bbbbbbbb", "in": "pwork001", "pos": "a1", "text": "B" }
+      ],
+      "changes": [
+        ["task", "smoke001", "place", { "project": "pwork001", "parent": null, "pos": "a0" }],
+        ["task", "smoke001", "text", "Smoke task"],
+        ["task", "smoke001", "status", " "],
+        ["task", "smoke001", "due", null],
+        ["task", "smoke001", "notes", ""],
+        ["task", "smoke001", "deleted", false]
+      ],
+      "guarded": 2,
+      "guardAfter": ["task:aaaaaaaa", "task:bbbbbbbb"]
+    },
+    {
+      "name": "the last task of a list deleted in the app (an expected delete) is a delete",
+      "lists": { "Work.md": "" },
+      "files": { "pwork001": "Work" },
+      "S": [{ "p": "pwork001", "name": "Work", "pos": "a0" }, { "t": "aaaaaaaa", "in": "pwork001", "pos": "a0", "text": "A" }],
+      "expected": ["task:aaaaaaaa"],
+      "changes": [["task", "aaaaaaaa", "deleted", true]]
     },
     {
       "name": "a list of 5+ tasks gone for good waits for a confirmation",
@@ -610,7 +679,7 @@
       }
     },
     {
-      "name": "a list whose file is gone is written again, under its name and at the end of the list order",
+      "name": "a list whose file is gone is written again, under its name; at the end of the list order when it had no place there",
       "lists": { "Work.md": "- [ ] W ^wwwwwwww\n", ".order": "Work\n" },
       "files": { "pwork001": "Work", "pold0001": "Old" },
       "S": [
@@ -632,6 +701,46 @@
         "Old.md": "- [ ] O0 ^oooooo00\n  - [ ] O0 sub ^oooooo01\n    > a note\n- [x] O2 ^oooooo02\n- [ ] O3 ^oooooo03\n- [ ] O4 due:2026-12-24T18:30 ^oooooo04\n- [ ] O5 ^oooooo05\n",
         ".order": "Work\nOld\n"
       },
+      "filesAfter": { "pwork001": "Work", "pold0001": "Old" }
+    },
+    {
+      "name": "a list whose file is gone is written again in its old place in the list order",
+      "lists": { "Work.md": "- [ ] W ^wwwwwwww\n", "Home.md": "- [ ] H ^hhhhhhhh\n", ".order": "Work\nOld\nHome\n" },
+      "files": { "pwork001": "Work", "pold0001": "Old", "phome001": "Home" },
+      "S": [
+        { "p": "pwork001", "name": "Work", "pos": "a0" },
+        { "p": "pold0001", "name": "Old", "pos": "a1" },
+        { "p": "phome001", "name": "Home", "pos": "a2" },
+        { "t": "wwwwwwww", "in": "pwork001", "pos": "a0", "text": "W" },
+        { "t": "hhhhhhhh", "in": "phome001", "pos": "a0", "text": "H" },
+        { "t": "oooooo00", "in": "pold0001", "pos": "a0", "text": "O0" }
+      ],
+      "guard": ["project:pold0001"],
+      "count": 1,
+      "after": {
+        "Work.md": "- [ ] W ^wwwwwwww\n",
+        "Home.md": "- [ ] H ^hhhhhhhh\n",
+        "Old.md": "- [ ] O0 ^oooooo00\n",
+        ".order": "Work\nOld\nHome\n"
+      },
+      "filesAfter": { "pwork001": "Work", "pold0001": "Old", "phome001": "Home" }
+    },
+    {
+      "name": "only the given keys: a vanished list is written again by itself, tasks held back elsewhere stay held",
+      "lists": { "Work.md": "- [ ] W ^wwwwwwww\n" },
+      "files": { "pwork001": "Work", "pold0001": "Old" },
+      "S": [
+        { "p": "pwork001", "name": "Work", "pos": "a0" },
+        { "p": "pold0001", "name": "Old", "pos": "a1" },
+        { "t": "wwwwwwww", "in": "pwork001", "pos": "a0", "text": "W" },
+        { "t": "xxxxxxxx", "in": "pwork001", "pos": "a1", "text": "X" },
+        { "t": "oooooo00", "in": "pold0001", "pos": "a0", "text": "O0" },
+        { "t": "oooooo01", "in": "pold0001", "pos": "a1", "text": "O1" }
+      ],
+      "guard": ["project:pold0001", "task:xxxxxxxx"],
+      "keys": ["project:pold0001"],
+      "count": 2,
+      "after": { "Work.md": "- [ ] W ^wwwwwwww\n", "Old.md": "- [ ] O0 ^oooooo00\n- [ ] O1 ^oooooo01\n", ".order": "Work\nOld\n" },
       "filesAfter": { "pwork001": "Work", "pold0001": "Old" }
     },
     {
@@ -662,6 +771,190 @@
       "guard": ["task:aaaaaaaa", "task:bbbbbbbb"],
       "count": 0,
       "after": { "Work.md": "- [ ] A ^aaaaaaaa\n- [ ] B ^bbbbbbbb\n" }
+    }
+  ],
+  "replay": [
+    {
+      "name": "incident 2026-10-22: two lists vanish (4 and 20 tasks), a shared list stays: both are written again, as they were, in their places; nothing is deleted",
+      "about": "A copy of the app running in another app's private copy of AppData moved two list files out of the real folder.",
+      "lists": {
+        "General.md": "- [ ] Call the bank ^gen00001\n- [x] Pay rent ^gen00002\n- [ ] Dentist due:2026-10-23T09:30 ^gen00003\n",
+        "Side.md": "- [x] Turn off the old schedules ^side0001\n- [ ] Reply to the investor ^side0002\n  > follow up on Thursday\n",
+        "Shared.md": "- [ ] Milk ^shar0001\n- [ ] Bread ^shar0002\n",
+        ".order": "General\nSide\nVideo\nApp\nShared\n"
+      },
+      "files": { "pgeneral": "General", "pside001": "Side", "pvideo01": "Video", "papp0001": "App", "pshared1": "Shared" },
+      "shared": ["pshared1"],
+      "S": [
+        { "p": "pgeneral", "name": "General", "pos": "a0" },
+        { "t": "gen00001", "in": "pgeneral", "pos": "a0", "text": "Call the bank" },
+        { "t": "gen00002", "in": "pgeneral", "pos": "a1", "text": "Pay rent", "status": "x" },
+        { "t": "gen00003", "in": "pgeneral", "pos": "a2", "text": "Dentist", "due": {"date": "2026-10-23", "time": "09:30"} },
+        { "p": "pside001", "name": "Side", "pos": "a1" },
+        { "t": "side0001", "in": "pside001", "pos": "a0", "text": "Turn off the old schedules", "status": "x" },
+        { "t": "side0002", "in": "pside001", "pos": "a1", "text": "Reply to the investor", "notes": "follow up on Thursday" },
+        { "p": "pvideo01", "name": "Video", "pos": "a2" },
+        { "t": "vide0001", "in": "pvideo01", "pos": "a0", "text": "Remove the title in the first seconds" },
+        { "t": "vide0002", "in": "pvideo01", "pos": "a1", "text": "English market" },
+        { "t": "vide0003", "in": "pvideo01", "pos": "a2", "text": "Talk to the viewer in second person" },
+        { "t": "vide0004", "in": "pvideo01", "pos": "a3", "text": "More image options" },
+        { "p": "papp0001", "name": "App", "pos": "a2V" },
+        { "t": "app00001", "in": "papp0001", "pos": "a0", "text": "Publish on GitHub", "status": "/" },
+        { "t": "app00002", "in": "papp0001", "pos": "a0", "text": "A good readme", "parent": "app00001", "status": "x" },
+        { "t": "app00003", "in": "papp0001", "pos": "a1", "text": "Automate setup with scripts", "parent": "app00001", "status": "x" },
+        { "t": "app00004", "in": "papp0001", "pos": "a2", "text": "A local-only option", "parent": "app00001", "status": "/" },
+        { "t": "app00005", "in": "papp0001", "pos": "a0", "text": "Local-only on Linux", "parent": "app00004", "status": "/" },
+        { "t": "app00006", "in": "papp0001", "pos": "a1", "text": "Local-only on macOS", "parent": "app00004", "status": "/" },
+        { "t": "app00007", "in": "papp0001", "pos": "a2", "text": "Local-only on Android", "parent": "app00004", "status": "/" },
+        { "t": "app00008", "in": "papp0001", "pos": "a3", "text": "Explain how to connect an AI", "parent": "app00001", "status": "x", "notes": "so the user does not have to explain the list every time" },
+        { "t": "app00009", "in": "papp0001", "pos": "a4", "text": "Fix the bugs found in testing", "parent": "app00001", "status": "x" },
+        { "t": "app00010", "in": "papp0001", "pos": "a5", "text": "Test on a real Mac and a Linux desktop", "parent": "app00001", "status": "~" },
+        { "t": "app00011", "in": "papp0001", "pos": "a6", "text": "Make the repo public", "parent": "app00001", "status": "x" },
+        { "t": "app00012", "in": "papp0001", "pos": "a0", "text": "Public", "parent": "app00011", "status": "x" },
+        { "t": "app00013", "in": "papp0001", "pos": "a1", "text": "Fix GitHub Pages", "parent": "app00011", "status": "x" },
+        { "t": "app00014", "in": "papp0001", "pos": "a7", "text": "Show the AI upside clearly", "parent": "app00001", "status": "x" },
+        { "t": "app00015", "in": "papp0001", "pos": "a1", "text": "Simpler updater", "status": "x", "notes": "released as 1.1.0" },
+        { "t": "app00016", "in": "papp0001", "pos": "a0", "text": "Run setup once more", "parent": "app00015", "status": "x" },
+        { "t": "app00017", "in": "papp0001", "pos": "a1", "text": "Second user runs setup once", "parent": "app00015", "status": "x" },
+        { "t": "app00018", "in": "papp0001", "pos": "a2", "text": "Shared lists", "status": "x" },
+        { "t": "app00019", "in": "papp0001", "pos": "a0", "text": "Deploy", "parent": "app00018", "status": "x" },
+        { "t": "app00020", "in": "papp0001", "pos": "a1", "text": "Test with the second user", "parent": "app00018", "status": "x" },
+        { "p": "pshared1", "name": "Shared", "pos": "a3" },
+        { "t": "shar0001", "in": "pshared1", "pos": "a0", "text": "Milk" },
+        { "t": "shar0002", "in": "pshared1", "pos": "a1", "text": "Bread" }
+      ],
+      "cycles": [0, 11, 12],
+      "after": {
+        "General.md": "- [ ] Call the bank ^gen00001\n- [x] Pay rent ^gen00002\n- [ ] Dentist due:2026-10-23T09:30 ^gen00003\n",
+        "Side.md": "- [x] Turn off the old schedules ^side0001\n- [ ] Reply to the investor ^side0002\n  > follow up on Thursday\n",
+        "Video.md": "- [ ] Remove the title in the first seconds ^vide0001\n- [ ] English market ^vide0002\n- [ ] Talk to the viewer in second person ^vide0003\n- [ ] More image options ^vide0004\n",
+        "App.md": "- [/] Publish on GitHub ^app00001\n  - [x] A good readme ^app00002\n  - [x] Automate setup with scripts ^app00003\n  - [/] A local-only option ^app00004\n    - [/] Local-only on Linux ^app00005\n    - [/] Local-only on macOS ^app00006\n    - [/] Local-only on Android ^app00007\n  - [x] Explain how to connect an AI ^app00008\n    > so the user does not have to explain the list every time\n  - [x] Fix the bugs found in testing ^app00009\n  - [~] Test on a real Mac and a Linux desktop ^app00010\n  - [x] Make the repo public ^app00011\n    - [x] Public ^app00012\n    - [x] Fix GitHub Pages ^app00013\n  - [x] Show the AI upside clearly ^app00014\n- [x] Simpler updater ^app00015\n  > released as 1.1.0\n  - [x] Run setup once more ^app00016\n  - [x] Second user runs setup once ^app00017\n- [x] Shared lists ^app00018\n  - [x] Deploy ^app00019\n  - [x] Test with the second user ^app00020\n",
+        "Shared.md": "- [ ] Milk ^shar0001\n- [ ] Bread ^shar0002\n",
+        ".order": "General\nSide\nVideo\nApp\nShared\n"
+      },
+      "rewritten": [["Video", 4], ["App", 20]]
+    },
+    {
+      "name": "a small list vanishing on its own (4 tasks: below every mass-delete threshold) is written again, not deleted",
+      "about": "Before 1.2.3 this list was deleted on every device about 10 seconds later.",
+      "lists": {
+        "General.md": "- [ ] Call the bank ^gen00001\n- [x] Pay rent ^gen00002\n- [ ] Dentist due:2026-10-23T09:30 ^gen00003\n",
+        "Side.md": "- [x] Turn off the old schedules ^side0001\n- [ ] Reply to the investor ^side0002\n  > follow up on Thursday\n",
+        "App.md": "- [/] Publish on GitHub ^app00001\n  - [x] A good readme ^app00002\n  - [x] Automate setup with scripts ^app00003\n  - [/] A local-only option ^app00004\n    - [/] Local-only on Linux ^app00005\n    - [/] Local-only on macOS ^app00006\n    - [/] Local-only on Android ^app00007\n  - [x] Explain how to connect an AI ^app00008\n    > so the user does not have to explain the list every time\n  - [x] Fix the bugs found in testing ^app00009\n  - [~] Test on a real Mac and a Linux desktop ^app00010\n  - [x] Make the repo public ^app00011\n    - [x] Public ^app00012\n    - [x] Fix GitHub Pages ^app00013\n  - [x] Show the AI upside clearly ^app00014\n- [x] Simpler updater ^app00015\n  > released as 1.1.0\n  - [x] Run setup once more ^app00016\n  - [x] Second user runs setup once ^app00017\n- [x] Shared lists ^app00018\n  - [x] Deploy ^app00019\n  - [x] Test with the second user ^app00020\n",
+        "Shared.md": "- [ ] Milk ^shar0001\n- [ ] Bread ^shar0002\n",
+        ".order": "General\nSide\nVideo\nApp\nShared\n"
+      },
+      "files": { "pgeneral": "General", "pside001": "Side", "pvideo01": "Video", "papp0001": "App", "pshared1": "Shared" },
+      "shared": ["pshared1"],
+      "S": [
+        { "p": "pgeneral", "name": "General", "pos": "a0" },
+        { "t": "gen00001", "in": "pgeneral", "pos": "a0", "text": "Call the bank" },
+        { "t": "gen00002", "in": "pgeneral", "pos": "a1", "text": "Pay rent", "status": "x" },
+        { "t": "gen00003", "in": "pgeneral", "pos": "a2", "text": "Dentist", "due": {"date": "2026-10-23", "time": "09:30"} },
+        { "p": "pside001", "name": "Side", "pos": "a1" },
+        { "t": "side0001", "in": "pside001", "pos": "a0", "text": "Turn off the old schedules", "status": "x" },
+        { "t": "side0002", "in": "pside001", "pos": "a1", "text": "Reply to the investor", "notes": "follow up on Thursday" },
+        { "p": "pvideo01", "name": "Video", "pos": "a2" },
+        { "t": "vide0001", "in": "pvideo01", "pos": "a0", "text": "Remove the title in the first seconds" },
+        { "t": "vide0002", "in": "pvideo01", "pos": "a1", "text": "English market" },
+        { "t": "vide0003", "in": "pvideo01", "pos": "a2", "text": "Talk to the viewer in second person" },
+        { "t": "vide0004", "in": "pvideo01", "pos": "a3", "text": "More image options" },
+        { "p": "papp0001", "name": "App", "pos": "a2V" },
+        { "t": "app00001", "in": "papp0001", "pos": "a0", "text": "Publish on GitHub", "status": "/" },
+        { "t": "app00002", "in": "papp0001", "pos": "a0", "text": "A good readme", "parent": "app00001", "status": "x" },
+        { "t": "app00003", "in": "papp0001", "pos": "a1", "text": "Automate setup with scripts", "parent": "app00001", "status": "x" },
+        { "t": "app00004", "in": "papp0001", "pos": "a2", "text": "A local-only option", "parent": "app00001", "status": "/" },
+        { "t": "app00005", "in": "papp0001", "pos": "a0", "text": "Local-only on Linux", "parent": "app00004", "status": "/" },
+        { "t": "app00006", "in": "papp0001", "pos": "a1", "text": "Local-only on macOS", "parent": "app00004", "status": "/" },
+        { "t": "app00007", "in": "papp0001", "pos": "a2", "text": "Local-only on Android", "parent": "app00004", "status": "/" },
+        { "t": "app00008", "in": "papp0001", "pos": "a3", "text": "Explain how to connect an AI", "parent": "app00001", "status": "x", "notes": "so the user does not have to explain the list every time" },
+        { "t": "app00009", "in": "papp0001", "pos": "a4", "text": "Fix the bugs found in testing", "parent": "app00001", "status": "x" },
+        { "t": "app00010", "in": "papp0001", "pos": "a5", "text": "Test on a real Mac and a Linux desktop", "parent": "app00001", "status": "~" },
+        { "t": "app00011", "in": "papp0001", "pos": "a6", "text": "Make the repo public", "parent": "app00001", "status": "x" },
+        { "t": "app00012", "in": "papp0001", "pos": "a0", "text": "Public", "parent": "app00011", "status": "x" },
+        { "t": "app00013", "in": "papp0001", "pos": "a1", "text": "Fix GitHub Pages", "parent": "app00011", "status": "x" },
+        { "t": "app00014", "in": "papp0001", "pos": "a7", "text": "Show the AI upside clearly", "parent": "app00001", "status": "x" },
+        { "t": "app00015", "in": "papp0001", "pos": "a1", "text": "Simpler updater", "status": "x", "notes": "released as 1.1.0" },
+        { "t": "app00016", "in": "papp0001", "pos": "a0", "text": "Run setup once more", "parent": "app00015", "status": "x" },
+        { "t": "app00017", "in": "papp0001", "pos": "a1", "text": "Second user runs setup once", "parent": "app00015", "status": "x" },
+        { "t": "app00018", "in": "papp0001", "pos": "a2", "text": "Shared lists", "status": "x" },
+        { "t": "app00019", "in": "papp0001", "pos": "a0", "text": "Deploy", "parent": "app00018", "status": "x" },
+        { "t": "app00020", "in": "papp0001", "pos": "a1", "text": "Test with the second user", "parent": "app00018", "status": "x" },
+        { "p": "pshared1", "name": "Shared", "pos": "a3" },
+        { "t": "shar0001", "in": "pshared1", "pos": "a0", "text": "Milk" },
+        { "t": "shar0002", "in": "pshared1", "pos": "a1", "text": "Bread" }
+      ],
+      "cycles": [0, 11, 12],
+      "after": {
+        "General.md": "- [ ] Call the bank ^gen00001\n- [x] Pay rent ^gen00002\n- [ ] Dentist due:2026-10-23T09:30 ^gen00003\n",
+        "Side.md": "- [x] Turn off the old schedules ^side0001\n- [ ] Reply to the investor ^side0002\n  > follow up on Thursday\n",
+        "Video.md": "- [ ] Remove the title in the first seconds ^vide0001\n- [ ] English market ^vide0002\n- [ ] Talk to the viewer in second person ^vide0003\n- [ ] More image options ^vide0004\n",
+        "App.md": "- [/] Publish on GitHub ^app00001\n  - [x] A good readme ^app00002\n  - [x] Automate setup with scripts ^app00003\n  - [/] A local-only option ^app00004\n    - [/] Local-only on Linux ^app00005\n    - [/] Local-only on macOS ^app00006\n    - [/] Local-only on Android ^app00007\n  - [x] Explain how to connect an AI ^app00008\n    > so the user does not have to explain the list every time\n  - [x] Fix the bugs found in testing ^app00009\n  - [~] Test on a real Mac and a Linux desktop ^app00010\n  - [x] Make the repo public ^app00011\n    - [x] Public ^app00012\n    - [x] Fix GitHub Pages ^app00013\n  - [x] Show the AI upside clearly ^app00014\n- [x] Simpler updater ^app00015\n  > released as 1.1.0\n  - [x] Run setup once more ^app00016\n  - [x] Second user runs setup once ^app00017\n- [x] Shared lists ^app00018\n  - [x] Deploy ^app00019\n  - [x] Test with the second user ^app00020\n",
+        "Shared.md": "- [ ] Milk ^shar0001\n- [ ] Bread ^shar0002\n",
+        ".order": "General\nSide\nVideo\nApp\nShared\n"
+      },
+      "rewritten": [["Video", 4]]
+    },
+    {
+      "name": "a shared list vanishing (its delete would end it for everyone) is written again, not deleted",
+      "about": "A list this computer shares with others.",
+      "lists": {
+        "General.md": "- [ ] Call the bank ^gen00001\n- [x] Pay rent ^gen00002\n- [ ] Dentist due:2026-10-23T09:30 ^gen00003\n",
+        "Side.md": "- [x] Turn off the old schedules ^side0001\n- [ ] Reply to the investor ^side0002\n  > follow up on Thursday\n",
+        "Video.md": "- [ ] Remove the title in the first seconds ^vide0001\n- [ ] English market ^vide0002\n- [ ] Talk to the viewer in second person ^vide0003\n- [ ] More image options ^vide0004\n",
+        "App.md": "- [/] Publish on GitHub ^app00001\n  - [x] A good readme ^app00002\n  - [x] Automate setup with scripts ^app00003\n  - [/] A local-only option ^app00004\n    - [/] Local-only on Linux ^app00005\n    - [/] Local-only on macOS ^app00006\n    - [/] Local-only on Android ^app00007\n  - [x] Explain how to connect an AI ^app00008\n    > so the user does not have to explain the list every time\n  - [x] Fix the bugs found in testing ^app00009\n  - [~] Test on a real Mac and a Linux desktop ^app00010\n  - [x] Make the repo public ^app00011\n    - [x] Public ^app00012\n    - [x] Fix GitHub Pages ^app00013\n  - [x] Show the AI upside clearly ^app00014\n- [x] Simpler updater ^app00015\n  > released as 1.1.0\n  - [x] Run setup once more ^app00016\n  - [x] Second user runs setup once ^app00017\n- [x] Shared lists ^app00018\n  - [x] Deploy ^app00019\n  - [x] Test with the second user ^app00020\n",
+        ".order": "General\nSide\nVideo\nApp\nShared\n"
+      },
+      "files": { "pgeneral": "General", "pside001": "Side", "pvideo01": "Video", "papp0001": "App", "pshared1": "Shared" },
+      "shared": ["pshared1"],
+      "S": [
+        { "p": "pgeneral", "name": "General", "pos": "a0" },
+        { "t": "gen00001", "in": "pgeneral", "pos": "a0", "text": "Call the bank" },
+        { "t": "gen00002", "in": "pgeneral", "pos": "a1", "text": "Pay rent", "status": "x" },
+        { "t": "gen00003", "in": "pgeneral", "pos": "a2", "text": "Dentist", "due": {"date": "2026-10-23", "time": "09:30"} },
+        { "p": "pside001", "name": "Side", "pos": "a1" },
+        { "t": "side0001", "in": "pside001", "pos": "a0", "text": "Turn off the old schedules", "status": "x" },
+        { "t": "side0002", "in": "pside001", "pos": "a1", "text": "Reply to the investor", "notes": "follow up on Thursday" },
+        { "p": "pvideo01", "name": "Video", "pos": "a2" },
+        { "t": "vide0001", "in": "pvideo01", "pos": "a0", "text": "Remove the title in the first seconds" },
+        { "t": "vide0002", "in": "pvideo01", "pos": "a1", "text": "English market" },
+        { "t": "vide0003", "in": "pvideo01", "pos": "a2", "text": "Talk to the viewer in second person" },
+        { "t": "vide0004", "in": "pvideo01", "pos": "a3", "text": "More image options" },
+        { "p": "papp0001", "name": "App", "pos": "a2V" },
+        { "t": "app00001", "in": "papp0001", "pos": "a0", "text": "Publish on GitHub", "status": "/" },
+        { "t": "app00002", "in": "papp0001", "pos": "a0", "text": "A good readme", "parent": "app00001", "status": "x" },
+        { "t": "app00003", "in": "papp0001", "pos": "a1", "text": "Automate setup with scripts", "parent": "app00001", "status": "x" },
+        { "t": "app00004", "in": "papp0001", "pos": "a2", "text": "A local-only option", "parent": "app00001", "status": "/" },
+        { "t": "app00005", "in": "papp0001", "pos": "a0", "text": "Local-only on Linux", "parent": "app00004", "status": "/" },
+        { "t": "app00006", "in": "papp0001", "pos": "a1", "text": "Local-only on macOS", "parent": "app00004", "status": "/" },
+        { "t": "app00007", "in": "papp0001", "pos": "a2", "text": "Local-only on Android", "parent": "app00004", "status": "/" },
+        { "t": "app00008", "in": "papp0001", "pos": "a3", "text": "Explain how to connect an AI", "parent": "app00001", "status": "x", "notes": "so the user does not have to explain the list every time" },
+        { "t": "app00009", "in": "papp0001", "pos": "a4", "text": "Fix the bugs found in testing", "parent": "app00001", "status": "x" },
+        { "t": "app00010", "in": "papp0001", "pos": "a5", "text": "Test on a real Mac and a Linux desktop", "parent": "app00001", "status": "~" },
+        { "t": "app00011", "in": "papp0001", "pos": "a6", "text": "Make the repo public", "parent": "app00001", "status": "x" },
+        { "t": "app00012", "in": "papp0001", "pos": "a0", "text": "Public", "parent": "app00011", "status": "x" },
+        { "t": "app00013", "in": "papp0001", "pos": "a1", "text": "Fix GitHub Pages", "parent": "app00011", "status": "x" },
+        { "t": "app00014", "in": "papp0001", "pos": "a7", "text": "Show the AI upside clearly", "parent": "app00001", "status": "x" },
+        { "t": "app00015", "in": "papp0001", "pos": "a1", "text": "Simpler updater", "status": "x", "notes": "released as 1.1.0" },
+        { "t": "app00016", "in": "papp0001", "pos": "a0", "text": "Run setup once more", "parent": "app00015", "status": "x" },
+        { "t": "app00017", "in": "papp0001", "pos": "a1", "text": "Second user runs setup once", "parent": "app00015", "status": "x" },
+        { "t": "app00018", "in": "papp0001", "pos": "a2", "text": "Shared lists", "status": "x" },
+        { "t": "app00019", "in": "papp0001", "pos": "a0", "text": "Deploy", "parent": "app00018", "status": "x" },
+        { "t": "app00020", "in": "papp0001", "pos": "a1", "text": "Test with the second user", "parent": "app00018", "status": "x" },
+        { "p": "pshared1", "name": "Shared", "pos": "a3" },
+        { "t": "shar0001", "in": "pshared1", "pos": "a0", "text": "Milk" },
+        { "t": "shar0002", "in": "pshared1", "pos": "a1", "text": "Bread" }
+      ],
+      "cycles": [0, 11, 12],
+      "after": {
+        "General.md": "- [ ] Call the bank ^gen00001\n- [x] Pay rent ^gen00002\n- [ ] Dentist due:2026-10-23T09:30 ^gen00003\n",
+        "Side.md": "- [x] Turn off the old schedules ^side0001\n- [ ] Reply to the investor ^side0002\n  > follow up on Thursday\n",
+        "Video.md": "- [ ] Remove the title in the first seconds ^vide0001\n- [ ] English market ^vide0002\n- [ ] Talk to the viewer in second person ^vide0003\n- [ ] More image options ^vide0004\n",
+        "App.md": "- [/] Publish on GitHub ^app00001\n  - [x] A good readme ^app00002\n  - [x] Automate setup with scripts ^app00003\n  - [/] A local-only option ^app00004\n    - [/] Local-only on Linux ^app00005\n    - [/] Local-only on macOS ^app00006\n    - [/] Local-only on Android ^app00007\n  - [x] Explain how to connect an AI ^app00008\n    > so the user does not have to explain the list every time\n  - [x] Fix the bugs found in testing ^app00009\n  - [~] Test on a real Mac and a Linux desktop ^app00010\n  - [x] Make the repo public ^app00011\n    - [x] Public ^app00012\n    - [x] Fix GitHub Pages ^app00013\n  - [x] Show the AI upside clearly ^app00014\n- [x] Simpler updater ^app00015\n  > released as 1.1.0\n  - [x] Run setup once more ^app00016\n  - [x] Second user runs setup once ^app00017\n- [x] Shared lists ^app00018\n  - [x] Deploy ^app00019\n  - [x] Test with the second user ^app00020\n",
+        "Shared.md": "- [ ] Milk ^shar0001\n- [ ] Bread ^shar0002\n",
+        ".order": "General\nSide\nVideo\nApp\nShared\n"
+      },
+      "rewritten": [["Shared", 2]]
     }
   ]
 }

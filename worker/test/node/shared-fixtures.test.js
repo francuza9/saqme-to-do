@@ -17,7 +17,7 @@ import { aiPrompt } from '../../../local/ai-prompt.mjs';
 import { keyBetween, isValidKey, rekey } from '../../public/js/keys.js';
 import { normalizeText, normalizeNotes, isValidDate as serverValidDate } from '../../src/merge.js';
 import {
-  newState, readLocalLists, addLocalDiff, remotePlan, restorePlan, applyPlanToFolder, rekeyMap, cleanText as engineCleanText,
+  newState, readLocalLists, addLocalDiff, remotePlan, restorePlan, applyPlanToFolder, rekeyMap, syncCycle, cleanText as engineCleanText,
 } from '../../../local/engine.mjs';
 
 const FIXTURES = join(import.meta.dirname, '..', '..', '..', 'shared', 'fixtures');
@@ -218,7 +218,7 @@ describe('engine.json: remotePlan, addLocalDiff (local/engine.mjs)', () => {
       }
       for (const [id, sec] of Object.entries(c.missing ?? {})) st.Missing[id] = clock - sec * 1000;
       st.Guard = c.guard ? { ids: c.guard } : null;
-      const out = addLocalDiff(st, readLocalLists(lists), '', Boolean(c.allow), clock);
+      const out = addLocalDiff(st, readLocalLists(lists), '', Boolean(c.allow), clock, { expected: c.expected ? new Set(c.expected) : null });
       const got = st.Outbox.flatMap((e) => Object.entries(e.fields).map(([name, f]) => ({ key: canon([e.kind, e.id, name, f.v]), base: f.base, ts: f.ts })));
       expect(got.map((g) => g.key).sort()).toEqual(c.changes.map((ch) => canon(ch.slice(0, 4))).sort());
       for (const ch of c.changes.filter((x) => x[4])) {
@@ -237,12 +237,39 @@ describe('engine.json: remotePlan, addLocalDiff (local/engine.mjs)', () => {
       const st = newState();
       st.S = rows(c.S, 100); st.R = rows(c.S, 100); st.Files = { ...c.files }; st.cursor = 5;
       st.Guard = { ids: c.guard };
-      const r = restorePlan(st, readLocalLists(lists), lists);
+      const r = restorePlan(st, readLocalLists(lists), lists, c.keys ?? null);
       expect(r.plan).not.toBeNull();
       expect(r.count).toBe(c.count);
       expect(applyPlanToFolder(r.plan, lists)).toBe(true);
       expect(folderFiles(lists)).toEqual(sorted(c.after));
       if (c.filesAfter) expect(sorted({ ...st.Files, ...r.plan.files })).toEqual(sorted(c.filesAfter));
+    });
+  }
+  for (const c of fx.replay) {
+    it(`replay: ${c.name}`, async () => {
+      const lists = folder(c);
+      const st = newState();
+      st.S = rows(c.S, 100); st.R = rows(c.S, 100); st.Files = { ...c.files }; st.cursor = 5; st.dbId = 'db1'; st.Shared = c.shared ?? [];
+      const sent = [];
+      // a server that has everything (S) and answers with nothing new
+      const transport = async (body) => {
+        sent.push(...body.changes);
+        return { status: 200, data: { cursor: 5, more: false, changes: [], rejected: [], serverTime: Date.now(), dbId: 'db1' } };
+      };
+      const start = Date.now();
+      const rewritten = [];
+      for (const sec of c.cycles) {
+        const res = await syncCycle({
+          state: st, statePath: join(lists, '..', 'state.json'), listsDir: lists, transport, deviceId: 'replay', settleMs: 0,
+          clock: () => start + sec * 1000, applyPlan: (plan) => applyPlanToFolder(plan, lists),
+        });
+        expect(res.status).toBe('synced');
+        for (const x of res.rewritten ?? []) rewritten.push(`${x.name} ${x.count}`);
+      }
+      expect(folderFiles(lists)).toEqual(sorted(c.after));
+      expect(st.Guard).toBeNull();
+      expect(sent.filter((e) => e.fields.deleted?.v === true).map((e) => `${e.kind}:${e.id}`)).toEqual([]);
+      expect(rewritten.sort()).toEqual(c.rewritten.map(([n, k]) => `${n} ${k}`).sort());
     });
   }
 });

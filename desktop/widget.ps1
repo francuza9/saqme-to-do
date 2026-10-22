@@ -576,6 +576,8 @@ function Save-Items {
     [void]$script:undo.Add(@{ Proj = $script:proj; Files = $files })
     while ($script:undo.Count -gt 30) { $script:undo.RemoveAt(0) }
   }
+  # what left the list by a delete here is expected to vanish: the sync never holds it back as lost (Add-LocalDiff)
+  if ($script:sync -and $script:sync.Removed) { foreach ($id in $script:allowRemove) { $script:sync.Removed.Enqueue("task:$id") } }
   $script:undoExtra = $null; $script:allowRemove.Clear()
   $script:loadedText = $text
   if ($merged) { $script:items = Read-Items $text }
@@ -2770,7 +2772,18 @@ function Render-SyncPage {
     Add-CardRow (New-ActionRow 'Delete them' { $script:sync.RestoreHeld = $false; $script:sync.AllowMassDelete = $true; Request-Sync; Render } -Danger -Help 'Confirms the paused deletions: the tasks are deleted on your other devices too')
     Add-Footnote $msg
   }
+  if ($script:rewritten.Count) { Render-RewrittenLists }
   Render-SyncAdvanced
+}
+# Lists whose file vanished from the lists folder without being deleted in an app (another program, a sync client, a
+# copy of the folder in another app's private storage): the sync wrote them again from the last sync (docs/sync.md)
+function Render-RewrittenLists {
+  Add-Heading 'Lists written again'
+  foreach ($x in $script:rewritten) {
+    Add-CardRow (New-InfoRow ([string]$x.Name) ("$($x.Count) $(if ($x.Count -eq 1) { 'task' } else { 'tasks' }), $($x.At.ToString('HH:mm', $CI))"))
+  }
+  Add-CardRow (New-ActionRow 'OK' { $script:rewritten.Clear(); Render } -Name 'Dismiss: lists written again' -Help 'Clears this list')
+  Add-Footnote 'Their files vanished from the lists folder without being deleted in the app, so Saqme wrote them again from the last sync instead of deleting anything. To delete a list, use Delete list in its menu.'
 }
 # Sync & sharing > Advanced: turning sync off, a new key, the sync log (a row that opens the rest of its card)
 function Render-SyncAdvanced {
@@ -2853,6 +2866,7 @@ function Render-AboutPage {
 # $script:sync and hands file changes over as plans, which Apply-SyncPlan executes here on the UI thread
 # between edits (never while you are typing).
 $script:sync = $null; $script:resolving = @{}; $script:syncShown = ''
+$script:rewritten = New-Object System.Collections.ArrayList   # lists written again this session (Settings > Sync & sharing)
 
 function Start-SyncLoop {
   if ($script:sync) { return }
@@ -2868,6 +2882,9 @@ function Start-SyncLoop {
   $shared.Shares = @(); $shared.Notices = @(); $shared.SharedByMe = @{}; $shared.ProjectIds = @{}
   $shared.Ended = [System.Collections.Queue]::Synchronized((New-Object System.Collections.Queue))
   $shared.JoinResults = [hashtable]::Synchronized(@{})
+  # deletes made here (never held back as vanished), and lists whose file was gone and came back (sync-worker.ps1)
+  $shared.Removed = [System.Collections.Queue]::Synchronized((New-Object System.Collections.Queue))
+  $shared.Rewritten = [System.Collections.Queue]::Synchronized((New-Object System.Collections.Queue))
   $rs = [runspacefactory]::CreateRunspace()
   $rs.ApartmentState = 'MTA'; $rs.ThreadOptions = 'ReuseThread'
   $rs.Open()
@@ -4117,6 +4134,14 @@ $timer.Add_Tick({
   if ($script:apiReqs.Count) { Receive-OwnApi }
   if ($script:view -eq 'updates' -and -not $SmokeTest) { Step-ServiceStatus }
   if ($script:joining) { Receive-JoinResult }
+  while ($script:sync -and $script:sync.Rewritten -and $script:sync.Rewritten.Count) {
+    # a list's file was gone (not deleted here): the sync wrote it again from the last sync instead of deleting it
+    $x = $script:sync.Rewritten.Dequeue()
+    [void]$script:rewritten.Insert(0, @{ Name = [string]$x.Name; Count = [int]$x.Count; At = (Get-Date) })
+    while ($script:rewritten.Count -gt 10) { $script:rewritten.RemoveAt($script:rewritten.Count - 1) }
+    $msg = "'$($x.Name)' was missing from the lists folder, so Saqme wrote it again from the last sync ($($x.Count) $(if ($x.Count -eq 1) { 'task' } else { 'tasks' })). Nothing was deleted."
+    Show-Notice $msg; Show-Toast 'Saqme To Do' $msg $x.Name; Render
+  }
   while ($script:sync -and $script:sync.Ended.Count) {
     # its owner stopped sharing a list with this PC: it stays, as one of this PC's own lists
     $x = $script:sync.Ended.Dequeue()

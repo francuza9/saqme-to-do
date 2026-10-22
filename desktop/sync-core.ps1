@@ -914,7 +914,7 @@ function Read-LocalLists([string]$listsDir, [int]$settleMs = 1500, $view = $null
 
 # ================================================================ diff: files -> outgoing changes
 $script:PlannedKeep = 30 * 60000   # how long after a plan a save can still be from a copy older than it
-$script:MissingGrace = 10000       # a list gone this long (and for two cycles) deletes its project
+$script:MissingGrace = 10000       # a list gone this long (and for two cycles) is written again; its delete is held back
 
 # lists\.trash holds a copy of list $name with one of $ids in it (any copy, if the list had no tasks)
 function Test-TrashedCopy([string]$listsDir, [string]$name, $ids) {
@@ -1096,8 +1096,9 @@ function Add-ProjectMapping($st, $local, $out, [long]$now, [long]$Clock, $nameTo
   $rk = Get-RekeyMap $orderKeys
   foreach ($i in @($rk.Keys)) { Add-LocalChange $st 'project' $nameToId[$local.Names[$i]] @{ pos = $rk[$i] } $now; $out.Count++ }
   # projects whose list is gone. Moved to lists\.trash (how the apps delete a list): deleted below. Gone some
-  # other way (moved out and back, a sync client re-downloading the folder, git checkout): nothing is decided
-  # until it has been gone for two cycles and 10 seconds, and then the delete guard below weighs it like its tasks
+  # other way (moved out and back, a sync client re-downloading the folder, git checkout, another program, another
+  # app's private copy of AppData): nothing is decided until it has been gone for two cycles and 10 seconds; then
+  # the delete is held back (never sent without the user) and the list is written again (Restore-VanishedLists)
   foreach ($id in $missing) {
     $ids = Get-LiveTaskIds $base $id
     if ($st.Files.ContainsKey($id) -and (Test-TrashedCopy $local.Dir $st.Files[$id] $ids)) { [void]$projectDeletes.Add(@{ id = $id; ids = $ids; trashed = $true }); continue }
@@ -1165,6 +1166,15 @@ function Add-LocalDiff($st, $local, [string]$notifyAt, [switch]$AllowMassDelete,
   } else { Add-ProjectMapping $st $local $out $now $Clock $nameToId $projectDeletes }
 
   # ---- tasks
+  # how many live tasks each list had before this diff ("every task of a list gone" is weighed against these;
+  # the lines it creates below come into S first)
+  $hadOf = @{}
+  foreach ($key in @($base.Keys)) {
+    $r = $base[$key]
+    if ($r['kind'] -ne 'task' -or (Get-Field $r 'deleted')['v']) { continue }
+    $pl = Get-PlaceOf $r
+    if ($pl) { $hadOf[[string]$pl['project']] = [int]$hadOf[[string]$pl['project']] + 1 }
+  }
   $localTasks = @{}
   $order = New-Object System.Collections.ArrayList
   foreach ($name in $local.Names) {
@@ -1217,9 +1227,11 @@ function Add-LocalDiff($st, $local, [string]$notifyAt, [switch]$AllowMassDelete,
     if ($vals.Count) { Add-LocalChange $st 'task' $tid $vals $l.ts -Over (Get-StaleSave $st $tid $vals $Clock); $out.Count++ }
   }
   # deletes: tasks gone from every list while their project's list is here, and projects whose list is gone.
-  # Never decided while any list was unusable (it may just have moved there). Held back when a large share
-  # vanishes at once (Test-Alarming); confirming deletes exactly what was held back, whatever vanished since
-  # is weighed again.
+  # Never decided while any list was unusable (it may just have moved there). Held back until the user decides
+  # (Guard): a list whose file is gone (however small: only lists\.trash says a list was deleted), every task
+  # of a list gone at once (the file emptied or written over by another program), and a large share vanishing
+  # at once (Test-Alarming). Confirming deletes exactly what was held back, whatever vanished since is weighed
+  # again; deletes made in the app ($Expected) are never held.
   if (-not $out.Skipped) {
     $liveProjects = @{}; foreach ($v in $nameToId.Values) { $liveProjects[$v] = $true }
     $tsOfProject = @{}; foreach ($name in $local.Names) { $tsOfProject[$nameToId[$name]] = $editTs[$name] }
@@ -1255,12 +1267,16 @@ function Add-LocalDiff($st, $local, [string]$notifyAt, [switch]$AllowMassDelete,
     if ($AllowMassDelete -and $st.Guard) { foreach ($k in @($st.Guard['ids'])) { $confirmed[$k] = $true } }
     if ($Expected) { foreach ($k in @($Expected.Keys)) { $confirmed[$k] = $true } }
     $fresh = @($cands | Where-Object { -not $confirmed.ContainsKey($_.key) })
+    $goneOf = @{}; foreach ($c in $cands) { if (-not $c.project) { $goneOf[$c.list] = [int]$goneOf[$c.list] + 1 } }
+    $hold = @($fresh | Where-Object { $_.project -or [int]$goneOf[$_.list] -ge [int]$hadOf[[string]$_.list] })
+    if ($fresh.Count -and (Test-Alarming $fresh $sizeOf $total)) { $hold = $fresh }
     $send = @($cands)
-    if ($fresh.Count -and (Test-Alarming $fresh $sizeOf $total)) {
-      $send = @($cands | Where-Object { $confirmed.ContainsKey($_.key) })
-      $w = 0; foreach ($c in $fresh) { $w += $c.weight }
+    if ($hold.Count) {
+      $held = @{}; foreach ($c in $hold) { $held[$c.key] = $true }
+      $send = @($cands | Where-Object { -not $held.ContainsKey($_.key) })
+      $w = 0; foreach ($c in $hold) { $w += $c.weight }
       $out.Guarded = $w
-      $st.Guard = @{ ids = @($fresh | ForEach-Object { $_.key }) }
+      $st.Guard = @{ ids = @($hold | ForEach-Object { $_.key }) }
     } else { $st.Guard = $null }
     foreach ($pd in $projectDeletes) { if ($pd.trashed) { $send += @{ id = $pd.id; project = $true } } }
     foreach ($c in $send) {
@@ -1471,16 +1487,19 @@ function New-ListFromRows($st, [string]$projId, $depth) {
 # "Restore them" (Deletions paused): the deletes the guard holds back ($st.Guard) are undone in the files instead.
 # Each held-back task goes back into its list as the last synced copy (S) has it (text, status, deadline, notes, id),
 # under its parent and among its siblings by position, merged into what the file holds now (tasks added since stay);
-# a list whose file is gone is written again. -> @{ Plan; Count } (Plan $null while some list is not usable right now:
-# try again), or $null when nothing is held back. The plan goes through ApplyPlan like any other. (engine.mjs restorePlan)
-function Get-RestorePlan($st, $local, [string]$listsDir) {
-  if (-not $st.Guard -or -not @($st.Guard['ids']).Count) { return $null }
+# a list whose file is gone is written again, in its old place in the list order. -> @{ Plan; Count } (Plan $null
+# while some list is not usable right now: try again), or $null when nothing is held back. The plan goes through
+# ApplyPlan like any other. $Keys: only these of the held-back keys (a vanished list written again by itself,
+# Invoke-SyncCycle). (engine.mjs restorePlan)
+function Get-RestorePlan($st, $local, [string]$listsDir, $Keys = $null) {
+  $ids = @(if ($null -ne $Keys) { $Keys } elseif ($st.Guard) { $st.Guard['ids'] })
+  if (-not $ids.Count) { return $null }
   if (-not $local.Ok) { return @{ Plan = $null; Count = 0 } }
   # (a list with lines still waiting for their ids is fine: they stay as they are, the next cycle gives them ids)
   foreach ($name in $local.Names) { if (@('ok', 'unstamped') -notcontains $local.Files[$name].Status) { return @{ Plan = $null; Count = 0 } } }
   $base = $st.S
   $want = [ordered]@{}   # project id -> its rows to put back
-  foreach ($key in @($st.Guard['ids'])) {
+  foreach ($key in $ids) {
     $i = $key.IndexOf(':'); $kind = $key.Substring(0, $i); $id = $key.Substring($i + 1)
     if ($kind -eq 'project') {
       if (-not $want.Contains($id)) { $want[$id] = New-Object System.Collections.ArrayList }
@@ -1534,12 +1553,22 @@ function Get-RestorePlan($st, $local, [string]$listsDir) {
   foreach ($o in $creates) { [void]$plan.Ops.Add($o) }
   foreach ($o in $writes) { [void]$plan.Ops.Add($o) }
   if ($creates.Count) {
-    $names = New-Object System.Collections.ArrayList
-    foreach ($n in $(if ($local.All) { $local.All } else { $local.Names })) { [void]$names.Add($n) }
-    foreach ($o in $creates) { [void]$names.Add([IO.Path]::GetFileNameWithoutExtension($o.path)) }
-    [void]$plan.Ops.Add(@{ type = 'order'; path = (Join-Path $listsDir '.order'); names = @($names) })
+    $new = @($creates | ForEach-Object { [IO.Path]::GetFileNameWithoutExtension($_.path) })
+    [void]$plan.Ops.Add(@{ type = 'order'; path = (Join-Path $listsDir '.order'); names = (Get-OrderWith $listsDir $(if ($local.All) { $local.All } else { $local.Names }) $new) })
   }
   return @{ Plan = $plan; Count = $count }
+}
+
+# The list order once $new lists are written again: each where lists\.order still has it (its old place), else at
+# the end; $now = the lists there now, in order (Get-ProjectFileNames). (engine.mjs orderWith)
+function Get-OrderWith([string]$listsDir, $now, $new) {
+  $names = New-Object 'System.Collections.Generic.List[string]'
+  $known = New-Object 'System.Collections.Generic.HashSet[string]'   # (exact names, as Get-ProjectFileNames matches them)
+  foreach ($n in @($now) + @($new)) { [void]$known.Add([string]$n) }
+  $t = Read-TextFile (Join-Path $listsDir '.order')
+  if ($t) { foreach ($n in ($t -split "`r?`n")) { if ($n -and $known.Contains($n) -and -not $names.Contains($n)) { $names.Add($n) } } }
+  foreach ($n in @($now) + @($new)) { if (-not $names.Contains([string]$n)) { $names.Add([string]$n) } }
+  return ,$names.ToArray()
 }
 
 # $self: the list being renamed, which may hold the name already (a case-only rename: "work" -> "Work" is
@@ -1831,6 +1860,32 @@ function Get-TextWithNewIds([string]$text) {
   return (ConvertTo-MarkdownText $items 0 (Get-TextEol $text))
 }
 
+# A list whose file is gone (an app deletes a list through lists\.trash; this is something else: another program, a
+# sync client, a virtualized copy of AppData) is held back by Add-LocalDiff, then written again here from the last
+# synced copy (Get-RestorePlan), in its old place, without waiting for the user; its delete is never sent. What was
+# written goes into $res.Rewritten (@{ Name; Count }) for the app to say so. (engine.mjs restoreVanished)
+function Restore-VanishedLists($st, $local, $ctx, $res) {
+  if (-not $st.Guard) { return }
+  $keys = @(@($st.Guard['ids']) | Where-Object { ([string]$_).StartsWith('project:', [StringComparison]::Ordinal) })
+  if (-not $keys.Count) { return }
+  $wp = Get-RestorePlan $st $local $ctx.ListsDir $keys
+  if (-not $wp -or -not $wp.Plan -or -not $wp.Plan.Ops.Count) { return }
+  if (-not (& $ctx.ApplyPlan $wp.Plan)) { $res.Retry = $true; return }
+  $written = New-Object System.Collections.ArrayList
+  $done = @{}
+  foreach ($k in @($wp.Plan.Files.Keys)) {
+    $n = [string]$wp.Plan.Files[$k]
+    $st.Files[$k] = $n; [void]$st.Missing.Remove($k); $done["project:$k"] = $true
+    $c = (Get-LiveTaskIds $st.S $k).Count
+    [void]$written.Add(@{ Name = $n; Count = $c })
+    $res.Guarded = [Math]::Max(0, [int]$res.Guarded - $c)
+  }
+  $keep = @(@($st.Guard['ids']) | Where-Object { -not $done.ContainsKey([string]$_) })
+  $st.Guard = $(if ($keep.Count) { @{ ids = $keep } } else { $null })
+  $res.Rewritten = $written.ToArray()
+  $res.Retry = $true
+}
+
 # $ctx = @{ State; StatePath; ListsDir; Url; Token; DeviceId; NotifyAt; AllowMassDelete;
 #           ApplyPlan = { param($plan) -> $true when the whole plan was applied };  Log = { param($msg) }
 #           Clock = { -> ms } (tests); Transport = { param($body) -> @{ Status; Data } } (tests; else HTTP to Url)
@@ -1838,7 +1893,8 @@ function Get-TextWithNewIds([string]$text) {
 #           Restore = $true: put the held-back deletes back into the files (Get-RestorePlan) instead of syncing }
 # Returns @{ Status = 'synced'|'offline'|'error'|'auth'; Message; Conflicts; Guarded; Retry; Access;
 #            Api, WorkerVersion (the own Worker's, once it answered: worker/src/version.js);
-#            Restored (tasks put back); RestorePending (a restore is still to do: a list was busy) }
+#            Restored (tasks put back); RestorePending (a restore is still to do: a list was busy);
+#            Rewritten (lists whose file was gone, written again: Restore-VanishedLists) }
 function Invoke-SyncCycle($ctx) {
   $st = $ctx.State
   $clock = $(if ($ctx.Clock) { [long](& $ctx.Clock) } else { [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds() })
@@ -1872,6 +1928,7 @@ function Invoke-SyncCycle($ctx) {
       $res.Retry = $true
     }
     if ($diff.Skipped) { $res.Retry = $true }
+    else { Restore-VanishedLists $st $local $ctx $res }
     Save-SyncState $st $ctx.StatePath
   }
   # send the outbox (in chunks) and pull everything new

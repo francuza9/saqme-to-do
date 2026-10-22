@@ -213,7 +213,7 @@ export function readLocalLists(listsDir, settleMs = 1500, view = null) {
 
 // ================================================================ diff: files -> outgoing changes
 const PLANNED_KEEP = 30 * 60_000;   // how long after a plan a save can still be from a copy older than it
-const MISSING_GRACE = 10_000;       // a list gone this long (and for two cycles) deletes its project
+const MISSING_GRACE = 10_000;       // a list gone this long (and for two cycles) is written again; its delete is held back
 
 // A plan rewrote lists with what came from other devices; S then takes the server's rows. Before that, keep
 // what the lists held, for each task field the plan changed and each task it brought into a list (added),
@@ -450,8 +450,9 @@ function mapProjects(st, local, out, now, clock, nameToId, projectDeletes) {
   }
   for (const [i, key] of rekeyMap(orderKeys)) { addLocalChange(st, 'project', nameToId[local.names[i]], { pos: key }, now); out.count++; }
   // projects whose list is gone. Moved to lists/.trash (how the apps delete a list): deleted below. Gone some
-  // other way (moved out and back, a sync client re-downloading the folder, git checkout): nothing is decided
-  // until it has been gone for two cycles and 10 seconds, and then the delete guard below weighs it like its tasks
+  // other way (moved out and back, a sync client re-downloading the folder, git checkout, another program): nothing
+  // is decided until it has been gone for two cycles and 10 seconds; then the delete is held back (never sent
+  // without the user) and the list is written again (restoreVanished)
   for (const id of missing) {
     const ids = liveTaskIds(base, id);
     if (st.Files[id] != null && trashedCopy(local.dir, st.Files[id], ids)) { projectDeletes.push({ id, ids, trashed: true }); continue; }
@@ -465,6 +466,14 @@ function mapProjects(st, local, out, now, clock, nameToId, projectDeletes) {
 /** Task changes from the lists, and the deletes (held back when a large share vanishes at once). */
 function diffTasks(st, local, out, now, clock, nameToId, projectDeletes, editTs, allowMassDelete, expected) {
   const base = st.S;
+  // how many live tasks each list had before this diff ("every task of a list gone" is weighed against these;
+  // the lines it creates below come into S first)
+  const hadOf = new Map();
+  for (const r of Object.values(base)) {
+    if (r.kind !== 'task' || getField(r, 'deleted')?.v) continue;
+    const pl = placeOf(r);
+    if (pl) hadOf.set(pl.project, (hadOf.get(pl.project) ?? 0) + 1);
+  }
   const localTasks = new Map();
   const order = [];
   for (const name of local.names) {
@@ -515,9 +524,11 @@ function diffTasks(st, local, out, now, clock, nameToId, projectDeletes, editTs,
     if (Object.keys(vals).length) { addLocalChange(st, 'task', tid, vals, l.ts, false, staleSave(st, tid, vals, clock)); out.count++; }
   }
   // deletes: tasks gone from every list while their project's list is here, and projects whose list is gone.
-  // Never decided while any list was unusable (it may just have moved there). Held back when a large share
-  // vanishes at once: 5+ tasks and over half of one list, or 25+ tasks and over half of all of them.
-  // Confirming deletes exactly what was held back; whatever vanished since is weighed again.
+  // Never decided while any list was unusable (it may just have moved there). Held back until the user decides
+  // (st.Guard): a list whose file is gone (however small: only lists/.trash says a list was deleted), every task of
+  // a list gone at once (the file emptied or written over by another program), and a large share vanishing at
+  // once: 5+ tasks and over half of one list, or 25+ tasks and over half of all of them. Confirming deletes
+  // exactly what was held back; whatever vanished since is weighed again; expected deletes are never held.
   if (!out.skipped) {
     const liveProjects = new Set(Object.values(nameToId));
     const tsOfProject = {};
@@ -558,11 +569,16 @@ function diffTasks(st, local, out, now, clock, nameToId, projectDeletes, editTs,
     };
     const confirmed = new Set([...(allowMassDelete ? st.Guard?.ids ?? [] : []), ...(expected ?? [])]);
     const fresh = cands.filter((c) => !confirmed.has(c.key));
+    const goneOf = new Map();
+    for (const c of cands) if (!c.project) goneOf.set(c.list, (goneOf.get(c.list) ?? 0) + 1);
+    let hold = fresh.filter((c) => c.project || (goneOf.get(c.list) ?? 0) >= (hadOf.get(c.list) ?? 0));
+    if (fresh.length && alarming(fresh)) hold = fresh;
     let send = cands;
-    if (fresh.length && alarming(fresh)) {
-      send = cands.filter((c) => confirmed.has(c.key));
-      out.guarded = fresh.reduce((n, c) => n + c.weight, 0);
-      st.Guard = { ids: fresh.map((c) => c.key) };
+    if (hold.length) {
+      const held = new Set(hold.map((c) => c.key));
+      send = cands.filter((c) => !held.has(c.key));
+      out.guarded = hold.reduce((n, c) => n + c.weight, 0);
+      st.Guard = { ids: hold.map((c) => c.key) };
     } else st.Guard = null;
     for (const c of [...send, ...projectDeletes.filter((pd) => pd.trashed).map((pd) => ({ id: pd.id, project: true }))]) {
       if (c.project) {
@@ -738,17 +754,19 @@ function newListFromRows(st, projId, depth) {
  * "Restore them" (Deletions paused): the deletes the guard holds back (st.Guard) are undone in the files instead.
  * Each held-back task goes back into its list as the last synced copy (S) has it (text, status, deadline, notes,
  * id), under its parent and among its siblings by position, merged into what the file holds now (tasks added since
- * stay); a list whose file is gone is written again. -> { plan, count } (plan null while some list is not usable
- * right now: try again), or null when nothing is held back. The plan goes through applyPlan like any other.
+ * stay); a list whose file is gone is written again, in its old place in the list order. -> { plan, count } (plan
+ * null while some list is not usable right now: try again), or null when nothing is held back. The plan goes through
+ * applyPlan like any other. keys: only these of the held-back keys (a vanished list written again by itself).
  */
-export function restorePlan(st, local, listsDir) {
-  if (!st.Guard?.ids?.length) return null;
+export function restorePlan(st, local, listsDir, keys = null) {
+  const ids = keys ?? st.Guard?.ids ?? [];
+  if (!ids.length) return null;
   // (a list with lines still waiting for their ids is fine: they stay as they are, the next cycle gives them ids)
   if (!local.ok || local.names.some((n) => !['ok', 'unstamped'].includes(local.files[n].status))) return { plan: null, count: 0 };
   const base = st.S;
   const want = new Map();   // project id -> its rows to put back
   const add = (pid, r) => { if (!want.has(pid)) want.set(pid, []); if (r) want.get(pid).push(r); };
-  for (const key of st.Guard.ids) {
+  for (const key of ids) {
     const i = key.indexOf(':');
     const kind = key.slice(0, i);
     const id = key.slice(i + 1);
@@ -800,12 +818,42 @@ export function restorePlan(st, local, listsDir) {
     }
   }
   plan.ops.push(...creates, ...writes);
-  if (creates.length) {
-    const names = [...(local.all ?? local.names)];
-    for (const o of creates) names.push(stem(o.path));
-    plan.ops.push({ type: 'order', path: join(listsDir, '.order'), names });
-  }
+  if (creates.length) plan.ops.push({ type: 'order', path: join(listsDir, '.order'), names: orderWith(listsDir, local.all ?? local.names, creates.map((o) => stem(o.path))) });
   return { plan, count };
+}
+
+/** The list order once `added` lists are written again: each where lists/.order still has it (its old place), else at the end. */
+function orderWith(listsDir, now, added) {
+  const known = new Set([...now, ...added]);
+  const names = [];
+  const t = readText(join(listsDir, '.order'));
+  if (t) for (const n of t.split(/\r?\n/)) if (n && known.has(n) && !names.includes(n)) names.push(n);
+  for (const n of [...now, ...added]) if (!names.includes(n)) names.push(n);
+  return names;
+}
+
+/**
+ * A list whose file is gone (the apps delete a list through lists/.trash; this is something else: another program,
+ * a sync client) is held back by addLocalDiff, then written again here from the last synced copy (restorePlan), in
+ * its old place, without waiting for the user; its delete is never sent. res.rewritten: [{ name, count }].
+ */
+function restoreVanished(st, local, ctx, res) {
+  const keys = (st.Guard?.ids ?? []).filter((k) => k.startsWith('project:'));
+  if (!keys.length) return;
+  const r = restorePlan(st, local, ctx.listsDir, keys);
+  if (!r?.plan?.ops.length) return;
+  if (!ctx.applyPlan(r.plan)) { res.retry = true; return; }
+  const done = new Set();
+  res.rewritten = [];
+  for (const [pid, name] of Object.entries(r.plan.files)) {
+    st.Files[pid] = name; delete st.Missing[pid]; done.add(`project:${pid}`);
+    const count = liveTaskIds(st.S, pid).length;
+    res.rewritten.push({ name, count });
+    res.guarded = Math.max(0, res.guarded - count);
+  }
+  const keep = st.Guard.ids.filter((k) => !done.has(k));
+  st.Guard = keep.length ? { ids: keep } : null;
+  res.retry = true;
 }
 
 // `self`: the list being renamed, which may hold the name already (a case-only rename on macOS). `from`: for a list
@@ -1054,7 +1102,8 @@ export function withNewIds(text) {
  *         view (readLocalLists), scope = { project, file, readOnly } (a shared list's engine), expected (Set) }
  * restore: put the held-back deletes back into the files (restorePlan) instead of syncing this cycle.
  * Returns { status: 'synced'|'offline'|'error'|'auth', message, guarded, retry, sent, received, refused, access,
- * api, workerVersion, restored (tasks put back), restorePending (a restore is still to do: a list was busy) }
+ * api, workerVersion, restored (tasks put back), restorePending (a restore is still to do: a list was busy),
+ * rewritten ([{ name, count }]: lists whose file was gone, written again: restoreVanished) }
  * (api and workerVersion: of one's own server, not a shared list's).
  */
 export async function syncCycle(ctx) {
@@ -1086,6 +1135,7 @@ export async function syncCycle(ctx) {
     res.guarded = diff.guarded;
     if (diff.stamp.length) { ctx.applyPlan({ ops: diff.stamp, files: {}, setting: null, stamp: true }); res.retry = true; }
     if (diff.skipped) res.retry = true;
+    else restoreVanished(st, local, ctx, res);
     saveState(st, ctx.statePath);
   }
   // send the outbox (in chunks) and pull everything new

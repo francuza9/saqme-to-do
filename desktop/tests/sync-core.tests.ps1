@@ -228,9 +228,15 @@ Test-Case 'renamed and deleted list files' {
   Assert-Eq $st.Files['proj0001'] 'Office'
   Assert-True ($null -eq (Get-Change $st 'project' 'proj0003')) 'a list gone for a moment is no delete yet'
   Assert-True $diff.Skipped 'nothing else is decided meanwhile'
-  [void](Add-LocalDiff $st (Read-LocalLists $d) '' -Clock ([DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds() + 11000))
-  Assert-Eq (Get-Change $st 'project' 'proj0003').fields.deleted.v $true   # gone for two cycles and 10 seconds
-  Assert-True ($null -eq (Get-Change $st 'task' 'bbbbbbbb')) 'tasks of a deleted list are not deleted one by one'
+  $diff = Add-LocalDiff $st (Read-LocalLists $d) '' -Clock ([DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds() + 11000)
+  # gone for two cycles and 10 seconds, but not through lists\.trash: held back, however small (one task here)
+  Assert-True ($null -eq (Get-Change $st 'project' 'proj0003')) 'a list gone for good is never deleted without the user'
+  Assert-Eq (@($st.Guard['ids']) -join ',') 'project:proj0003' 'its delete is held back'
+  Assert-Eq $diff.Guarded 1 'its one task'
+  Assert-True ($null -eq (Get-Change $st 'task' 'bbbbbbbb')) 'nor are its tasks deleted one by one'
+  # "Delete them": then it goes
+  [void](Add-LocalDiff $st (Read-LocalLists $d) '' -AllowMassDelete -Clock ([DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds() + 12000))
+  Assert-Eq (Get-Change $st 'project' 'proj0003').fields.deleted.v $true 'deleted once confirmed'
 }
 Test-Case 'first sync adopts a server project with the same name' {
   $d = New-TempLists
@@ -814,6 +820,51 @@ Test-Case 'Restore them: held-back tasks go back with subtasks, notes and deadli
   foreach ($body in $srv.Got) {
     foreach ($c in @($body.changes)) { if ($c['fields'].ContainsKey('deleted') -and $c['fields']['deleted']['v']) { throw "a delete reached the server: $($c['id'])" } }
   }
+}
+Test-Case 'a list file gone for good is written again by itself in its place; while the app is busy it stays held, never deleted' {
+  $d = New-TempLists
+  $rows = @((New-ProjectRow 'proj0001' 'Work'), (New-ProjectRow 'proj0002' 'Old' 'a1'), (New-ProjectRow 'proj0003' 'Home' 'a2'),
+    (New-TaskRow 'wwwwwwww' 'proj0001' $null 'a0' 'W'), (New-TaskRow 'hhhhhhhh' 'proj0003' $null 'a0' 'H'),
+    (New-TaskRow 'oooooo00' 'proj0002' $null 'a0' 'O0'), (New-TaskRow 'oooooo01' 'proj0002' 'oooooo00' 'a0' 'O1'))
+  $st = New-SyncedState $rows @{ proj0001 = 'Work'; proj0002 = 'Old'; proj0003 = 'Home' }
+  Write-List $d 'Work' "- [ ] W ^wwwwwwww`n"; Write-List $d 'Home' "- [ ] H ^hhhhhhhh`n"
+  [IO.File]::WriteAllText((Join-Path $d '.order'), "Work`nOld`nHome`n")   # (Old.md is gone)
+  $srv = New-FakeServer @()
+  $script:testDir = $d
+  $t0 = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()
+  $ctx = @{ State = $st; StatePath = (Join-Path $d '.state-test.json'); ListsDir = $d; Url = 'https://owner.example'; Token = 't'; DeviceId = 'pc-test'; NotifyAt = ''
+            ApplyPlan = { param($plan) $false }; Transport = $script:fakeTransport; SettleMs = 0; Clock = [scriptblock]::Create("$t0") }
+  $r = Invoke-SyncCycle $ctx
+  Assert-True ($null -eq $r.Rewritten) 'gone for a moment: nothing decided yet'
+  $ctx.Clock = [scriptblock]::Create([string]($t0 + 11000))
+  $r = Invoke-SyncCycle $ctx   # the app is busy: the plan is refused
+  Assert-Eq $r.Guarded 2 'held back'
+  Assert-Eq (@($st.Guard['ids']) -join ',') 'project:proj0002'
+  Assert-True (-not (Test-Path -LiteralPath (Join-Path $d 'Old.md'))) 'not written yet'
+  $ctx.ApplyPlan = { param($plan) return ((Invoke-PlanOps $plan.Ops $script:testDir) -eq @($plan.Ops).Count) }
+  $ctx.Clock = [scriptblock]::Create([string]($t0 + 12000))
+  $r = Invoke-SyncCycle $ctx
+  Assert-Eq (@($r.Rewritten | ForEach-Object { "$($_.Name) $($_.Count)" }) -join ',') 'Old 2' 'written again'
+  Assert-Eq $r.Guarded 0 'nothing held back'
+  Assert-True ($null -eq $st.Guard) 'the guard is cleared'
+  Assert-Eq (Read-List $d 'Old') "- [ ] O0 ^oooooo00`n  - [ ] O1 ^oooooo01`n"
+  Assert-Eq ([IO.File]::ReadAllText((Join-Path $d '.order'))) "Work`nOld`nHome`n" 'in its old place'
+  $ctx.Clock = [scriptblock]::Create([string]($t0 + 13000))
+  $r = Invoke-SyncCycle $ctx
+  Assert-True ($null -eq $st.Guard -and $st.Files['proj0002'] -eq 'Old' -and -not $st.Missing.ContainsKey('proj0002')) 'back to normal'
+  foreach ($body in $srv.Got) {
+    foreach ($c in @($body.changes)) { if ($c['fields'].ContainsKey('deleted') -and $c['fields']['deleted']['v']) { throw "a delete reached the server: $($c['id'])" } }
+  }
+}
+Test-Case 'a task deleted in the app is expected: emptying a list there is a delete, not held back' {
+  $d = New-TempLists
+  $st = New-SyncedState @((New-ProjectRow 'proj0001' 'Work'), (New-TaskRow 'aaaaaaaa' 'proj0001' $null 'a0' 'A')) @{ proj0001 = 'Work' }
+  Write-List $d 'Work' ''
+  $out = Add-LocalDiff $st (Read-LocalLists $d) '' -Expected @{ 'task:aaaaaaaa' = 1 }
+  Assert-Eq $out.Guarded 0; Assert-Eq (Get-Change $st 'task' 'aaaaaaaa').fields.deleted.v $true
+  $st = New-SyncedState @((New-ProjectRow 'proj0001' 'Work'), (New-TaskRow 'aaaaaaaa' 'proj0001' $null 'a0' 'A')) @{ proj0001 = 'Work' }
+  $out = Add-LocalDiff $st (Read-LocalLists $d) ''   # the same, emptied by another program
+  Assert-Eq $out.Guarded 1; Assert-True ($null -eq (Get-Change $st 'task' 'aaaaaaaa')) 'held back'
 }
 Test-Case 'Restore them with nothing held back does nothing; a list written a moment ago waits' {
   $d = New-TempLists
