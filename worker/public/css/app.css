@@ -41,8 +41,8 @@ svg { display: block; }
   padding: calc(env(safe-area-inset-top) + var(--space-3)) calc(env(safe-area-inset-right) + var(--space-3)) var(--space-3) calc(env(safe-area-inset-left) + var(--space-3));
   background: var(--frame);
 }
-.logo { flex: none; width: 40px; height: 44px; display: grid; place-items: center; border-radius: var(--r-control); }
-.logo img { width: 24px; height: 24px; }
+.logo { flex: none; width: 40px; height: 44px; display: grid; place-items: center; border-radius: var(--r-control); color: var(--smoke); }
+.logo svg { width: 22px; height: 22px; }
 .logo:active { background: var(--tab-hover); }
 /* The title (the one bold place): the current list's name in display type, a small ⌄ and, when another list has
    something due, the violet dot; one button that opens the lists menu. A long name ends in "…" (whole in the menu). */
