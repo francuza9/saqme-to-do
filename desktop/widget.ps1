@@ -1954,16 +1954,16 @@ $strip.Background = $StripBg; $strip.CornerRadius = New-Object System.Windows.Co
 $strip.BorderBrush = $Line; $strip.BorderThickness = '0,0,0,1'
 $stripGrid = New-Object System.Windows.Controls.Grid
 foreach ($wd in @('Auto', '*', 'Auto', 'Auto', 'Auto', 'Auto', 'Auto')) { $cd = New-Object System.Windows.Controls.ColumnDefinition; $cd.Width = $wd; $stripGrid.ColumnDefinitions.Add($cd) }
-# Settings: a gear (Lucide "settings", 24-unit grid, 1.75 stroke, round caps) in the tab-ink colour; the hover wash is the tabs'
-$gearPath = New-Object System.Windows.Shapes.Path
-$gearPath.Data = [System.Windows.Media.Geometry]::Parse('M 12.22 2 h -0.44 a 2 2 0 0 0 -2 2 v 0.18 a 2 2 0 0 1 -1 1.73 l -0.43 0.25 a 2 2 0 0 1 -2 0 l -0.15 -0.08 a 2 2 0 0 0 -2.73 0.73 l -0.22 0.38 a 2 2 0 0 0 0.73 2.73 l 0.15 0.1 a 2 2 0 0 1 1 1.72 v 0.51 a 2 2 0 0 1 -1 1.74 l -0.15 0.09 a 2 2 0 0 0 -0.73 2.73 l 0.22 0.38 a 2 2 0 0 0 2.73 0.73 l 0.15 -0.08 a 2 2 0 0 1 2 0 l 0.43 0.25 a 2 2 0 0 1 1 1.73 V 20 a 2 2 0 0 0 2 2 h 0.44 a 2 2 0 0 0 2 -2 v -0.18 a 2 2 0 0 1 1 -1.73 l 0.43 -0.25 a 2 2 0 0 1 2 0 l 0.15 0.08 a 2 2 0 0 0 2.73 -0.73 l 0.22 -0.39 a 2 2 0 0 0 -0.73 -2.73 l -0.15 -0.08 a 2 2 0 0 1 -1 -1.74 v -0.5 a 2 2 0 0 1 1 -1.74 l 0.15 -0.09 a 2 2 0 0 0 0.73 -2.73 l -0.22 -0.38 a 2 2 0 0 0 -2.73 -0.73 l -0.15 0.08 a 2 2 0 0 1 -2 0 l -0.43 -0.25 a 2 2 0 0 1 -1 -1.73 V 4 a 2 2 0 0 0 -2 -2 z M 15 12 a 3 3 0 1 1 -6 0 a 3 3 0 0 1 6 0 z')
-$gearPath.Stroke = $TabInk; $gearPath.StrokeThickness = 1.75
-$gearPath.StrokeLineJoin = 'Round'; $gearPath.StrokeStartLineCap = 'Round'; $gearPath.StrokeEndLineCap = 'Round'
-$gearPath.Width = 24; $gearPath.Height = 24; $gearPath.Fill = $Clear
-$gearBox = New-Object System.Windows.Controls.Viewbox
-$gearBox.Width = 21; $gearBox.Height = 21; $gearBox.Child = $gearPath
+# Settings: a menu icon (Lucide "menu", three lines; 24-unit grid, 1.75 stroke, round caps) in the tab-ink colour; the hover wash is the tabs'
+$menuPath = New-Object System.Windows.Shapes.Path
+$menuPath.Data = [System.Windows.Media.Geometry]::Parse('M 4 12 h 16 M 4 6 h 16 M 4 18 h 16')
+$menuPath.Stroke = $TabInk; $menuPath.StrokeThickness = 1.75
+$menuPath.StrokeLineJoin = 'Round'; $menuPath.StrokeStartLineCap = 'Round'; $menuPath.StrokeEndLineCap = 'Round'
+$menuPath.Width = 24; $menuPath.Height = 24; $menuPath.Fill = $Clear
+$menuBox = New-Object System.Windows.Controls.Viewbox
+$menuBox.Width = 21; $menuBox.Height = 21; $menuBox.Child = $menuPath
 $logo = New-Control 'button' 'Settings' 'Ctrl+comma' { param($s, $e) Toggle-Settings }
-$logo.Child = $gearBox; $logo.Background = $Clear; $logo.Margin = '3,0,9,6'; $logo.VerticalAlignment = 'Center'
+$logo.Child = $menuBox; $logo.Background = $Clear; $logo.Margin = '3,0,9,6'; $logo.VerticalAlignment = 'Center'
 $logo.Padding = '3'; $logo.CornerRadius = New-Object System.Windows.CornerRadius($Tokens.Radius.control)
 $logo.ToolTip = 'Settings'; $logo.Cursor = 'Hand'
 [System.Windows.Shell.WindowChrome]::SetIsHitTestVisibleInChrome($logo, $true)

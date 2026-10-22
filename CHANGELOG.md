@@ -1,5 +1,10 @@
 # Changes
 
+## Unreleased
+
+- **Menu button instead of the gear:** the Settings button at the top left is now ☰ (three lines) on Windows, the phone
+  and Linux/macOS. Ctrl+, and everything else about the button are unchanged.
+
 ## 1.2.3
 
 **Sharper on Windows, and a gear for Settings.**
