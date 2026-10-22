@@ -1,6 +1,6 @@
 {
   "name": "saqme-worker",
-  "version": "1.2.2",
+  "version": "1.2.3",
   "private": true,
   "description": "Saqme To Do: the sync service (Cloudflare Workers + D1) and the phone app it serves",
   "type": "module",

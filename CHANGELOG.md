@@ -1,6 +1,16 @@
 # Changes
 
-## Unreleased
+## 1.2.3
+
+**Sharper on Windows, and a gear for Settings.**
+
+- **Crisp text on Windows:** the window's drop shadow sat on the card that holds everything, so Windows drew the
+  whole card, text included, as one bitmap; it now sits on a separate element behind the card (main window, menus,
+  popups). Small text uses Display formatting with layout rounding, and the app is per-monitor DPI aware (v2, falling
+  back to 8.1 or system), so it stays sharp at 125%/150% and when moved to a monitor with another scale. The window
+  and tray icons are decoded at the size they are shown.
+- **Gear instead of the logo:** the Settings button at the top left is a gear on Windows, the phone and Linux/macOS.
+  Ctrl+, and everything else about the button are unchanged.
 
 **A list file that vanishes can never cost tasks again.** On 2026-10-22 two lists vanished from the real lists
 folder on Windows (24 tasks; the delete guard held them, nothing reached other devices). The cause: AI sessions in
