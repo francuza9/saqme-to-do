@@ -278,7 +278,7 @@ $script:stylesTemplate = @'
       <Setter.Value>
         <ControlTemplate TargetType="ContextMenu">
           <Grid>
-            <Border Margin="0,0,10,10" Background="Black" CornerRadius="10" IsHitTestVisible="False">
+            <Border Margin="0,0,10,10" Background="{MenuBg}" CornerRadius="10" IsHitTestVisible="False">
               <Border.Effect><DropShadowEffect BlurRadius="14" ShadowDepth="3" Opacity="0.3"/></Border.Effect>
             </Border>
             <Border Margin="0,0,10,10" Background="{MenuBg}" BorderBrush="{Edge}" BorderThickness="1" CornerRadius="10" Padding="4">
