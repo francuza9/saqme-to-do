@@ -1681,7 +1681,11 @@ function New-TitleButton {
   $b.Child = $dp; $b.ToolTip = $tip; Set-Name $b $label $help; Set-Press $b 0.98
   $b.Add_MouseEnter({ param($s, $e) $s.Background = $TabHover })
   $b.Add_MouseLeave({ param($s, $e) $s.Background = $Clear })
-  $b.Add_MouseLeftButtonDown({ param($s, $e) $e.Handled = $true; Toggle-ListsMenu })
+  # opens on the release: a StaysOpen=false popup opened on the press takes the mouse capture and closes itself on
+  # that same release (it lands outside the popup, on this title). A click on the title while the menu is open
+  # closes it on the press (outside the popup); Toggle-ListsMenu's 250 ms guard ignores the release that follows.
+  $b.Add_MouseLeftButtonDown({ param($s, $e) $e.Handled = $true })
+  $b.Add_MouseLeftButtonUp({ param($s, $e) $e.Handled = $true; Toggle-ListsMenu })
   $b.ContextMenu = New-ListContextMenu $name
   return $b
 }
