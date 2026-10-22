@@ -94,6 +94,7 @@ node test/ui/pwa-static-check.mjs   # optional: the app from a static host (sub-
 node test/ui/pwa-a11y-check.mjs     # optional: axe-core + keyboard / focus / zoom checks (needs axe-core too, see the file)
 node test/ui/local-window-check.mjs # optional: the Linux/macOS window's Settings > Sync & sharing > Set up sync (Playwright)
 node ../scripts/dev/screenshots.mjs --out ~/shots   # optional: phone screenshots with the sample lists (Playwright, see the file)
+node ../scripts/dev/motion-shots.mjs --out ~/shots  # optional: frames of Settings moving (docs/design.md, "Motion")
 node ../scripts/dev/readme-images.mjs --shots ~/shots   # optional: rebuilds docs/images (needs the desktop shot, see the file)
 ```
 

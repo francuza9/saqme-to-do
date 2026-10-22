@@ -36,7 +36,7 @@ mixing, in the generator, so both platforms get identical values.
 | **Violet** | links, focus, active edge, primary action | `#C688EE` | `#8930B6` |
 | **Amber** | due soon, in progress | `#F2B45A` | `#7F5100` |
 
-Derived: *line* = 12 % ink over surface, *hover* = 5 %, *selected* = 14 % violet, *note* = 4.5 % ink,
+Derived: *line* = 12 % ink over surface, *hover* = 5 %, *selected* = 14 % violet (also ☰ pressed in Settings), *note* = 4.5 % ink,
 *washes* for deadline pills = 16 % (dark) / 13 % (light) of the colour over the surface. *Alert* (overdue)
 is `#F2877F` / `#A62B25`.
 
@@ -150,7 +150,8 @@ mouse); the margins around them are kept small so text gets the width. Phone: th
   the text column, in a card of its own at the bottom (on the phone above the home indicator).
 - The header is Settings (the ☰ button) on the left, the current list's name with its ⌄, and on the right
   conflicts (when there are some) and sync (on Windows also the window buttons); lists are switched, added and
-  managed from that name ([The list switcher](#the-list-switcher)).
+  managed from that name ([The list switcher](#the-list-switcher)). In Settings it is only ☰, pressed
+  ([The header in Settings](#the-header-in-settings)).
 
 ## Grouped lists
 
@@ -206,11 +207,50 @@ phone's at ≥ 3 : 1).
 
 - Text contrast ≥ 4.5 : 1 in both themes (tested). Status never relies on colour alone: every chip has a
   shape or glyph, closed tasks are also struck through.
-- Visible focus: a 2 px violet ring on every focusable control in both apps (`:focus-visible` on the phone,
-  a focus visual for keyboard focus on the desktop); the selected task also keeps its tinted line + violet edge.
-- Motion only for small state changes (sheet rise, chevron turn, the lists menu dropping in, the next list
-  sliding in after a swipe) and none at all with `prefers-reduced-motion`.
+- Visible focus: a 2 px violet ring on every focusable control in both apps, for the keyboard only. It never
+  shows after a tap or a click, also not where the app moves focus itself after one (the Back button of a page
+  just opened) or where a browser would draw one (a text box): the phone app keeps the last kind of input on the
+  root (`data-input`, with `:focus-visible`), the Windows app shows its focus visual only while the keyboard is in
+  use (also with Windows' *Underline access keys* on). The selected task also keeps its tinted line + violet edge.
+- Motion for small state changes (sheet rise, chevron turn, the lists menu dropping in, the next list sliding in
+  after a swipe), moving between the views of Settings and press feedback ([Motion](#motion)); none at all with
+  `prefers-reduced-motion` or Windows' *Animation effects* off.
 - Touch targets ≥ 44 px on the phone for rows and main controls, never under 24 px.
+
+## The header in Settings
+
+In Settings (any view but the list: Settings, its pages and what they open, Conflicts, Share) the header is only
+☰, pressed like a selected tab: the *selected* tint behind it and the icon in ink, so it says where you are. ☰
+again goes back to the list (so do Esc and Back from Settings). The list's name, conflicts and sync (on Windows
+also Options ⋯) step aside, fading out with the view and keeping their room, so nothing in the header moves; on
+Windows the window buttons and the drag area stay. A screen reader hears a toggle button, pressed or not.
+
+```
+ [ ☰ ]                                       ─ □ ×    ← Settings: ☰ on the selected tint (Windows: window buttons)
+ [ ☰  ]  Work ⌄ •                     [cloud] ─ □ ×    ← the list
+```
+
+## Motion
+
+Motion says where you went and answers a touch; it never makes you wait. Both apps use the same numbers
+(`worker/public/js/app.js` and `app.css`; `desktop/widget.ps1` and `desktop/a11y.cs`). With *reduce motion*
+(phone, Linux, macOS) or Windows' *Animation effects* off nothing moves: views change at once, a press only tints.
+
+| What | How | Time |
+|---|---|---|
+| a page of Settings opens | slides in from the right over the page it came from, which moves 30 % to the left and dims to half (iOS push) | 280 ms |
+| Back (the header, Esc) | the reverse: the page slides off to the right, the one under it comes back from the left | 280 ms |
+| Settings opens from the list, or closes to it | a fade through: the view left behind fades out, then the new one fades in, rising 8 px; the two never show at once | out 90 ms; in 160 ms, from 60 ms on |
+| the header's list name, sync and conflicts | fade out into Settings, back in with the list | out 120 ms, in as the view |
+| a press | tints at once (a row: *card pressed*), and a button also shrinks: an icon to 92 %, a status chip 86 %, text buttons, pills and segments 96–97 %, the title 98 % | in 80 ms, out 120 ms |
+
+- One curve for all of it: ease-out cubic, `cubic-bezier(.33, 1, .68, 1)` on the web, `CubicEase` *EaseOut* in WPF.
+- Nothing waits for a move. The new view takes taps, clicks and keys at once, with keyboard focus on it from the
+  start (its Back button, or the row you came back to). The view left behind is drawn by a copy that takes no taps,
+  focus or screen reader and goes when its move ends. A move started while one runs ends that one first, so quick
+  taps never leave two views or one half moved; a double click whose first click opened a view counts once.
+- Rows only tint: a whole line shrinking would come apart from its card. Only the innermost control under the
+  finger reacts (the chip, not its row); a task's line tints while its text (which edits it) is pressed.
 
 ## The list switcher
 
@@ -286,7 +326,8 @@ the same in its own controls, see the end of this section.
   each page is short, cards of one-line rows again. Places you go to have a chevron, actions are violet rows.
   Rare or risky actions sit at the bottom of their page under *Advanced*, a row that opens the rest of its card.
   A quiet meta line under every Settings view says the version; a violet dot (with words) marks what needs a
-  look: an update, a conflict, paused deletions. Back (the header, Esc) goes one level up. The phone app keeps
+  look: an update, a conflict, paused deletions. Back (the header, Esc) goes one level up, and a page slides in and
+  out like one on an iPhone ([Motion](#motion)); ☰, pressed while Settings are open, closes them. The phone app keeps
   only what it has: no Updates page (it updates with the sync service, so About says the version and that), no
   start with Windows; Keyboard shortcuts appear where there is a keyboard to use them (the Linux/macOS window, a
   mouse or trackpad).

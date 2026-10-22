@@ -48,7 +48,10 @@ part is checked; and what is not verified automatically. Target: WCAG 2.2 level 
   typed letter jump, Enter switches, Esc closes it, Tab closes it and moves on; Ctrl+M, Shift+F10 or the menu key
   open the focused list's own menu (share, rename, move, delete).
 - **Focus.** A 2 px violet ring on everything focusable (`:focus-visible`; inside a card it is drawn inset,
-  so the card's corners never cut it). Sheets (task menu, status, deadline, ...) are named modal dialogs: focus
+  so the card's corners never cut it), for the keyboard only: the app keeps the last kind of input on the root
+  (`data-input`), and after a tap or a click there is no ring, also on focus the app moves itself (a page's Back
+  button) and in a text box, where browsers would draw one. Focus the app moves asks for the ring after keys
+  (`focusVisible`). Sheets (task menu, status, deadline, ...) are named modal dialogs: focus
   moves in, Tab stays in, Escape closes, and focus returns to the control that opened them. The lists menu opens
   with focus on the current list and gives it back to the title when it closes (also after a list's own menu
   opened from it). The page is rebuilt
@@ -57,11 +60,15 @@ part is checked; and what is not verified automatically. Target: WCAG 2.2 level 
   are. Esc goes back one level (a page to Settings, Recently deleted to Your lists, Settings to the list) and
   focus returns to the row you came from (in the list: the selected task, else the Settings button); Esc in an
   open sheet only closes the sheet. *Keyboard shortcuts* (Settings > General, where there is a keyboard) lists
-  them all.
+  them all. In Settings the header is only the Settings button (☰), a toggle button (`aria-pressed`) that is
+  pressed there and goes back to the list; the list's name, conflicts and sync are `inert` there (out of Tab's
+  and screen readers' reach at once, while they fade). A page that slides in has focus from the start; the page
+  leaving is `inert` and `aria-hidden`.
 - **Announcements.** Messages ("Task deleted. Undo is available.") go to a live region that is always in the
   page; a message with an action stays while it has focus or the pointer.
-- **Motion and size.** No transitions with *reduce motion*; a swipe between lists then changes the list without
-  it following the finger or sliding in. Touch targets are at least 24 px (most 44 px).
+- **Motion and size.** No transitions with *reduce motion*: Settings pages change without sliding, a press only
+  tints, and a swipe between lists changes the list without it following the finger or sliding in. Nothing waits
+  for a move (docs/design.md, "Motion"). Touch targets are at least 24 px (most 44 px).
   At 200 % zoom on a 390 px phone (195 px wide) and at 320 px nothing scrolls sideways or gets cut off (the
   list, the lists menu, Settings and Sync & sharing are checked); below 360 px the rows of Settings wrap their
   labels and values instead of ending them in "…", and below 280 px the drag handle column is dropped and the
@@ -91,7 +98,8 @@ milliseconds) and falls back to the old elements if that ever fails.
   is reported as selected. Status chips, chevrons and deadlines inside a task are buttons ("Status: Blocked /
   waiting", "Expand subtasks and notes", "Deadline: 17 Oct, overdue"). The theme choice is three radio buttons;
   *Start with Windows* is a check box with its state; all other controls are named buttons, including the
-  window buttons and the settings button (the ☰ button). Every text box has a name and a hint (placeholders are
+  window buttons. The settings button (☰) is a toggle button (Invoke and Toggle): on while Settings are open,
+  when the list's name, sync and Options are hidden from the tree. Every text box has a name and a hint (placeholders are
   not labels). Decorative glyphs and placeholders are hidden from screen readers; hidden hover tools are not
   in the tree.
 - **Settings.** A list of pages, each a button whose name says the page and how it stands ("Sync & sharing,
@@ -116,7 +124,9 @@ milliseconds) and falls back to the old elements if that ever fails.
   when it is a link; Esc goes back one level (a page to Settings, Settings to the list), and Ctrl+, opens or
   closes Settings.
 - **Focus.** A 2 px violet ring (the theme's accent, ≥ 3 : 1) on the focused control, shown for keyboard focus
-  only; the selected task keeps its tinted line and violet edge. After every change the widget puts focus back
+  only: it is visible only while the keyboard is in use (the last input, also with Windows' *Underline access
+  keys* on), never after a click or a tap; the selected task keeps its tinted line and violet edge. While a
+  Settings page slides in, the one leaving takes no clicks or Tab. After every change the widget puts focus back
   on the selected task. Opening a Settings view puts focus on its title, so a screen reader says where you are;
   going back puts it on the row you came from (or, back in the list with no task selected, on the Settings
   button); a view rebuilt in place (sync status, a switch flipped) keeps focus on the same control.
@@ -156,9 +166,13 @@ All in `design/tokens.json`, shared by both apps and tested on every run:
   Automation, the browser's accessibility tree through axe-core), but no one listened to them. Worth a session
   with Narrator on Windows and VoiceOver on an iPhone before claiming more.
 - **Safari and WebKit.** The phone checks run in Chromium. Safari supports the same features (`inert` from
-  iOS 15.5); its accessibility tree was not inspected.
-- **The desktop focus ring on screen.** It is a standard WPF focus visual with a tested colour, but the check
-  window runs off-screen without taking focus (so it never disturbs your desktop), so the ring was not seen.
+  iOS 15.5); its accessibility tree was not inspected. WebKit draws a focus ring after a tap in more places than
+  Chromium (focus the app moves): the app's own input flag hides it whatever the browser decides, which the checks
+  test in Chromium (with a text box, which Chromium also rings) but nobody saw on an iPhone.
+- **The desktop focus ring on screen.** It is a standard WPF focus visual with a tested colour; the self-check
+  tests that it follows the kind of input (keys, a click), but the check window runs off-screen without taking
+  focus (so it never disturbs your desktop), so the ring was not seen. For a moment while a Settings page slides
+  in (280 ms), UI Automation still lists the page that leaves.
 - **Windows High Contrast themes** are not supported: the widget keeps its own colours (tested for contrast
   above, Settings included). Larger text works through Windows display scaling, not through the separate *Text
   size* setting.

@@ -5,6 +5,29 @@
 - **Menu button instead of the gear:** the Settings button at the top left is now ☰ (three lines) on Windows, the phone
   and Linux/macOS. Ctrl+, and everything else about the button are unchanged.
 
+**Settings feel like an app** (Windows, the phone and Linux/macOS alike; docs/design.md, "Motion").
+
+- **No focus ring after a tap or a click.** A violet outline could show around Settings' Back button (and other
+  controls) after a tap, mostly on an iPhone, where Safari rings focus the app moves itself. The ring is now for the
+  keyboard only, everywhere: Tab brings it, a tap or a click never leaves one (also in a text box, and on Windows
+  with *Underline access keys* on).
+- **Settings take the header.** While any Settings view is open, the header is only ☰, pressed (the selected tint,
+  like a selected tab), and ☰ again closes Settings. The list's name, conflicts and sync (on Windows also Options)
+  fade out and keep their room; Windows keeps its window buttons and drag area. Screen readers hear a toggle button.
+- **Pages slide.** A Settings page slides in from the right over the one it came from, which moves a little left and
+  dims; Back slides it off again (280 ms). Opening Settings from the list and closing them is a quick fade through.
+  Nothing waits for a move: taps, clicks, keys and keyboard focus go to the new page at once, quick taps never leave
+  a page half moved, and a double click that opened a page counts once.
+- **Press feedback.** Rows tint when pressed and fade back; buttons, chips and pills also shrink a little (80 ms in,
+  120 ms out). A task's line tints while its text is pressed.
+- **Reduce motion** (or Windows' *Animation effects* off): nothing slides or shrinks; views change at once and a
+  press only tints.
+- Tests: the phone checks test no ring after a click or a tapped text box, the ring after Tab, the header in
+  Settings, and quick clicks and keys ending as one view (also with reduce motion); the widget's self-check (MOTION
+  OK) and `uia-check.ps1` the same on Windows. `render-widget.ps1 -From` and `scripts/dev/motion-shots.mjs` render
+  frames of the moves.
+- Windows: the ☰ icon follows a theme change at once (it kept the old theme's colour until a restart).
+
 ## 1.2.3
 
 **Sharper on Windows, and a gear for Settings.**
