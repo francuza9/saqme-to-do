@@ -277,8 +277,17 @@ check(order.join('|') === 'Last one|Write the report', `drag moved the task abov
 // pair now -> everything uploads (Settings > Sync & sharing)
 await page.tap('#logo');
 check(await page.textContent('[data-fk="open:sync"]') === 'Sync & sharingOff', `Settings: Sync & sharing says it is off (${await page.textContent('[data-fk="open:sync"]')})`);
+// in Settings the header is only ☰, pressed (docs/design.md, "Motion"); after taps no focus ring anywhere
+await page.waitForFunction(() => !document.querySelector('.list.ghost'));
+await page.waitForTimeout(250);   // (the header's fade)
+const head = await page.evaluate(() => ({ pressed: document.getElementById('logo').getAttribute('aria-pressed'), title: getComputedStyle(document.getElementById('switcher')).visibility, sync: getComputedStyle(document.getElementById('syncBtn')).visibility }));
+check(head.pressed === 'true' && head.title === 'hidden' && head.sync === 'hidden', `Settings: the header is only ☰, pressed (${JSON.stringify(head)})`);
 await page.tap('[data-fk="open:sync"]');
 await page.waitForSelector('.view-header h1:has-text("Sync & sharing")');
+await page.waitForFunction(() => !document.querySelector('.list.ghost'));
+const tapRing = async (sel) => { await page.tap(sel); return page.evaluate((s) => { const a = document.activeElement; return { on: a === document.querySelector(s), input: document.documentElement.dataset.input, ring: getComputedStyle(a.closest('.g-row.input') ?? a).outlineStyle }; }, sel); };
+const tapped = await tapRing('[data-fk="pair-input"]');
+check(tapped.on && tapped.input === 'pointer' && tapped.ring === 'none', `a text box tapped: no focus ring (${JSON.stringify(tapped)})`);
 // a link whose address hides another server behind a user name is refused
 await page.fill('[data-fk="pair-input"]', `${base.replace('//', '//saqme.example.workers.dev@')}/#pair=${token}`);
 await page.tap('[data-fk="pair-go"]');

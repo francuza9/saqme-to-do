@@ -54,6 +54,9 @@ describe('design tokens', () => {
       // the Share sheet's footnotes sit on the sheet (frame); the version line is a link on the list's surface
       for (const k of ['smoke', 'alert']) expect(contrast(p[k], p.frame), `${k} footnote in a sheet`).toBeGreaterThanOrEqual(4.5);
       expect(contrast(p.violet, p.hover), 'the version line as a link, hovered').toBeGreaterThanOrEqual(4.5);
+      // in Settings the Settings button (☰) is pressed: ink on the selected tint, in the header (both apps)
+      expect(contrast(p.ink, p.selected), 'the pressed Settings button').toBeGreaterThanOrEqual(4.5);
+      expect(contrast(p.violet, p.selected), 'the focus ring on the pressed Settings button').toBeGreaterThanOrEqual(3);
     });
     it(`${name}: status chips and their glyphs meet WCAG 1.4.11 (3:1), also on hovered and selected rows`, () => {
       const p = palette(theme);

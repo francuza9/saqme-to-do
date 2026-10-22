@@ -112,6 +112,28 @@ const pointerEnd = () => setTimeout(() => {
 document.addEventListener('pointerup', pointerEnd, true);
 document.addEventListener('pointercancel', pointerEnd, true);
 
+// ---------------------------------------------------------------- keyboard focus: a ring for the keyboard only
+// The last kind of input is kept on the root (data-input: pointer or keyboard), and app.css draws no focus ring after a
+// tap or a click, also where a browser would: a text box, or focus the app moves after a tap (WebKit rings that).
+// Focus the app moves itself asks for the ring only after keys (focusVisible, where a browser takes it).
+const MODIFIER_KEYS = new Set(['Shift', 'Control', 'Alt', 'AltGraph', 'Meta', 'CapsLock', 'Fn']);
+const setInput = (kind) => { if (document.documentElement.dataset.input !== kind) document.documentElement.dataset.input = kind; };
+const keyboardInput = () => document.documentElement.dataset.input === 'keyboard';
+setInput('pointer');   // (until a key is pressed)
+document.addEventListener('pointerdown', () => setInput('pointer'), true);
+document.addEventListener('keydown', (e) => {
+  if (MODIFIER_KEYS.has(e.key)) return;
+  // typing in a text box is not moving around (Tab and Esc are)
+  if (e.target instanceof Element && e.target.matches('input, textarea, [contenteditable]') && e.key !== 'Tab' && e.key !== 'Escape') return;
+  setInput('keyboard');
+}, true);
+/** Moves keyboard focus to el; the ring shows when the keyboard is in use. */
+function focusOn(el) {
+  el?.focus({ preventScroll: true, focusVisible: keyboardInput() });
+}
+// (iOS Safari applies :active, the press feedback, only where touches are listened to)
+document.addEventListener('touchstart', () => {}, { passive: true });
+
 function currentProject() {
   const list = store.projects();
   if (!list.length) return null;
@@ -125,7 +147,12 @@ function render() {
   const fk = document.activeElement?.dataset?.fk;
   // before the user starts (welcome screen) the header is just the logo, which opens Settings
   els.switcher.hidden = els.sync.hidden = showWelcome();
-  if (els.switcher.hidden) closeListMenu({ focus: false });
+  // in Settings (any view but the list) it is only ☰, pressed: the rest steps aside (app.css) and is out of reach at once
+  const inSettings = ui.view !== 'list';
+  els.app.classList.toggle('in-settings', inSettings);
+  els.logo.setAttribute('aria-pressed', String(inSettings));
+  els.switcher.inert = els.sync.inert = els.conflicts.inert = inSettings;
+  if (els.switcher.hidden || inSettings) closeListMenu({ focus: false });
   renderSwitcher();
   renderStatus();
   els.list.classList.toggle('swipeable', ui.view === 'list' && !showWelcome() && store.projects().length > 1);
@@ -269,7 +296,7 @@ function openListMenu({ focus = '' } = {}) {
   const items = menuItems();
   const to = focus === 'last' ? items[items.length - 1]
     : (focus && els.menu.querySelector(`[data-fk="${CSS.escape(focus)}"]`)) || els.menu.querySelector('[aria-checked="true"]') || items[0];
-  to?.focus({ preventScroll: true });
+  focusOn(to);
   to?.scrollIntoView({ block: 'nearest' });
 }
 /** Closes it; focus goes back to the title (not when a tap elsewhere took it). */
@@ -278,7 +305,7 @@ function closeListMenu({ focus = true } = {}) {
   els.menuWrap.hidden = true;
   els.switcher.setAttribute('aria-expanded', 'false');
   els.list.inert = els.addBar.inert = false;
-  if (focus) els.switcher.focus({ preventScroll: true });
+  if (focus) focusOn(els.switcher);
 }
 /** Its scrim from the header down to the window's bottom; the menu under the title, its left edge on the title's, inside the window (an iPhone's safe areas included). */
 function placeListMenu() {
@@ -339,7 +366,7 @@ const typed = { text: '', at: 0 };
 els.menu.addEventListener('keydown', (e) => {
   const items = menuItems();
   const i = items.indexOf(document.activeElement);
-  const to = (j) => items[(j + items.length) % items.length]?.focus();
+  const to = (j) => focusOn(items[(j + items.length) % items.length]);
   const mod = e.ctrlKey || e.metaKey;
   if (mod && e.key.toLowerCase() === 'm') {
     // a list's own menu, like Ctrl+M on a task (also Shift+F10, the menu key and a right-click: contextmenu)
@@ -359,7 +386,7 @@ els.menu.addEventListener('keydown', (e) => {
     const from = typed.text.length > 1 ? Math.max(i, 0) : i + 1;
     for (let k = 0; k < items.length; k++) {
       const el = items[(from + k) % items.length];
-      if (el.querySelector('.g-label')?.textContent.toLowerCase().startsWith(typed.text)) { el.focus(); break; }
+      if (el.querySelector('.g-label')?.textContent.toLowerCase().startsWith(typed.text)) { focusOn(el); break; }
     }
   } else return;
   e.preventDefault();
@@ -397,6 +424,7 @@ els.list.addEventListener('pointermove', (e) => {
     if (Math.abs(dx) < SWIPE_SLOP || Math.abs(dx) < 1.5 * Math.abs(dy)) return;
     if (ui.drag || ui.editing || !els.sheetWrap.hidden) { swipe = null; return; }   // (a drag or a long press came first)
     s.on = true;
+    els.list.classList.add('swiping');
     try { els.list.setPointerCapture(e.pointerId); } catch { /* the pointer is gone */ }
   }
   s.dx = dx;
@@ -411,6 +439,7 @@ function endSwipe(e) {
   if (!s || e.pointerId !== s.id) return;
   swipe = null;
   if (!s.on) return;
+  els.list.classList.remove('swiping');
   ui.swipedAt = Date.now();   // (the release is not a tap on what is under the finger)
   const from = { transform: els.list.style.transform || 'none', opacity: els.list.style.opacity || '1' };
   els.list.style.transform = els.list.style.opacity = '';
@@ -803,13 +832,101 @@ function renderStatus() {
 
 // ---------------------------------------------------------------- main view
 function renderMain() {
+  // another view than the one on screen: that one leaves (moving between views, below)
+  const from = ui.shownView;
+  const leaving = from && from !== ui.view ? leaveView() : null;
   const showAdd = ui.view === 'list' && !!currentProject() && !showWelcome() && !readOnly(currentProject().id);
   els.addBar.hidden = !showAdd;
   els.app.classList.toggle('no-add', !showAdd);
-  if (ui.view === 'list' && showWelcome()) return renderWelcome();
-  if (ui.view !== 'list') return renderSettingsView();
-  renderTasks();
+  if (ui.view === 'list' && showWelcome()) renderWelcome();
+  else if (ui.view !== 'list') renderSettingsView();
+  else renderTasks();
+  ui.shownView = ui.view;
+  if (leaving) moveIn(leaving, from, ui.view);
 }
+
+// ---------------------------------------------------------------- moving between views
+// Settings moves as on an iPhone: a page that opens slides in from the right over the one it came from, which moves a
+// little to the left and dims; Back does the reverse. Opening Settings from the list, and going back to it, is a quick
+// fade. The view left behind is its own nodes, moved into a copy of the list's box (the ghost) that takes no taps, focus
+// or screen reader and goes when its animation ends; the new view takes taps and keys at once, focus included. A move
+// while one runs ends that one first, so quick taps never leave two views or one half moved. Reduce motion: no moves.
+const MOVE_MS = 280;   // a page of Settings
+// Settings from the list and back: the view left behind fades out in 90 ms, the new one in from 60 ms on, in 160 ms (a
+// fade through, so the two never show at once)
+const FADE_OUT_MS = 90;
+const FADE_DELAY_MS = 60;
+const FADE_MS = 160;
+const EASE_OUT = 'cubic-bezier(.33, 1, .68, 1)';   // ease-out cubic: the Windows app's CubicEase
+const depthOf = (v) => (v === 'list' ? 0 : 1 + depthOf(parentOf(v)));
+let viewMove = null;   // the move that runs: { ghost, anims }
+/** The view on screen leaves: its nodes go to the ghost, where they are, scrolled as they were. Null: no move. */
+function leaveView() {
+  ui.movedAt = performance.now();
+  endMove();
+  if (reducedMotion() || document.visibilityState !== 'visible' || !els.list.firstChild) return null;
+  const ghost = els.list.cloneNode(false);   // (the same classes: the same padding, so the same layout)
+  ghost.removeAttribute('id');
+  ghost.removeAttribute('tabindex');
+  ghost.classList.add('ghost');
+  ghost.classList.remove('swipeable', 'swiping');
+  ghost.inert = true;
+  ghost.setAttribute('aria-hidden', 'true');
+  Object.assign(ghost.style, { left: `${els.list.offsetLeft}px`, top: `${els.list.offsetTop}px`, width: `${els.list.offsetWidth}px`, height: `${els.list.offsetHeight}px`, transform: '', opacity: '' });
+  const top = els.list.scrollTop;
+  ghost.append(...els.list.childNodes);
+  // (focus keys and ids stay the new view's alone)
+  for (const n of ghost.querySelectorAll('[data-fk], [id]')) { n.removeAttribute('data-fk'); n.removeAttribute('id'); }
+  els.list.after(ghost);
+  ghost.scrollTop = top;
+  return ghost;
+}
+/** The new view comes in over (a page opening) or under (Back) the ghost, or fades in. */
+function moveIn(ghost, from, to) {
+  const kind = from === 'list' || to === 'list' ? 'fade' : depthOf(to) < depthOf(from) ? 'back' : 'push';
+  const timing = (ms, fill = 'none') => ({ duration: ms, easing: EASE_OUT, fill });
+  let anims;
+  if (kind === 'push') {
+    els.list.style.zIndex = '2';
+    anims = [
+      ghost.animate([{ transform: 'none', opacity: 1 }, { transform: 'translateX(-30%)', opacity: 0.5 }], timing(MOVE_MS, 'forwards')),
+      els.list.animate([{ transform: 'translateX(100%)' }, { transform: 'none' }], timing(MOVE_MS)),
+    ];
+  } else if (kind === 'back') {
+    ghost.style.zIndex = '2';
+    anims = [
+      ghost.animate([{ transform: 'none' }, { transform: 'translateX(100%)' }], timing(MOVE_MS, 'forwards')),
+      els.list.animate([{ transform: 'translateX(-30%)', opacity: 0.5 }, { transform: 'none', opacity: 1 }], timing(MOVE_MS)),
+    ];
+  } else {
+    anims = [
+      ghost.animate([{ opacity: 1 }, { opacity: 0 }], timing(FADE_OUT_MS, 'forwards')),
+      els.list.animate([{ opacity: 0, transform: 'translateY(8px)' }, { opacity: 1, transform: 'none' }], { ...timing(FADE_MS, 'backwards'), delay: FADE_DELAY_MS }),
+    ];
+  }
+  els.app.dataset.move = kind;
+  viewMove = { ghost, anims };
+  Promise.all(anims.map((a) => a.finished)).then(() => { if (viewMove?.ghost === ghost) endMove(); }, () => { /* ended early */ });
+}
+/** The move that runs ends now: the ghost goes, the new view is where it belongs. */
+function endMove() {
+  if (!viewMove) return;
+  const { ghost, anims } = viewMove;
+  viewMove = null;
+  for (const a of anims) a.cancel();
+  ghost.remove();
+  els.list.style.zIndex = '';
+  delete els.app.dataset.move;
+}
+// a double click whose first click opened a view is one click: its second click, landing on that view, does nothing
+let lastClickAt = -Infinity;
+document.addEventListener('click', (e) => {
+  const now = performance.now();
+  const moved = ui.movedAt ?? -Infinity;
+  const second = e.detail > 1 && moved > lastClickAt && now - moved < 500;
+  lastClickAt = now;
+  if (second) { e.preventDefault(); e.stopPropagation(); }
+}, true);
 
 function isOpen(node) {
   const v = ls.get(`open.${node.id}`);
@@ -1288,7 +1405,7 @@ function sheet(title, children) {
   // focus the current choice, or the first control, unless an input already took it
   queueMicrotask(() => {
     if (els.sheet.contains(document.activeElement)) return;
-    (els.sheet.querySelector('[aria-current="true"]') ?? els.sheet.querySelector('input, textarea, button, a[href]') ?? els.sheet).focus({ preventScroll: true });
+    focusOn(els.sheet.querySelector('[aria-current="true"]') ?? els.sheet.querySelector('input, textarea, button, a[href]') ?? els.sheet);
   });
 }
 function closeSheet() {
@@ -1304,7 +1421,7 @@ function closeSheet() {
 /** Focuses the control with this data-fk key; false when there is none. */
 function focusKey(fk) {
   const el = document.querySelector(`[data-fk="${CSS.escape(fk)}"]`);
-  el?.focus({ preventScroll: true });
+  focusOn(el);
   return !!el;
 }
 els.backdrop.addEventListener('click', closeSheet);
@@ -1317,8 +1434,8 @@ document.addEventListener('keydown', (e) => {
   if (!items.length) { e.preventDefault(); return; }
   const first = items[0];
   const last = items[items.length - 1];
-  if (e.shiftKey && (document.activeElement === first || !els.sheet.contains(document.activeElement))) { e.preventDefault(); last.focus(); }
-  else if (!e.shiftKey && (document.activeElement === last || !els.sheet.contains(document.activeElement))) { e.preventDefault(); first.focus(); }
+  if (e.shiftKey && (document.activeElement === first || !els.sheet.contains(document.activeElement))) { e.preventDefault(); focusOn(last); }
+  else if (!e.shiftKey && (document.activeElement === last || !els.sheet.contains(document.activeElement))) { e.preventDefault(); focusOn(first); }
 });
 
 /** disabled + title: shown, but explains (in its tooltip and to screen readers) why it does nothing here. */
@@ -1529,7 +1646,7 @@ document.addEventListener('keydown', (e) => {
   render();
   const row = els.list.querySelector('.row.sel');
   row?.scrollIntoView({ block: 'nearest' });
-  if (row && e.key.startsWith('Arrow')) row.focus({ preventScroll: true });   // screen readers announce the task
+  if (row && e.key.startsWith('Arrow')) focusOn(row);   // screen readers announce the task
 });
 
 // Settings: Esc goes back one level (a page to Settings, Settings to the list), unless a sheet or an editor used it

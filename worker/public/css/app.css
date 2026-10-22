@@ -17,9 +17,17 @@ input, textarea { font: inherit; color: var(--ink); }
 svg { display: block; }
 [hidden] { display: none !important; }
 .tnum, .count, .meta, .pill, .time-input { font-variant-numeric: tabular-nums; }
-:focus-visible { outline: 2px solid var(--violet); outline-offset: 2px; border-radius: var(--r-control); }
+/* The focus ring is for the keyboard: after a tap or a click there is none, also where a browser would draw one (a text
+   box, focus that the app moves after a tap). app.js keeps the last kind of input on the root, data-input. */
+:root { --ring: 2px solid var(--violet); }
+:root[data-input="pointer"] { --ring: none; }
+:focus-visible { outline: var(--ring); outline-offset: 2px; border-radius: var(--r-control); }
 .row:focus-visible, .g-row:focus-visible { outline-offset: -2px; border-radius: 0; }
 .group :focus-visible { outline-offset: -2px; }   /* (a card clips what is drawn outside it) */
+/* Press feedback (docs/design.md, "Motion"): what is pressed tints at once and fades back; buttons also shrink a little.
+   In fast, out eased; the transition on :active is the way in. With reduce motion only the tint, no shrinking. */
+:root { --press-in: 80ms; --press-out: 120ms; --ease-out: cubic-bezier(.33, 1, .68, 1); --press-chip: .86; --press-icon: .92; --press-button: .97; --press-wide: .98; }
+@media (prefers-reduced-motion: reduce) { :root { --press-chip: 1; --press-icon: 1; --press-button: 1; --press-wide: 1; } }
 /* inside a card, where a task's chip and its text start (edge 2 + grip 14 + chevron 24 + 4, then the chip and 8):
    the list's headings line up with the chips; hairlines, notes and the add line's text with the text */
 :root { --head-x: 44px; --text-x: 70px; }
@@ -41,9 +49,23 @@ svg { display: block; }
   padding: calc(env(safe-area-inset-top) + var(--space-3)) calc(env(safe-area-inset-right) + var(--space-3)) var(--space-3) calc(env(safe-area-inset-left) + var(--space-3));
   background: var(--frame);
 }
-.logo { flex: none; width: 40px; height: 44px; display: grid; place-items: center; border-radius: var(--r-control); color: var(--smoke); }
+.logo {
+  flex: none; width: 40px; height: 44px; display: grid; place-items: center; border-radius: var(--r-control); color: var(--smoke);
+  transition: background-color var(--press-out) var(--ease-out), color var(--press-out) var(--ease-out), transform var(--press-out) var(--ease-out);
+}
 .logo svg { width: 22px; height: 22px; }
-.logo:active { background: var(--tab-hover); }
+.logo:active { background: var(--tab-hover); transform: scale(var(--press-icon)); transition-duration: var(--press-in); }
+@media (hover: hover) { .logo:hover { background: var(--tab-hover); } }
+/* In Settings (any view but the list) the header is only ☰, pressed like a selected tab: it says where you are and
+   takes you back. The list's name, conflicts and sync step aside, keeping their room so nothing moves (app.js makes
+   them inert at once; visibility follows the fade). */
+.logo[aria-pressed="true"], .logo[aria-pressed="true"]:hover { background: var(--selected); color: var(--ink); }
+/* (with the view under them: out in 120 ms, in from 60 ms on in 160 ms; app.js, "moving between views") */
+.strip :is(.switcher, .conflicts-badge, .sync) { transition: opacity .16s var(--ease-out) .06s, transform .16s var(--ease-out), visibility 0s; }
+.card.in-settings .strip :is(.switcher, .conflicts-badge, .sync) {
+  opacity: 0; transform: translateX(-6px); visibility: hidden; pointer-events: none;
+  transition: opacity .12s var(--ease-out), transform .12s var(--ease-out), visibility 0s .12s;
+}
 /* The title (the one bold place): the current list's name in display type, a small ⌄ and, when another list has
    something due, the violet dot; one button that opens the lists menu. A long name ends in "…" (whole in the menu). */
 .switcher {
@@ -60,8 +82,10 @@ svg { display: block; }
 .switcher[aria-expanded="true"] .switcher-chev svg { transform: rotate(180deg); }
 .switcher .dot { margin: 0 0 0 2px; }
 .switcher:active, .switcher[aria-expanded="true"] { background: var(--tab-hover); }
+.switcher:active { transform: scale(var(--press-wide)); transition-duration: var(--press-in); }
 @media (hover: hover) { .switcher:hover { background: var(--tab-hover); } }
 .sync, .conflicts-badge { flex: none; height: 44px; min-width: 40px; display: grid; place-items: center; border-radius: var(--r-control); color: var(--smoke); }
+.sync:active, .conflicts-badge:active { background: var(--tab-hover); transform: scale(var(--press-icon)); transition-duration: var(--press-in); }
 .sync svg { width: 19px; height: 19px; }
 .sync.state-syncing { color: var(--violet); }
 .sync.state-syncing svg { animation: pulse 1.2s ease-in-out infinite; }
@@ -102,9 +126,13 @@ svg { display: block; }
 
 /* ------------------------------------------------------------------ the list: lines in grouped cards */
 .list {
-  flex: 1; overflow-y: auto; overflow-x: hidden; -webkit-overflow-scrolling: touch; outline: none; overscroll-behavior: contain;
+  position: relative; flex: 1; overflow-y: auto; overflow-x: hidden; -webkit-overflow-scrolling: touch; outline: none; overscroll-behavior: contain;
   padding: var(--space-3) calc(env(safe-area-inset-right) + var(--card-inset)) var(--space-7) calc(env(safe-area-inset-left) + var(--card-inset));
 }
+/* Moving between views (app.js, "moving between views"): the view left behind, in a copy of the list's box over or
+   under the new one, slides or fades out; it takes no taps, focus or screen reader. Both are opaque meanwhile. */
+.list.ghost { position: absolute; z-index: 1; overflow: hidden; pointer-events: none; background: var(--surface); }
+.card[data-move] .list { background: var(--surface); }
 /* with more than one list a sideways swipe on it goes to the next or previous list (app.js); up and down stay the
    browser's scroll, and pinch zoom stays on */
 .list.swipeable { touch-action: pan-y pinch-zoom; }
@@ -142,23 +170,32 @@ svg { display: block; }
   position: relative; display: grid; grid-template-columns: 14px 24px 26px minmax(0, 1fr) 40px; align-items: start;
   min-height: var(--row-min-touch); padding: 9px 0 9px calc(var(--depth) * var(--row-indent));
   border-left: 2px solid transparent; user-select: none; -webkit-user-select: none; -webkit-touch-callout: none;
+  transition: background-color var(--press-out) var(--ease-out);
 }
 @media (pointer: fine) { .row { min-height: var(--row-min-pointer); padding-top: 6px; padding-bottom: 6px; } }
 .row.with-notes { padding-bottom: 3px; }   /* its notes follow right under the text */
 .row.sel { background: var(--card-selected); border-left-color: var(--violet); }
 @media (hover: hover) { .row:hover { background: var(--card-hover); } .row.sel:hover { background: var(--card-selected); } .row:hover .grip { opacity: .8; } }
+/* pressing a task's text (which edits it, or opens its menu held down) tints its line; its buttons answer by themselves */
+.row:not(.sel):has(.text:active) { background: var(--card-pressed); transition-duration: var(--press-in); }
+.list.swiping .row:not(.sel):has(.text:active) { background: var(--card); }   /* (a swipe is not a press) */
 .row.dragging { opacity: .45; }
 .grip { display: grid; place-items: center; height: 30px; opacity: .3; touch-action: none; cursor: grab; }
 .grip svg { width: 7px; height: 12px; color: var(--smoke); }
-.chev { display: grid; place-items: center; width: 24px; height: 30px; color: var(--smoke); }   /* >= 24 px target (WCAG 2.5.8) */
+.chev {
+  display: grid; place-items: center; width: 24px; height: 30px; border-radius: var(--r-control); color: var(--smoke);   /* >= 24 px target (WCAG 2.5.8) */
+  transition: background-color var(--press-out) var(--ease-out), transform var(--press-out) var(--ease-out);
+}
 .chev:disabled { cursor: default; }
+.chev:not(:disabled):active { background: var(--card-pressed); transform: scale(var(--press-icon)); transition-duration: var(--press-in); }
 .chev svg { width: 11px; height: 11px; transition: transform .15s; }
 .chev.open svg { transform: rotate(90deg); }
 .chip-btn { display: grid; place-items: start center; width: 26px; height: 30px; padding-top: 6px; }   /* the 18 px chip, 4 px each side */
 .chip {
   width: 18px; height: 18px; border-radius: var(--r-chip); border: 1.5px solid var(--status-todo);
-  display: grid; place-items: center; flex: none;
+  display: grid; place-items: center; flex: none; transition: transform var(--press-out) var(--ease-out);
 }
+button.chip-btn:active .chip { transform: scale(var(--press-chip)); transition-duration: var(--press-in); }
 .chip svg { width: 10px; height: 10px; }
 .chip.s-prog { border-color: var(--status-prog); background: linear-gradient(90deg, var(--status-prog) 50%, transparent 50%); }
 .chip.s-done { border-color: var(--status-done); background: var(--status-done); color: var(--status-done-glyph); }
@@ -197,6 +234,8 @@ svg { display: block; }
 .meta svg { width: 13px; height: 13px; }
 .due { display: inline-flex; align-items: center; min-height: 24px; color: var(--smoke); white-space: nowrap; }
 .pill { display: inline-flex; align-items: center; height: 24px; padding: 0 var(--space-3); border-radius: var(--r-control); font-weight: 500; white-space: nowrap; }
+button.m-due { transition: transform var(--press-out) var(--ease-out); }
+button.m-due:active { transform: scale(var(--press-button)); transition-duration: var(--press-in); }
 /* very narrow (200% zoom on a phone): no drag handle column, half the indent, so the text keeps its width */
 @media (max-width: 280px) {
   :root { --row-indent: 10px; --head-x: 30px; --text-x: 56px; }
@@ -205,8 +244,12 @@ svg { display: block; }
 }
 .pill.over { background: var(--alert-wash); color: var(--alert); }
 .pill.soon { background: var(--amber-wash); color: var(--amber); }
-.more { display: grid; place-items: center; width: 40px; height: 30px; color: var(--smoke); opacity: .7; }
+.more {
+  display: grid; place-items: center; width: 40px; height: 30px; border-radius: var(--r-control); color: var(--smoke); opacity: .7;
+  transition: background-color var(--press-out) var(--ease-out), transform var(--press-out) var(--ease-out);
+}
 .more svg { width: 17px; height: 17px; }
+button.more:active { background: var(--card-pressed); transform: scale(var(--press-icon)); transition-duration: var(--press-in); }
 @media (pointer: coarse) { .more { opacity: .5; } }
 @media (hover: hover) { .more { opacity: 0; } .row:hover .more, .row.sel .more, .more:focus-visible { opacity: .8; } }
 
@@ -230,7 +273,9 @@ h2.completed-heading { margin: var(--card-gap) 0 0; font: inherit; }
   display: flex; align-items: flex-end; gap: var(--space-2); width: 100%; min-height: 44px; margin-top: -20px;
   padding: 0 var(--card-padding) 6px var(--head-x); border-radius: var(--r-control); color: var(--smoke); text-align: left;
   font-size: var(--t-small-size); line-height: var(--t-small-line); font-weight: var(--t-small-weight);
+  transition: color var(--press-out) var(--ease-out);
 }
+.completed-toggle:active { color: var(--ink); transition-duration: var(--press-in); }
 .completed-toggle .count { font-weight: 400; }
 .completed-toggle svg { width: 10px; height: 10px; margin: 0 0 3px auto; transition: transform .15s; }
 .completed-toggle.open svg { transform: rotate(90deg); }
@@ -284,9 +329,10 @@ h2.completed-heading { margin: var(--card-gap) 0 0; font: inherit; }
 }
 .menu-item {
   display: flex; align-items: center; gap: var(--space-4); width: 100%; min-height: 48px; padding: var(--space-3) var(--space-4);
-  border-radius: var(--r-control); text-align: left; color: var(--ink);
+  border-radius: var(--r-control); text-align: left; color: var(--ink); transition: background-color var(--press-out) var(--ease-out);
 }
 .menu-item:active, .menu-item.current { background: var(--menu-hover); }
+.menu-item:not(:disabled):active { transition-duration: var(--press-in); }
 @media (hover: hover) { .menu-item:hover { background: var(--menu-hover); } }
 .menu-item .hint { margin-left: auto; color: var(--smoke); font-size: var(--t-meta-size); font-variant-numeric: tabular-nums; }
 .menu-item svg { width: 17px; height: 17px; color: var(--smoke); flex: none; }
@@ -304,18 +350,28 @@ h2.completed-heading { margin: var(--card-gap) 0 0; font: inherit; }
   display: inline-flex; align-items: center; justify-content: center; gap: var(--space-3); min-height: 44px;
   padding: var(--space-3) var(--space-5); border-radius: var(--r-control); background: var(--button-bg); color: var(--ink);
   font-size: var(--t-label-size); line-height: var(--t-label-line); font-weight: var(--t-label-weight); white-space: nowrap;
+  transition: background-color var(--press-out) var(--ease-out), filter var(--press-out) var(--ease-out), transform var(--press-out) var(--ease-out);
 }
 .btn svg { width: 15px; height: 15px; flex: none; }
 .btn.primary { background: var(--violet); color: var(--on-violet); font-weight: 600; }
 .btn.danger { color: var(--alert); }
 .btn:disabled { opacity: .5; }
+/* (pressed: a step more ink, as a card's rows; the violet one a little darker) */
+.btn:not(:disabled):active { background: var(--line); transform: scale(var(--press-button)); transition-duration: var(--press-in); }
+.btn.primary:not(:disabled):active { background: var(--violet); filter: brightness(.88); }
 .btn-row { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: var(--space-3); padding: var(--space-3) var(--space-2) var(--space-1); }
 .sheet p { margin: var(--space-2) var(--space-4) var(--space-4); color: var(--smoke); }
 
 /* ------------------------------------------------------------------ Settings and the views it opens */
 /* a view's header: Back (to where the view was opened from) and its title */
 .view-header { display: flex; align-items: center; gap: var(--space-2); width: 100%; min-height: 48px; padding: var(--space-2) var(--space-3) var(--space-2) 0; cursor: pointer; }
-.view-header .back { display: grid; place-items: center; width: 44px; height: 44px; border-radius: var(--r-control); }
+.view-header .back {
+  display: grid; place-items: center; width: 44px; height: 44px; border-radius: var(--r-control);
+  transition: background-color var(--press-out) var(--ease-out), transform var(--press-out) var(--ease-out);
+}
+/* (the whole header goes back: pressing anywhere on it presses Back) */
+.view-header:active .back { background: var(--hover); transform: scale(var(--press-icon)); transition-duration: var(--press-in); }
+@media (hover: hover) { .view-header:hover .back { background: var(--hover); } }
 .view-header svg { width: 13px; height: 13px; color: var(--smoke); }
 .view-header h1 { margin: 0; min-width: 0; overflow-wrap: anywhere; font-size: var(--t-title-size); line-height: var(--t-title-line); font-weight: var(--t-title-weight); }
 
@@ -328,8 +384,10 @@ h2.completed-heading { margin: var(--card-gap) 0 0; font: inherit; }
   font-size: var(--t-body-size); line-height: var(--t-body-line);
 }
 .g-row.icon { --line-x: calc(var(--card-padding) + 28px); }
+button.g-row { transition: background-color var(--press-out) var(--ease-out); }
 button.g-row:disabled { cursor: default; opacity: .55; }
-button.g-row:not(:disabled):active { background: var(--card-pressed); }
+/* a row only tints when pressed (a whole line shrinking would come apart from its card) */
+button.g-row:not(:disabled):active { background: var(--card-pressed); transition-duration: var(--press-in); }
 @media (hover: hover) { button.g-row:not(:disabled):hover { background: var(--card-hover); } button.g-row:not(:disabled):active { background: var(--card-pressed); } }
 .g-icon { display: grid; place-items: center; flex: none; width: 16px; color: var(--smoke); }
 .g-icon svg { width: 16px; height: 16px; }
@@ -350,10 +408,11 @@ button.g-row:not(:disabled):active { background: var(--card-pressed); }
 .g-btn {
   flex: none; min-height: 32px; margin: -4px -8px -4px 0; padding: 0 var(--space-3); border-radius: var(--r-control);
   color: var(--violet); font-weight: 500; white-space: nowrap;
+  transition: background-color var(--press-out) var(--ease-out), transform var(--press-out) var(--ease-out);
 }
 .g-btn.danger { color: var(--alert); }
 .g-btn + .g-btn { margin-left: 0; }
-.g-btn:active { background: var(--card-pressed); }
+.g-btn:active { background: var(--card-pressed); transform: scale(var(--press-button)); transition-duration: var(--press-in); }
 @media (hover: hover) { .g-btn:hover { background: var(--card-pressed); } }
 @media (pointer: coarse) { .g-btn { min-height: 40px; } }
 /* a switch row: the whole row is the switch. Off: a smoke track (visible on the light card, unlike a hairline grey) */
@@ -363,7 +422,7 @@ button.g-row:not(:disabled):active { background: var(--card-pressed); }
 .switch.on .knob { transform: translateX(16px); background: var(--on-violet); }
 /* a text box that is a row (a link to paste), its buttons at the end; a red line under it when it is not taken */
 .g-row.input { padding-top: 0; padding-bottom: 0; }
-.g-row.input:focus-within { outline: 2px solid var(--violet); outline-offset: -2px; }
+.g-row.input:focus-within { outline: var(--ring); outline-offset: -2px; }
 .g-input {
   flex: 1 1 auto; min-width: 0; height: var(--card-row-min); padding: 0; border: 0; border-radius: 0; background: transparent;
   color: var(--ink); caret-color: var(--violet); outline: none; font-size: var(--t-body-size);
@@ -373,8 +432,13 @@ button.g-row:not(:disabled):active { background: var(--card-pressed); }
 .g-input.bad { box-shadow: inset 0 -1.5px 0 var(--alert); }
 /* a choice of a few, on a quiet track; the current one violet */
 .segmented { display: flex; flex: none; padding: 2px; border-radius: var(--r-control); background: var(--card-pressed); }
-.segmented button { min-height: 32px; padding: var(--space-1) var(--space-4); border-radius: 5px; color: var(--smoke); font-size: var(--t-label-size); font-weight: 500; }
+.segmented button {
+  min-height: 32px; padding: var(--space-1) var(--space-4); border-radius: 5px; color: var(--smoke); font-size: var(--t-label-size); font-weight: 500;
+  transition: background-color var(--press-out) var(--ease-out), transform var(--press-out) var(--ease-out);
+}
 .segmented button.on { background: var(--violet); color: var(--on-violet); font-weight: 600; }
+.segmented button:active { transform: scale(var(--press-button)); transition-duration: var(--press-in); }
+.segmented button:not(.on):active { background: var(--card-hover); }
 @media (pointer: coarse) { .segmented button { min-height: 36px; } }
 .time-input { flex: none; min-width: 84px; padding: var(--space-1) var(--space-3); border: 0; border-radius: var(--r-control); background: var(--card-pressed); color: var(--ink); text-align: center; }
 /* a version of a task in Conflicts: your own words, so it wraps (the label in a column before it) */
@@ -395,8 +459,12 @@ kbd { padding: 1px 6px 2px; border-radius: var(--r-chip); background: var(--card
   display: flex; flex-wrap: wrap; align-items: center; gap: 0 var(--space-4); margin: var(--card-gap) var(--card-padding) 0;
   color: var(--smoke); font-size: var(--t-meta-size); line-height: var(--t-meta-line); font-variant-numeric: tabular-nums; text-align: left;
 }
-button.version-line { margin-left: calc(var(--card-padding) - 6px); padding: 3px 6px; border-radius: var(--r-control); }
+button.version-line {
+  margin-left: calc(var(--card-padding) - 6px); padding: 3px 6px; border-radius: var(--r-control);
+  transition: background-color var(--press-out) var(--ease-out), transform var(--press-out) var(--ease-out);
+}
 @media (hover: hover) { button.version-line:hover { background: var(--hover); } }
+button.version-line:active { background: var(--hover); transform: scale(var(--press-button)); transition-duration: var(--press-in); }
 .version-line .upd { display: inline-flex; align-items: center; color: var(--violet); }
 .version-line .dot { margin-right: 6px; }
 .callout {
@@ -451,7 +519,8 @@ button.version-line { margin-left: calc(var(--card-padding) - 6px); padding: 3px
 .g-row.sub.info { color: var(--smoke); }
 .g-row .check { display: grid; place-items: center; flex: none; width: 16px; color: var(--violet); }
 .g-row .check svg { width: 14px; height: 14px; }
-.linkish { color: var(--violet); font-weight: 600; text-decoration: underline; text-underline-offset: 2px; }
+.linkish { color: var(--violet); font-weight: 600; text-decoration: underline; text-underline-offset: 2px; transition: opacity var(--press-out) var(--ease-out); }
+.linkish:active { opacity: .6; transition-duration: var(--press-in); }
 /* join.html: the page an invite link opens */
 .join-page { overflow-y: auto; }
 .join-ways { display: flex; flex-direction: column; gap: var(--space-4); width: 100%; max-width: 460px; text-align: left; }
@@ -472,6 +541,7 @@ button.version-line { margin-left: calc(var(--card-padding) - 6px); padding: 3px
   border: 1px solid var(--edge); border-radius: var(--r-control); background: var(--frame); color: var(--ink);
   box-shadow: 0 8px 24px rgba(0, 0, 0, .25); font-size: var(--t-meta-size); line-height: var(--t-meta-line); animation: rise .18s ease-out;
 }
-.toast button { color: var(--violet); font-weight: 600; min-height: 32px; }
+.toast button { color: var(--violet); font-weight: 600; min-height: 32px; transition: transform var(--press-out) var(--ease-out); }
+.toast button:active { transform: scale(var(--press-button)); transition-duration: var(--press-in); }
 
 @media (prefers-reduced-motion: reduce) { *, *::before, *::after { animation: none !important; transition: none !important; } }

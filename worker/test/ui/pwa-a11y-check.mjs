@@ -42,9 +42,15 @@ async function open(ctx, projectId) {
   return page;
 }
 
+// a view that moves in (Settings, docs/design.md "Motion") and the header that fades with it have arrived: no view on
+// its way out, nothing animating but what never ends (the syncing cloud)
+const settled = (page) => page.waitForFunction(() => !document.querySelector('.list.ghost') && !document.getElementById('app').dataset.move
+  && document.getAnimations().every((a) => a.effect?.getTiming().iterations === Infinity));
+
 // ---------------------------------------------------------------- 1. axe on every view, both themes
 const serious = [];
 async function axe(page, where) {
+  await settled(page);
   if (!(await page.evaluate(() => typeof window.axe === 'object'))) await page.addScriptTag({ content: axeSource });
   const r = await page.evaluate(() => window.axe.run(document, { runOnly: { type: 'tag', values: ['wcag2a', 'wcag2aa', 'wcag21a', 'wcag21aa', 'wcag22aa', 'best-practice'] } }));
   for (const v of r.violations) {
@@ -241,6 +247,83 @@ console.log('2. keyboard, focus and announcements');
   await page.waitForTimeout(150);
   const next = await page.evaluate(() => document.activeElement?.id ?? '');
   check(await page.isHidden('#listMenuWrap') && ['conflictsBadge', 'syncBtn'].includes(next), `Tab closes the menu and goes on from the title (${next})`);
+
+  // the focus ring is for the keyboard: none after a click, also on focus that the app moves itself (Back puts it on
+  // the row that opened the page) and in a text box, which the browser itself rings; Tab brings it back
+  const ring = () => page.evaluate(() => {
+    const a = document.activeElement;
+    const s = getComputedStyle(a?.closest('.g-row.input') ?? a);
+    return { fk: a?.dataset?.fk ?? '', input: document.documentElement.dataset.input, style: s.outlineStyle, width: s.outlineWidth, fv: !!a?.matches(':focus-visible') };
+  });
+  await page.click('#logo');
+  await page.click('[data-fk="open:general"]');
+  await page.click('.view-header .back');
+  let r = await ring();
+  check(r.fk === 'open:general' && r.input === 'pointer' && r.style === 'none', `after a click no ring, also where the app moved focus (${JSON.stringify(r)})`);
+  await page.keyboard.press('Tab');
+  r = await ring();
+  check(r.fk === 'open:notifications' && r.input === 'keyboard' && r.style === 'solid' && r.width === '2px', `Tab: the ring shows (${JSON.stringify(r)})`);
+  await page.keyboard.press('Shift+Tab');
+  await page.keyboard.press('Enter');   // (General by the keyboard: its Back gets focus, ringed)
+  await settled(page);
+  r = await ring();
+  check(r.fk === 'back' && r.style === 'solid', `a page opened with the keyboard: focus on Back, ringed (${JSON.stringify(r)})`);
+  await page.keyboard.press('Escape');
+  await page.click('[data-fk="open:sync"]');
+  await page.click('[data-fk="join-input"]');
+  r = await ring();
+  check(r.fk === 'join-input' && r.fv && r.style === 'none', `a text box clicked: no ring round its row, though the browser counts it focus-visible (${JSON.stringify(r)})`);
+  await page.keyboard.press('Escape');
+  await page.keyboard.press('Escape');
+  await settled(page);
+
+  // in Settings the header is only ☰, pressed; the list's name and sync step aside (out of reach, unseen) and come back
+  const header = () => page.evaluate(() => {
+    const vis = (id) => { const el = document.getElementById(id); return getComputedStyle(el).visibility === 'visible' && !el.inert && !el.closest('[inert]'); };
+    const logo = document.getElementById('logo');
+    return {
+      settings: !!document.querySelector('#list .view-header'), pressed: logo.getAttribute('aria-pressed'), title: vis('switcher'), sync: vis('syncBtn'),
+      tint: getComputedStyle(logo).backgroundColor === getComputedStyle(document.documentElement).getPropertyValue('--selected').trim().replace(/^#(..)(..)(..)$/, (m, a, b, c) => `rgb(${parseInt(a, 16)}, ${parseInt(b, 16)}, ${parseInt(c, 16)})`),
+    };
+  });
+  let hd = await header();
+  check(!hd.settings && hd.pressed === 'false' && hd.title && hd.sync && !hd.tint, `the list: the whole header, ☰ not pressed (${JSON.stringify(hd)})`);
+  await page.click('#logo');
+  await settled(page);
+  hd = await header();
+  check(hd.settings && hd.pressed === 'true' && !hd.title && !hd.sync && hd.tint, `Settings: only ☰, pressed and tinted (${JSON.stringify(hd)})`);
+  await page.click('#logo');
+  await settled(page);
+  hd = await header();
+  check(!hd.settings && hd.pressed === 'false' && hd.title && hd.sync, `☰ again: back to the list, the header with it (${JSON.stringify(hd)})`);
+
+  // quick clicks and keys never leave two views or one half moved: ☰ five times; a double click is one click; a page
+  // opened and closed by the keyboard faster than it moves
+  const oneView = () => page.evaluate(() => {
+    const list = document.getElementById('list');
+    return {
+      views: document.querySelectorAll('.list').length, settings: !!list.querySelector('.view-header'), pressed: document.getElementById('logo').getAttribute('aria-pressed'),
+      title: getComputedStyle(document.getElementById('switcher')).visibility, moved: list.getAnimations().length + (list.style.transform || list.style.opacity || list.style.zIndex ? 1 : 0),
+      h1: list.querySelector('.view-header h1')?.textContent ?? '',
+    };
+  });
+  const consistent = (v) => v.views === 1 && v.moved === 0 && v.pressed === String(v.settings) && v.title === (v.settings ? 'hidden' : 'visible');
+  const lb = await page.locator('#logo').boundingBox();   // (clicks where it is, not waiting for it to be still)
+  for (let i = 0; i < 5; i++) await page.mouse.click(lb.x + lb.width / 2, lb.y + lb.height / 2);
+  await settled(page);
+  let v = await oneView();
+  check(consistent(v) && v.settings && v.h1 === 'Settings', `☰ five times quickly: Settings, as one view (${JSON.stringify(v)})`);
+  await page.dblclick('#logo');
+  await settled(page);
+  v = await oneView();
+  check(consistent(v) && !v.settings, `a double click on ☰ is one click: the list (${JSON.stringify(v)})`);
+  await page.click('#logo');
+  await page.focus('[data-fk="open:general"]');
+  for (const k of ['Enter', 'Escape', 'Enter', 'Escape', 'Enter']) await page.keyboard.press(k);
+  await settled(page);
+  v = await oneView();
+  check(consistent(v) && v.h1 === 'General' && (await focused()).fk === 'back', `General opened and closed five times by the keyboard: General, as one view, focus on Back (${JSON.stringify(v)})`);
+  await page.click('#logo');
   await ctx.close();
 }
 
@@ -249,8 +332,16 @@ console.log('3. reduced motion and zoom');
 {
   const ctx = await phone('dark', { reducedMotion: 'reduce' });
   const page = await open(ctx, projects.Work);
-  const t = await page.evaluate(() => [getComputedStyle(document.querySelector('.chev svg')).transitionDuration, getComputedStyle(document.querySelector('.switcher-chev svg')).transitionDuration]);
+  const t = await page.evaluate(() => [getComputedStyle(document.querySelector('.chev svg')).transitionDuration, getComputedStyle(document.querySelector('.switcher-chev svg')).transitionDuration, getComputedStyle(document.querySelector('.logo')).transitionDuration]);
   check(t.every((d) => /^0s/.test(d)), `no transitions with prefers-reduced-motion (${t})`);
+  // Settings opens without moving: no view on its way out, the header at once; a press only tints (no shrinking)
+  await page.click('#logo');
+  const still = await page.evaluate(() => ({
+    ghost: !!document.querySelector('.list.ghost'), anims: document.getElementById('list').getAnimations().length, title: getComputedStyle(document.getElementById('switcher')).visibility,
+    shrink: getComputedStyle(document.documentElement).getPropertyValue('--press-icon').trim(),
+  }));
+  check(!still.ghost && !still.anims && still.title === 'hidden' && still.shrink === '1', `with reduce motion Settings opens without moving (${JSON.stringify(still)})`);
+  await page.click('#logo');
   // a swipe still goes to the next list, but the list does not follow the finger or slide
   const cdp = await ctx.newCDPSession(page);
   const lb = await (await page.$('#list')).boundingBox();
