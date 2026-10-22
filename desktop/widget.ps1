@@ -21,6 +21,21 @@ param([string]$DataDir = '', [switch]$SmokeTest, [switch]$Relaunched)
 #     > a note or link under the task     (notes are "> " lines indented one level deeper)
 #     - [ ] subtask                        (two spaces per level)
 #   statuses: [ ] to do  [/] in progress  [x] done  [>] postponed  [!] blocked  [-] failed / rejected  [~] abandoned
+# Per-monitor DPI awareness (v2), before any WPF type loads: WPF alone only makes the process system-DPI aware, so
+# on a monitor with another scale (or after the scale changes) Windows stretches the window's bitmap and it goes
+# soft. With this WPF re-lays-out at the new scale and renders at device pixels. Older Windows: per-monitor (8.1),
+# then system, then nothing (the look stays as it was).
+try {
+  Add-Type -Namespace Saqme -Name Dpi -ErrorAction Stop -MemberDefinition @'
+[DllImport("user32.dll")] public static extern bool SetProcessDpiAwarenessContext(IntPtr context);
+[DllImport("shcore.dll")] public static extern int SetProcessDpiAwareness(int awareness);
+[DllImport("user32.dll")] public static extern bool SetProcessDPIAware();
+'@
+  $dpiOk = $false
+  try { $dpiOk = [Saqme.Dpi]::SetProcessDpiAwarenessContext([IntPtr]::new(-4)) } catch {}   # PER_MONITOR_AWARE_V2 (Win10 1703+)
+  if (-not $dpiOk) { try { $dpiOk = ([Saqme.Dpi]::SetProcessDpiAwareness(2) -eq 0) } catch {} }
+  if (-not $dpiOk) { try { [void][Saqme.Dpi]::SetProcessDPIAware() } catch {} }
+} catch {}
 Add-Type -AssemblyName PresentationFramework, PresentationCore, WindowsBase, System.Windows.Forms, System.Drawing
 # own taskbar identity, so Windows shows the Saqme icon instead of grouping it under PowerShell
 $AppId = 'Saqme.ToDo'
@@ -262,10 +277,14 @@ $script:stylesTemplate = @'
     <Setter Property="Template">
       <Setter.Value>
         <ControlTemplate TargetType="ContextMenu">
-          <Border Margin="0,0,10,10" Background="{MenuBg}" BorderBrush="{Edge}" BorderThickness="1" CornerRadius="10" Padding="4">
-            <Border.Effect><DropShadowEffect BlurRadius="14" ShadowDepth="3" Opacity="0.3"/></Border.Effect>
-            <StackPanel IsItemsHost="True" KeyboardNavigation.DirectionalNavigation="Cycle"/>
-          </Border>
+          <Grid>
+            <Border Margin="0,0,10,10" Background="Black" CornerRadius="10" IsHitTestVisible="False">
+              <Border.Effect><DropShadowEffect BlurRadius="14" ShadowDepth="3" Opacity="0.3"/></Border.Effect>
+            </Border>
+            <Border Margin="0,0,10,10" Background="{MenuBg}" BorderBrush="{Edge}" BorderThickness="1" CornerRadius="10" Padding="4">
+              <StackPanel IsItemsHost="True" KeyboardNavigation.DirectionalNavigation="Cycle"/>
+            </Border>
+          </Grid>
         </ControlTemplate>
       </Setter.Value>
     </Setter>
@@ -1277,6 +1296,28 @@ function New-PopupItem([string]$text, [string]$hint, [scriptblock]$onActivate = 
   return $b
 }
 
+# Pixel-snapped, hinted text for a window or popup root (inherited by everything inside): Display formatting and
+# fixed hinting keep small UI text crisp (the default "Ideal" mode is for large or animated text), and layout
+# rounding keeps edges and hairlines on whole device pixels at 125% / 150%.
+function Set-CrispText($el) {
+  [System.Windows.Media.TextOptions]::SetTextFormattingMode($el, 'Display')
+  [System.Windows.Media.TextOptions]::SetTextHintingMode($el, 'Fixed')
+  [System.Windows.Media.TextOptions]::SetTextRenderingMode($el, 'Auto')
+  $el.UseLayoutRounding = $true; $el.SnapsToDevicePixels = $true
+}
+
+# A drop shadow on its own element behind the content: an Effect on the content's ancestor rasterises all the
+# text inside it into a bitmap (soft text, worse at 125%/150%). The content keeps no Effect and stays sharp.
+function New-ShadowHost($content, [double]$depth, [double]$opacity) {
+  $sh = New-Object System.Windows.Controls.Border
+  $sh.Background = [System.Windows.Media.Brushes]::Black; $sh.CornerRadius = $content.CornerRadius; $sh.Margin = $content.Margin; $sh.IsHitTestVisible = $false
+  $sh.Effect = New-Object System.Windows.Media.Effects.DropShadowEffect -Property @{ BlurRadius = 14; ShadowDepth = $depth; Opacity = $opacity }
+  $g = New-Object System.Windows.Controls.Grid
+  Set-CrispText $g
+  [void]$g.Children.Add($sh); [void]$g.Children.Add($content)
+  return $g
+}
+
 function Show-DuePopup($it, $target) {
   Commit-Edit
   if ($script:readOnly) { return }
@@ -1284,7 +1325,6 @@ function Show-DuePopup($it, $target) {
   $p.AllowsTransparency = $true; $p.StaysOpen = $false; $p.PlacementTarget = $target; $p.Placement = 'Bottom'
   $b = New-Object System.Windows.Controls.Border
   $b.Background = $MenuBg; $b.BorderBrush = $Edge; $b.BorderThickness = '1'; $b.CornerRadius = 10; $b.Padding = '4'; $b.Margin = '0,0,10,10'
-  $b.Effect = New-Object System.Windows.Media.Effects.DropShadowEffect -Property @{ BlurRadius = 14; ShadowDepth = 3; Opacity = 0.3 }
   $sp = New-Object System.Windows.Controls.StackPanel; $sp.Width = 250
   $today = (Get-Date).Date
   $nextMon = $today.AddDays(1); while ($nextMon.DayOfWeek -ne 'Monday') { $nextMon = $nextMon.AddDays(1) }
@@ -1324,7 +1364,7 @@ function Show-DuePopup($it, $target) {
     $clr.Add_MouseLeftButtonUp({ param($s, $e) $s.Tag.Item.Due = ''; $s.Tag.Item.DueTime = ''; $s.Tag.Popup.IsOpen = $false; Save-Items; Render })
     [void]$sp.Children.Add($clr)
   }
-  $b.Child = $sp; $p.Child = $b
+  $b.Child = $sp; $p.Child = (New-ShadowHost $b 3 0.3)
   $p.IsOpen = $true
   $script:openPopup = $p
   [void]$box.Focus()
@@ -1722,7 +1762,6 @@ function Show-ListsMenu {
   $p.AllowsTransparency = $true; $p.StaysOpen = $false; $p.PlacementTarget = $script:titleBtn; $p.Placement = 'Bottom'
   $outer = New-Object System.Windows.Controls.Border
   $outer.Background = $MenuBg; $outer.BorderBrush = $Edge; $outer.BorderThickness = '1'; $outer.CornerRadius = 10; $outer.Padding = '4'; $outer.Margin = '0,0,10,10'
-  $outer.Effect = New-Object System.Windows.Media.Effects.DropShadowEffect -Property @{ BlurRadius = 14; ShadowDepth = 3; Opacity = 0.3 }
   $col = New-Object System.Windows.Controls.StackPanel
   $col.Width = [math]::Min(320, [math]::Max(200, $w.ActualWidth - 50))
   $script:listsRows.Clear()
@@ -1768,7 +1807,7 @@ function Show-ListsMenu {
     elseif ($k -eq 'Escape' -or $k -eq 'Tab') { $e.Handled = $true; Close-ListsMenu $true }
     elseif (($k -eq 'Apps' -or ($k -eq 'F10' -and $shift)) -and $i -ge 0 -and $f.Tag) { $e.Handled = $true; $n = [string]$f.Tag; Close-ListsMenu $false; Show-ListMenu $n $true }
   })
-  $p.Child = $outer
+  $p.Child = (New-ShadowHost $outer 3 0.3)
   $p.Add_Closed({ param($s, $e) Reset-ListsTitle })
   $script:listsPopup = $p
   $script:listsRefocus = $false
@@ -1875,6 +1914,7 @@ function Delete-Project([string]$name) {
 # ---------------------------------------------------------------- window
 $w = New-Object System.Windows.Window
 $w.WindowStyle = 'None'; $w.AllowsTransparency = $true; $w.Background = $Clear
+Set-CrispText $w
 $w.Topmost = $false; $w.ShowInTaskbar = $true; $w.ResizeMode = 'CanResize'
 $w.Width = 420; $w.MinWidth = 300; $w.MinHeight = 160; $w.Title = 'Saqme To Do'
 foreach ($k in $script:Styles.Keys) { $w.Resources[$k] = $script:Styles[$k] }   # tooltips + scrollbar pick these up
@@ -1893,24 +1933,20 @@ if ($script:cfg.width -match '^\d+$')  { $w.Width = [double]$script:cfg.width }
 $w.SizeToContent = 'Manual'   # fixed height: the task list scrolls, the add-task footer stays put
 $w.Height = $(if ($script:cfg.height -match '^\d+$') { [double]$script:cfg.height } else { 520 })
 
-$logoBmp = $null
-if (Test-Path -LiteralPath $logoFile) {
+# window icon (taskbar, Alt+Tab): decoded large, so Windows scales it down to the device size instead of up from 64 px
+if (Test-Path -LiteralPath $iconFile) {
   try {
-    $logoBmp = New-Object System.Windows.Media.Imaging.BitmapImage
-    $logoBmp.BeginInit(); $logoBmp.UriSource = New-Object System.Uri($logoFile); $logoBmp.DecodePixelHeight = 96
-    $logoBmp.CacheOption = 'OnLoad'; $logoBmp.EndInit(); $logoBmp.Freeze()
     $ico = New-Object System.Windows.Media.Imaging.BitmapImage
-    $ico.BeginInit(); $ico.UriSource = New-Object System.Uri($iconFile); $ico.DecodePixelHeight = 64
+    $ico.BeginInit(); $ico.UriSource = New-Object System.Uri($iconFile); $ico.DecodePixelHeight = 256
     $ico.CacheOption = 'OnLoad'; $ico.EndInit(); $ico.Freeze(); $w.Icon = $ico
-  } catch { $logoBmp = $null }
+  } catch {}
 }
 
 $outer = New-Object System.Windows.Controls.Border
 $outer.Background = $Card; $outer.BorderBrush = $Edge; $outer.BorderThickness = '1'
 $outer.CornerRadius = $Tokens.Radius.container; $outer.Margin = '7'
-$outer.Effect = New-Object System.Windows.Media.Effects.DropShadowEffect -Property @{ BlurRadius = 14; ShadowDepth = 2; Opacity = 0.35 }
 $dock = New-Object System.Windows.Controls.DockPanel
-$outer.Child = $dock; $w.Content = $outer
+$outer.Child = $dock; $w.Content = (New-ShadowHost $outer 2 0.35)
 
 # tab strip (drag empty space to move the widget)
 $strip = New-Object System.Windows.Controls.Border
@@ -4186,11 +4222,12 @@ $tray = New-Object System.Windows.Forms.NotifyIcon
 $tray.Text = Get-VersionText   # (with what an update needs, when it needs something: Update-VersionDisplay)
 try {
   $src = [System.Drawing.Image]::FromFile($logoFile)
-  $ib = New-Object System.Drawing.Bitmap 32, 32
+  $ts = [Math]::Max(16, [System.Windows.Forms.SystemInformation]::SmallIconSize.Width)   # the tray's size in device pixels (20 at 125%, 24 at 150%)
+  $ib = New-Object System.Drawing.Bitmap $ts, $ts
   $ig = [System.Drawing.Graphics]::FromImage($ib)
   $ig.InterpolationMode = 'HighQualityBicubic'; $ig.SmoothingMode = 'HighQuality'
-  $sc = [Math]::Min(30 / $src.Width, 30 / $src.Height); $iw = [int]($src.Width * $sc); $ih = [int]($src.Height * $sc)
-  $ig.DrawImage($src, [int]((32 - $iw) / 2), [int]((32 - $ih) / 2), $iw, $ih); $src.Dispose()
+  $sc = [Math]::Min(($ts - 2) / $src.Width, ($ts - 2) / $src.Height); $iw = [int]($src.Width * $sc); $ih = [int]($src.Height * $sc)
+  $ig.DrawImage($src, [int](($ts - $iw) / 2), [int](($ts - $ih) / 2), $iw, $ih); $src.Dispose()
   $tray.Icon = [System.Drawing.Icon]::FromHandle($ib.GetHicon())
 } catch { $tray.Icon = [System.Drawing.SystemIcons]::Application }
 $cms = New-Object System.Windows.Forms.ContextMenuStrip
@@ -4673,7 +4710,7 @@ if ($SmokeTest) {
     $swSrc = New-Object System.Windows.Interop.HwndSource(0, 0, 0, 0, 0, 'swkeys', [IntPtr]::Zero)   # (a source for the key events)
     $swKey = {   # a key as the menu's root sees it: whether the menu took it
         param([string]$key)
-        $root = $script:listsPopup.Child
+        $root = $script:listsPopup.Child.Children[1]   # (the menu card; the shadow sits behind it in the same grid)
         $ke = New-Object System.Windows.Input.KeyEventArgs([System.Windows.Input.Keyboard]::PrimaryDevice, $swSrc, 0, [System.Windows.Input.Key]$key)
         $ke.RoutedEvent = [System.Windows.UIElement]::PreviewKeyDownEvent
         $root.RaiseEvent($ke)
@@ -4805,7 +4842,8 @@ if ($SmokeTest) {
         [void](Update-SyncIndicator -Force)
         $sz = New-Object System.Windows.Size($w.Width, $w.Height)
         $outer.Measure($sz); $outer.Arrange((New-Object System.Windows.Rect(0, 0, $w.Width, $w.Height))); $outer.UpdateLayout()
-        $rtb = New-Object System.Windows.Media.Imaging.RenderTargetBitmap([int]($w.Width * 2), [int]($w.Height * 2), 192, 192, [System.Windows.Media.PixelFormats]::Pbgra32)
+        $sc = $(if ($env:SAQME_SMOKE_SCALE -match '^[0-9.]+$') { [double]$env:SAQME_SMOKE_SCALE } else { 2 })   # 1 = 100%, 1.25, 1.5; default 2 (sharp screenshots)
+        $rtb = New-Object System.Windows.Media.Imaging.RenderTargetBitmap([int]($w.Width * $sc), [int]($w.Height * $sc), (96 * $sc), (96 * $sc), [System.Windows.Media.PixelFormats]::Pbgra32)
         $rtb.Render($outer)
         $enc = New-Object System.Windows.Media.Imaging.PngBitmapEncoder
         $enc.Frames.Add([System.Windows.Media.Imaging.BitmapFrame]::Create($rtb))
