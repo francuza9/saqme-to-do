@@ -1,4 +1,4 @@
-param([string]$DataDir = '', [switch]$SmokeTest)
+param([string]$DataDir = '', [switch]$SmokeTest, [switch]$Relaunched)
 # Saqme To Do - to-do widget with project tabs, optionally synced with the iPhone app (see docs/).
 # Runs in the system tray: X hides the window, tray icon > Quit exits.
 # App files sit next to this script; your data lives in %APPDATA%\SaqmeToDo (or -DataDir / $env:SAQME_DATA_DIR;
@@ -40,6 +40,25 @@ if ($where.Refused) { Write-Output "SMOKE FAIL: $($where.Refused)"; exit 2 }
 $DataDir = $where.Dir
 $script:smokeTemp = $where.Temp
 if ($script:smokeTemp) { Write-Output "SMOKE DATA: no -DataDir given, so the self-check runs in a new temp folder, $DataDir (deleted afterwards)" }
+# Started from inside another app's container (an AI assistant's shell in a Store app such as Claude Desktop), this
+# process may see that app's private copy of AppData: its saves would land there, and could delete the real files
+# (sync-core.ps1 Get-AppDataRedirect). Before anything touches the data folder the app starts again outside it,
+# or, if that does not work, does not start. (The self-check, in a scratch folder, runs anywhere.)
+if (-not $SmokeTest -and ((Test-InAppData $DataDir) -or (Test-InAppData $dir))) {
+  $redirect = Get-AppDataRedirect
+  if ($redirect) {
+    $ps = Join-Path $env:WINDIR 'System32\WindowsPowerShell\v1.0\powershell.exe'
+    if (-not $Relaunched -and (Start-OutsideContainer "`"$ps`" -NoProfile -ExecutionPolicy Bypass -STA -WindowStyle Hidden -File `"$PSCommandPath`" -DataDir `"$DataDir`" -Relaunched")) {
+      Write-Output "Started again outside $redirect (its private copy of AppData is not your real data folder)."
+      exit 0
+    }
+    $why = "Saqme was started from inside another app ($redirect). Windows would keep its changes to your lists in that app's private copy of AppData instead of your real lists folder, so it does not start this way.`n`nStart Saqme from the Start menu."
+    Write-Output "REFUSED: $why"
+    # (a dialog for a person; a script that reads this output gets the line above instead)
+    if (-not [Console]::IsOutputRedirected) { try { [void][System.Windows.MessageBox]::Show($why, 'Saqme To Do', 'OK', 'Warning') } catch {} }
+    exit 3
+  }
+}
 if (-not (Test-Path -LiteralPath $DataDir)) { [void](New-Item -ItemType Directory -Path $DataDir -Force) }
 $listsDir  = Join-Path $DataDir 'lists'
 $orderFile = Join-Path $listsDir '.order'
@@ -81,7 +100,7 @@ $script:pendingUrl = $env:SAQME_OPEN_URL   # (handled once the window is up)
 Remove-Item Env:\SAQME_OPEN_URL -ErrorAction SilentlyContinue   # not for the programs this app starts
 
 $Utf8NoBom = New-Object System.Text.UTF8Encoding($false)
-function Write-Utf8([string]$path, [string]$text) { [IO.File]::WriteAllText($path, $text, $Utf8NoBom) }
+function Write-Utf8([string]$path, [string]$text) { Assert-RealAppData $path; [IO.File]::WriteAllText($path, $text, $Utf8NoBom) }
 function Read-Lines([string]$path) {
   if (Test-Path -LiteralPath $path) { try { return [IO.File]::ReadAllLines($path, [Text.Encoding]::UTF8) } catch {} }
   return @()
@@ -3030,6 +3049,8 @@ function Find-SetupScript {
 # started from the Start menu never looks. The package's name, or '' (SAQME_TEST_PACKAGE pretends, for tests).
 function Get-PackageContext {
   if ($env:SAQME_TEST_PACKAGE) { return $env:SAQME_TEST_PACKAGE }
+  $redirect = Get-AppDataRedirect   # (another app's copy of AppData without a package identity: sync-core.ps1)
+  if ($redirect) { return $redirect }
   try {
     if (-not ('SaqmeApp.Package' -as [type])) {
       Add-Type -Namespace SaqmeApp -Name Package -ErrorAction Stop -MemberDefinition '[DllImport("kernel32.dll", CharSet = CharSet.Unicode)] public static extern int GetCurrentPackageFullName(ref int length, System.Text.StringBuilder name);'

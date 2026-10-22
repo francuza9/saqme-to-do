@@ -876,6 +876,55 @@ Test-Case 'Restore them with nothing held back does nothing; a list written a mo
   Assert-True ($null -eq (Get-RestorePlan $st (Read-LocalLists $d) $d).Plan) 'a list written a moment ago: later'
 }
 
+# ---------------------------------------------------------------- another app's private copy of AppData (2026-10-22)
+Write-Host 'Another app''s private copy of AppData'
+Test-Case 'a probe folder found in an app''s LocalCache\Roaming names that app; none found, none named' {
+  $root = New-TempLists
+  $pkgs = Join-Path $root 'Packages'
+  foreach ($a in 'Some.Other_1', 'Claude_test123') { [void](New-Item -ItemType Directory -Path (Join-Path $pkgs "$a\LocalCache\Roaming")) }
+  Assert-Eq (Find-ProbeCopy $pkgs '.saqme-probe-x1') '' 'not there'
+  [void](New-Item -ItemType Directory -Path (Join-Path $pkgs 'Claude_test123\LocalCache\Roaming\.saqme-probe-x1'))
+  Assert-Eq (Find-ProbeCopy $pkgs '.saqme-probe-x1') 'Claude_test123' 'the app whose copy holds it'
+  Assert-Eq (Find-ProbeCopy (Join-Path $root 'nope') '.saqme-probe-x1') '' 'no Packages folder'
+  # the real probe makes and removes its folder in AppData, wherever it runs (in an app's copy or not)
+  $fake = Join-Path $root 'AppData'; [void](New-Item -ItemType Directory -Path $fake)
+  Assert-Eq (Find-AppDataRedirect $fake $root) '' 'a folder made in a plain folder is no copy'
+  Assert-Eq @(Get-ChildItem -LiteralPath $fake -Force).Count 0 'the probe folder is gone again'
+}
+Test-Case 'what counts as AppData: Roaming and Local, never the temp folder, never a look-alike name' {
+  $ad = 'C:\Users\u\AppData\Roaming'; $la = 'C:\Users\u\AppData\Local'; $tmp = 'C:\Users\u\AppData\Local\Temp'
+  foreach ($p in "$ad\SaqmeToDo", "$ad\SaqmeToDo\lists\Work.md", "$la\Programs\SaqmeToDo", "$ad") { Assert-True (Test-InAppData $p $ad $la $tmp) "in: $p" }
+  foreach ($p in "$tmp\saqme-smoke-1", 'D:\data\lists', 'C:\Users\u\AppData\RoamingX\a', 'C:\temp\x', '\\server\share\x') { Assert-True (-not (Test-InAppData $p $ad $la $tmp)) "out: $p" }
+}
+Test-Case 'in another app''s copy, every writer refuses AppData (nothing written); temp folders and other paths are fine' {
+  $saved = $env:SAQME_TEST_REDIRECT
+  $target = Join-Path $env:APPDATA ('.saqme-test-' + [guid]::NewGuid().ToString('N').Substring(0, 8))
+  try {
+    $env:SAQME_TEST_REDIRECT = 'Some.App_test'
+    $threw = $null; try { Write-TextFileAtomic (Join-Path $target 'lists\Work.md') "- [ ] A`n" } catch { $threw = $_.Exception.Message }
+    Assert-True ($threw -match 'Some\.App_test' -and $threw -match 'Start menu') "refused, saying why: $threw"
+    Assert-True (-not (Test-Path -LiteralPath $target)) 'nothing written'
+    $threw = $null; try { [void](Invoke-PlanOps @(@{ type = 'trash'; path = (Join-Path $target 'lists\Old.md'); name = 'Old'; expected = $null }) (Join-Path $target 'lists')) } catch { $threw = $_.Exception.Message }
+    Assert-True ([bool]$threw) 'a plan (renames, moves to .trash) is refused too'
+    $threw = $null; try { Save-SyncState (New-SyncState) (Join-Path $target 'sync\state.json') } catch { $threw = $_.Exception.Message }
+    Assert-True ([bool]$threw -and -not (Test-Path -LiteralPath $target)) 'the sync state too'
+    $d = New-TempLists
+    Write-TextFileAtomic (Join-Path $d 'Work.md') "- [ ] A`n"   # a temp folder (tests, the self-check): fine
+    Assert-Eq (Read-List $d 'Work') "- [ ] A`n"
+    $env:SAQME_TEST_REDIRECT = ''
+    $script:AppDataRedirect = ''   # (as if the probe found no copy, wherever this test runs; nothing is written here)
+    Assert-RealAppData (Join-Path $target 'x.txt')   # outside any copy: allowed (no throw)
+  } finally {
+    $env:SAQME_TEST_REDIRECT = $saved; $script:AppDataRedirect = $null
+    Remove-Item -LiteralPath $target -Recurse -Force -ErrorAction SilentlyContinue
+  }
+}
+Test-Case 'this test run: inside another app''s copy of AppData or not (reported, not asserted)' {
+  $r = Get-AppDataRedirect -Fresh
+  Write-Host ("       this shell sees {0}" -f $(if ($r) { "$r's private copy of AppData: the app would start again outside it" } else { 'the real AppData' }))
+  $script:AppDataRedirect = $null
+}
+
 # ---------------------------------------------------------------- the widget's data folder (Resolve-WidgetDataDir)
 Write-Host 'The data folder, and the self-check never on real lists'
 Test-Case 'the app: -DataDir, else SAQME_DATA_DIR, else portable, else %APPDATA%\SaqmeToDo' {

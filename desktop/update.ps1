@@ -22,12 +22,29 @@ param(
   [switch]$WorkerOnly,
   [switch]$NoWorker,     # tests
   [string]$Manifest,     # tests
-  [string]$Asset         # tests
+  [string]$Asset,        # tests
+  [switch]$Relaunched    # started again outside another app's container (below)
 )
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Off
 . (Join-Path $PSScriptRoot 'sync-core.ps1')
 . (Join-Path $PSScriptRoot 'update-core.ps1')
+
+# Started from inside another app's container (an AI assistant's shell in a Store app), this process may see that
+# app's private copy of AppData (sync-core.ps1 Get-AppDataRedirect): the update would install there, and the app it
+# restarts would run there. It starts again outside it, the same way, or does nothing (not even a result file).
+if ((Test-InAppData $AppDir) -or (Test-InAppData $DataDir)) {
+  $redirect = Get-AppDataRedirect
+  if ($redirect) {
+    $ps0 = Join-Path $env:WINDIR 'System32\WindowsPowerShell\v1.0\powershell.exe'
+    $cmd = "`"$ps0`" -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File `"$PSCommandPath`" -AppDir `"$AppDir`" -DataDir `"$DataDir`" -Relaunched"
+    foreach ($sw in 'Hidden', 'WorkerOnly', 'NoWorker') { if ((Get-Variable $sw -ValueOnly).IsPresent) { $cmd += " -$sw" } }
+    if ($Manifest) { $cmd += " -Manifest `"$Manifest`"" }
+    if ($Asset) { $cmd += " -Asset `"$Asset`"" }
+    if (-not $Relaunched -and (Start-OutsideContainer $cmd)) { exit 0 }
+    exit 4
+  }
+}
 
 $upd = Join-Path $AppDir 'update'
 if (-not (Test-Path -LiteralPath $upd)) { [void](New-Item -ItemType Directory -Path $upd -Force) }

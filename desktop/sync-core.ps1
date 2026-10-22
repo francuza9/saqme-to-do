@@ -45,6 +45,63 @@ function Resolve-WidgetDataDir([string]$DataDir, [switch]$SmokeTest, [string]$Ap
   return @{ Dir = $DataDir; Temp = $false; Refused = '' }
 }
 
+# ---------------------------------------------------------------- another app's private copy of AppData
+# Started from inside a Store (MSIX) app's processes (an AI assistant's shell in Claude Desktop, a Store app's
+# terminal), Windows may give this process that app's private copy of AppData, with no package identity of its own
+# (GetCurrentPackageFullName says "none"): new files, and files replaced by temp file + replace, land in
+# %LOCALAPPDATA%\Packages\<app>\LocalCache\Roaming, and replacing a file only the real folder has deletes the real
+# one. Two lists vanished that way on 2026-10-22 (docs/sync.md, "Another app's private copy of AppData"). The app, its
+# updater and setup start again outside such a copy or refuse to run; the writers here refuse AppData paths while
+# this process is in one (Assert-RealAppData).
+
+# A new folder in AppData lands in an app's LocalCache\Roaming when this process gets that app's copy: -> the app's
+# package folder name, or '' (none). Checked once per runspace; SAQME_TEST_REDIRECT pretends (tests).
+function Get-AppDataRedirect([switch]$Fresh) {
+  if ($env:SAQME_TEST_REDIRECT) { return $env:SAQME_TEST_REDIRECT }
+  if ($Fresh -or $null -eq $script:AppDataRedirect) { $script:AppDataRedirect = Find-AppDataRedirect $env:APPDATA $env:LOCALAPPDATA }
+  return $script:AppDataRedirect
+}
+function Find-AppDataRedirect([string]$appData, [string]$localAppData) {
+  if (-not $appData -or -not $localAppData) { return '' }
+  $pkgs = Join-Path $localAppData 'Packages'
+  if (-not [IO.Directory]::Exists($pkgs)) { return '' }
+  $name = '.saqme-probe-' + [guid]::NewGuid().ToString('N').Substring(0, 12)
+  $probe = Join-Path $appData $name
+  try { [void][IO.Directory]::CreateDirectory($probe) } catch { return '' }
+  try { return (Find-ProbeCopy $pkgs $name) } finally { try { [IO.Directory]::Delete($probe) } catch {} }
+}
+# the app folder under $packagesDir whose private copy of AppData (LocalCache\Roaming) holds $name, or ''
+function Find-ProbeCopy([string]$packagesDir, [string]$name) {
+  try { $apps = [IO.Directory]::GetDirectories($packagesDir) } catch { return '' }
+  foreach ($a in $apps) { if ([IO.Directory]::Exists([IO.Path]::Combine($a, 'LocalCache', 'Roaming', $name))) { return [IO.Path]::GetFileName($a) } }
+  return ''
+}
+# $path is in this user's AppData (Roaming or Local), outside the temp folder: what such a private copy would hide
+function Test-InAppData([string]$path, [string]$AppData = $env:APPDATA, [string]$LocalAppData = $env:LOCALAPPDATA, [string]$TempDir = [IO.Path]::GetTempPath()) {
+  $norm = { param([string]$p) try { [IO.Path]::GetFullPath($p).TrimEnd('\', '/') + '\' } catch { '' } }
+  $full = & $norm $path
+  if (-not $full) { return $false }
+  if ($TempDir -and $full.StartsWith((& $norm $TempDir), [StringComparison]::OrdinalIgnoreCase)) { return $false }
+  foreach ($root in @($AppData, $LocalAppData)) { if ($root -and $full.StartsWith((& $norm $root), [StringComparison]::OrdinalIgnoreCase)) { return $true } }
+  return $false
+}
+# Every writer of the lists and the sync state calls this first: while this process sees another app's copy of
+# AppData, a write there would not reach the real folder (and a replace could delete the real file). Throws.
+function Assert-RealAppData([string]$path) {
+  if (-not (Test-InAppData $path)) { return }
+  $app = Get-AppDataRedirect
+  if ($app) { throw "Refused to write $path`: this program was started from inside another app ($app), so Windows would keep the change in that app's private copy of AppData instead of your real folder. Start Saqme from the Start menu." }
+}
+# Runs $commandLine through WMI: the new process belongs to the WMI service, outside any app's container (its window
+# hidden). -> $true when it started.
+function Start-OutsideContainer([string]$commandLine) {
+  try {
+    $si = New-CimInstance -ClassName Win32_ProcessStartup -ClientOnly -Property @{ ShowWindow = [uint16]0 }
+    $r = Invoke-CimMethod -ClassName Win32_Process -MethodName Create -Arguments @{ CommandLine = $commandLine; ProcessStartupInformation = $si } -ErrorAction Stop
+    return ($r.ReturnValue -eq 0)
+  } catch { return $false }
+}
+
 # File bytes -> text (byte order marks dropped): UTF-8, or UTF-16 with its byte order mark. A file that is
 # not valid UTF-8 was saved in the system's legacy code page (Windows PowerShell's Set-Content does that)
 # and is read that way, instead of turning its accents into U+FFFD for good on the next write.
@@ -73,6 +130,7 @@ function Read-TextFile([string]$path) {
 # temp file + replace, so a crash never leaves a half-written list. Split in two steps so a plan can stage
 # every file before replacing any of them.
 function Write-TempFile([string]$path, [string]$text) {
+  Assert-RealAppData $path
   $dirPath = [IO.Path]::GetDirectoryName($path)
   $tmp = Join-Path $dirPath ('.' + [IO.Path]::GetFileName($path) + '.' + [guid]::NewGuid().ToString('N').Substring(0, 8) + '.tmp')
   # flushed to disk before the replace: after a power cut the list is the old one or the new one, not empty
@@ -834,6 +892,7 @@ function Read-SyncState([string]$path) {
 }
 
 function Save-SyncState($st, [string]$path) {
+  Assert-RealAppData $path   # (before the folder is made, too)
   $dirPath = [IO.Path]::GetDirectoryName($path)
   if (-not (Test-Path -LiteralPath $dirPath)) { [void](New-Item -ItemType Directory -Path $dirPath -Force) }
   Write-TextFileAtomic $path (ConvertTo-JsonText $st)
@@ -1710,6 +1769,7 @@ function Get-RemotePlan($st, $local, [string]$listsDir, $Scope = $null) {
 # Executes plan ops in order; verifies every precondition first so a plan is applied completely or not at
 # all (barring I/O errors, after which it stops at the failing op). Returns the number of ops done.
 function Invoke-PlanOps($ops, [string]$listsDir) {
+  Assert-RealAppData $listsDir   # (renames and moves to .trash too, not only the writes)
   foreach ($o in $ops) {
     switch ($o.type) {
       'write' { if ((Read-TextFile $o.path) -cne $o.expected) { return -1 } }
@@ -2130,6 +2190,7 @@ function Read-ShareKeys([string]$syncDir) {
   return $k
 }
 function Save-ShareKeys([string]$syncDir, $keys) {
+  Assert-RealAppData $syncDir
   if (-not (Test-Path -LiteralPath $syncDir)) { [void](New-Item -ItemType Directory -Path $syncDir -Force) }
   Write-TextFileAtomic (Join-Path $syncDir 'remotes.json') (ConvertTo-JsonText $keys)
 }

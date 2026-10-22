@@ -128,8 +128,21 @@ function Get-SetupCommand([string]$options) {
 # Inside an MSIX-packaged app (a Store app's terminal, an AI assistant's shell in a desktop app) Windows gives
 # AppData and HKCU a private copy per package: what setup wrote there (the data folder, registry entries) would
 # be invisible to the app started from the Start menu. Returns the package's name, or '' outside one.
+# A program such an app starts may get that copy without a package identity of its own (an AI assistant's shell in
+# Claude Desktop; GetCurrentPackageFullName then says "none"): a new folder in AppData landing in an app's
+# LocalCache\Roaming gives it away (desktop\sync-core.ps1 Get-AppDataRedirect, the same check).
 function Get-PackageContext {
-  if ($env:SAQME_SETUP_SANDBOX -and $env:SAQME_TEST_PACKAGE) { return $env:SAQME_TEST_PACKAGE }   # tests
+  if ($env:SAQME_SETUP_SANDBOX) { return [string]$env:SAQME_TEST_PACKAGE }   # tests (their folders are scratch ones)
+  $pkgs = $(if ($env:LOCALAPPDATA) { Join-Path $env:LOCALAPPDATA 'Packages' } else { '' })
+  if ($env:APPDATA -and $pkgs -and (Test-Path -LiteralPath $pkgs)) {
+    $probe = Join-Path $env:APPDATA ('.saqme-probe-' + [guid]::NewGuid().ToString('N').Substring(0, 12))
+    try {
+      [void][IO.Directory]::CreateDirectory($probe)
+      foreach ($a in [IO.Directory]::GetDirectories($pkgs)) {
+        if ([IO.Directory]::Exists([IO.Path]::Combine($a, 'LocalCache', 'Roaming', [IO.Path]::GetFileName($probe)))) { return [IO.Path]::GetFileName($a) }
+      }
+    } catch {} finally { try { [IO.Directory]::Delete($probe) } catch {} }
+  }
   try {
     Add-Type -Namespace SaqmeSetup -Name Package -ErrorAction Stop -MemberDefinition '[DllImport("kernel32.dll", CharSet = CharSet.Unicode)] public static extern int GetCurrentPackageFullName(ref int length, System.Text.StringBuilder name);'
     $len = 0
