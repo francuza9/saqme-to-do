@@ -5,8 +5,10 @@ import { copyFileSync, mkdtempSync, mkdirSync, readFileSync, writeFileSync, rmSy
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { D1 } from '../../../local/d1.mjs';
-import { newState, syncCycle, applyPlanToFolder, rekeyMap, readLocalLists } from '../../../local/engine.mjs';
-import { localTransport } from '../../../local/saqme.mjs';
+import {
+  newState, syncCycle, applyPlanToFolder, rekeyMap, readLocalLists, newBackup, listBackups, backupRestorePlan,
+} from '../../../local/engine.mjs';
+import { localTransport, EngineLoop } from '../../../local/saqme.mjs';
 import { handleSync } from '../../src/sync.js';
 
 const migrations = join(import.meta.dirname, '..', '..', 'migrations');
@@ -294,6 +296,62 @@ describe('lists folder <-> local store (local/engine.mjs)', () => {
     } finally {
       vi.restoreAllMocks();
     }
+  });
+
+  it('two engines on one folder: a list emptied through one of them (the window, a phone) is a delete for the other, not held back', async () => {
+    const f = folder();
+    const local = store();
+    const cloud = store();
+    f.write('Work', '- [ ] Keep\n');
+    f.write('Errand', '- [ ] Only task\n');
+    // the app's wiring (local/saqme.mjs startApp): what one engine takes out of a file is expected by the other
+    const loop = (name, s, deviceId) => new EngineLoop({
+      name, statePath: join(f.lists, '..', `${deviceId}.json`), listsDir: f.lists, interval: 50, settleMs: 0, log: () => {},
+      target: () => ({ transport: s.transport, deviceId, label: name }),
+    });
+    const a = loop('files', local, 'files');
+    const b = loop('cloud', cloud, 'pc-cloud');
+    a.onRemoved = (keys) => b.expect(keys);
+    b.onRemoved = (keys) => a.expect(keys);
+    const run = async () => { for (let i = 0; i < 4; i++) { await a.step(); await b.step(); bumpMtimes(f); } };
+    await run();
+    const win = phone(local, 'web-window');
+    await win.sync();
+    await win.sync([edit(win.task('Only task'), { deleted: true })]);   // deleted in the window
+    await run();
+    expect(f.read('Errand')).toBe('');
+    expect(b.status.guarded).toBe(0);
+    expect(a.status.guarded).toBe(0);
+    const mobile = phone(cloud, 'web-phone');
+    await mobile.sync();
+    expect(mobile.liveTexts('Errand')).toEqual([]);   // the cloud has it deleted too
+    expect(mobile.liveTexts('Work')).toEqual(['Keep']);
+  });
+
+  it('backups: one when the lists changed, none while they did not; old ones pruned; bringing one back adds only what is missing', () => {
+    const f = folder();
+    const data = join(f.lists, '..');
+    expect(newBackup(data, 'start', new Date(2026, 9, 22, 6, 0, 0))).toBeNull();   // no lists yet
+    f.write('Work', '- [ ] A ^aaaaaaaa\n  - [x] A1 ^aaaaaaa1\n');
+    f.write('Home', '- [ ] H ^hhhhhhhh\n');
+    expect(newBackup(data, 'start', new Date(2026, 9, 22, 6, 0, 0))).toBe('20261022-060000-start');
+    expect(newBackup(data, 'daily', new Date(2026, 9, 22, 7, 0, 0))).toBeNull();   // nothing changed
+    f.write('Work', '- [x] A edited ^aaaaaaaa\n');   // A1 gone
+    unlinkSync(f.path('Home'));                         // Home gone
+    expect(newBackup(data, 'daily', new Date(2026, 9, 22, 8, 0, 0))).toBe('20261022-080000-daily');
+    const all = listBackups(data);
+    expect(all.map((x) => [x.name, x.reason, x.lists])).toEqual([['20261022-080000-daily', 'daily', 1], ['20261022-060000-start', 'start', 2]]);
+    const r = backupRestorePlan(readLocalLists(f.lists, 0), all[1].path, f.lists);
+    expect([r.lists, r.tasks]).toEqual([['Home'], 2]);
+    expect(applyPlanToFolder(r.plan, f.lists)).toBe(true);
+    expect(f.read('Work')).toBe('- [x] A edited ^aaaaaaaa\n  - [x] A1 ^aaaaaaa1\n');   // the edit stays, the lost subtask is back
+    expect(f.read('Home')).toBe('- [ ] H ^hhhhhhhh\n');
+    // twelve more days of changes: the ten newest stay, and the newest of each day for 30 days
+    for (let d = 0; d < 12; d++) { f.write('Work', `- [ ] day ${d} ^aaaaaaaa\n`); newBackup(data, 'daily', new Date(2026, 9, 23 + d, 9, 0, 0)); }
+    const names = listBackups(data).map((x) => x.name);
+    expect(names.length).toBe(13);   // 12 newest-of-their-day + Oct 22's newest (08:00); Oct 22 06:00 went
+    expect(names).not.toContain('20261022-060000-start');
+    expect(readdirSync(join(data, 'backups')).filter((n) => n.endsWith('.partial'))).toEqual([]);
   });
 
   it('two engines on one folder (this computer + the cloud) carry edits both ways and converge', async () => {

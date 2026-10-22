@@ -12,10 +12,10 @@
 // list changed meanwhile, rewrite the lists so they match R (one all-or-nothing plan) -> S := R.
 // `transport(body)` is the server: HTTP to a Worker, or the local store in-process (local/server.mjs).
 import {
-  closeSync, existsSync, fsyncSync, mkdirSync, openSync, readdirSync, readFileSync, renameSync, statSync, unlinkSync, writeSync,
+  closeSync, existsSync, fsyncSync, mkdirSync, openSync, readdirSync, readFileSync, renameSync, rmSync, statSync, unlinkSync, writeFileSync, writeSync,
 } from 'node:fs';
 import { basename, dirname, join } from 'node:path';
-import { randomBytes } from 'node:crypto';
+import { createHash, randomBytes } from 'node:crypto';
 import {
   parseItems, formatItems, detectEol, subtreeEnd, findItem, removeItemKeepChildren, setMissingIds, newTaskId, toFileName, cleanTime,
   cleanNotes, cleanText as cleanLine, isValidDate,
@@ -1265,6 +1265,154 @@ export async function syncCycle(ctx) {
   }
   saveState(st, ctx.statePath);
   return res;
+}
+
+// ================================================================ backups (docs/sync.md, "Backups")
+// <data>/backups/<yyyyMMdd-HHmmss>-<reason>/: a copy of the lists (lists/*.md and .order), made when the app starts,
+// once a day, before an update and before held-back deletes are confirmed; not made again while the lists are the
+// same as in the newest one. Kept: the BACKUP_KEEP_NEWEST newest, and the newest of each of the last BACKUP_KEEP_DAYS
+// days. Restoring one only adds what is missing now (backupRestorePlan): it never removes or changes anything.
+// (sync-core.ps1 New-ListsBackup, Get-BackupsToPrune, Get-BackupRestorePlan; shared/fixtures/engine.json "backups")
+const BACKUP_KEEP_NEWEST = 10;
+const BACKUP_KEEP_DAYS = 30;
+const BACKUP_NAME = /^(\d{8})-(\d{6})-([a-z]+)$/;
+const two = (n) => String(n).padStart(2, '0');
+const stampOf = (d) => `${d.getFullYear()}${two(d.getMonth() + 1)}${two(d.getDate())}-${two(d.getHours())}${two(d.getMinutes())}${two(d.getSeconds())}`;
+const dayNumber = (yyyymmdd) => Date.UTC(+yyyymmdd.slice(0, 4), +yyyymmdd.slice(4, 6) - 1, +yyyymmdd.slice(6, 8)) / 86_400_000;
+
+/** What a backup holds: name -> bytes of each list file (and .order) in dir. */
+function readBackupFiles(dir) {
+  let names = [];
+  try { names = readdirSync(dir).filter((n) => n === '.order' || (n.endsWith('.md') && !n.startsWith('.'))); } catch { return new Map(); }
+  return new Map(names.sort(ordinal).map((n) => [n, readFileSync(join(dir, n))]));
+}
+function backupSignature(files) {
+  const h = createHash('sha256');
+  for (const [n, b] of files) { h.update(`${n}\0`); h.update(b); h.update('\0'); }
+  return h.digest('hex');
+}
+/** The backups there are, newest first: [{ name, path, at (ms), reason, lists }]. */
+export function listBackups(dataDir) {
+  const root = join(dataDir, 'backups');
+  let names = [];
+  try { names = readdirSync(root).filter((n) => BACKUP_NAME.test(n)); } catch { return []; }
+  return names.sort(ordinal).reverse().map((n) => {
+    const [, d, t, reason] = BACKUP_NAME.exec(n);
+    const at = new Date(+d.slice(0, 4), +d.slice(4, 6) - 1, +d.slice(6, 8), +t.slice(0, 2), +t.slice(2, 4), +t.slice(4, 6)).getTime();
+    let lists = 0;
+    try { lists = readdirSync(join(root, n)).filter((f) => f.endsWith('.md') && !f.startsWith('.')).length; } catch { /* gone */ }
+    return { name: n, path: join(root, n), at, reason, lists };
+  });
+}
+/** Which backups go (names; now: a Date): all but the BACKUP_KEEP_NEWEST newest and the newest of each of the last BACKUP_KEEP_DAYS days. */
+export function backupsToPrune(names, now) {
+  const sorted = names.filter((n) => BACKUP_NAME.test(n)).sort(ordinal).reverse();
+  const today = Date.UTC(now.getFullYear(), now.getMonth(), now.getDate()) / 86_400_000;
+  const keep = new Set();
+  const days = new Set();
+  sorted.forEach((n, i) => {
+    if (i < BACKUP_KEEP_NEWEST) keep.add(n);
+    const day = n.slice(0, 8);
+    if (days.has(day)) return;
+    days.add(day);
+    if (today - dayNumber(day) < BACKUP_KEEP_DAYS) keep.add(n);
+  });
+  return sorted.filter((n) => !keep.has(n));
+}
+/**
+ * Makes a backup of the lists, unless they are the same as in the newest one (or there are none); prunes old ones.
+ * -> its name, or null. reason: start | daily | update | delete | restore. Never throws.
+ */
+export function newBackup(dataDir, reason, now = new Date()) {
+  try {
+    const files = readBackupFiles(join(dataDir, 'lists'));
+    if (![...files.keys()].some((n) => n.endsWith('.md'))) return null;
+    const root = join(dataDir, 'backups');
+    const newest = listBackups(dataDir)[0];
+    if (newest && backupSignature(readBackupFiles(newest.path)) === backupSignature(files)) return null;
+    const name = `${stampOf(now)}-${reason}`;
+    if (existsSync(join(root, name))) return null;
+    const tmp = join(root, `.${name}.partial`);
+    mkdirSync(tmp, { recursive: true });
+    for (const [n, b] of files) writeFileSync(join(tmp, n), b);
+    renameSync(tmp, join(root, name));   // whole or not at all
+    for (const old of backupsToPrune(listBackups(dataDir).map((b) => b.name), now)) rmSync(join(root, old), { recursive: true, force: true });
+    for (const p of readdirSync(root).filter((n) => n.startsWith('.') && n.endsWith('.partial'))) {   // (left by a crash)
+      try { if (now.getTime() - statSync(join(root, p)).mtimeMs > 10 * 60_000) rmSync(join(root, p), { recursive: true, force: true }); } catch { /* gone */ }
+    }
+    return name;
+  } catch { return null; }
+}
+
+/**
+ * Restoring a backup: what it has that the lists do not have now comes back; nothing else changes. A list file that
+ * is gone is written again (without the tasks that are in another list now); a list that is there gets back the tasks
+ * it lost (those no list has now), each after the task it followed in the backup, under the same parent. local: a
+ * fresh readLocalLists of the lists folder; skip: a Set of lists left alone (those shared with this computer: their
+ * owner's server has them). -> { plan, lists (names written again), tasks (tasks put back) }; plan null while some
+ * list is not usable right now.
+ */
+export function backupRestorePlan(local, backupDir, listsDir, skip = null) {
+  if (!local.ok || local.names.some((n) => !['ok', 'unstamped'].includes(local.files[n].status))) return { plan: null, lists: [], tasks: 0 };
+  const present = new Set();   // ids and (for lines without one) list + text of every task now
+  const keyOf = (it, name) => (it.id ? `id:${it.id}` : `text:${name}\t${it.text}`);
+  for (const n of local.names) for (const it of parseItems(local.files[n].text)) if (it.kind === 'task' && it.text !== '') present.add(keyOf(it, n));
+  const plan = { ops: [], files: {}, setting: null };
+  const creates = [];
+  const writes = [];
+  let count = 0;
+  for (const [file, bytes] of readBackupFiles(backupDir)) {
+    if (!file.endsWith('.md')) continue;
+    const name = file.slice(0, -3);
+    if (skip?.has(name)) continue;
+    const btext = decodeText(bytes);
+    const bitems = parseItems(btext);
+    const path = join(listsDir, file);
+    if (!Object.hasOwn(local.files, name) && !existsSync(path)) {
+      // a list that is gone: as it was, without what another list has now
+      for (const it of [...bitems]) if (it.kind === 'task' && it.text !== '' && present.has(keyOf(it, name))) { const i = bitems.indexOf(it); if (i >= 0) removeItemKeepChildren(bitems, i); }
+      count += bitems.filter((it) => it.kind === 'task' && it.text !== '').length;
+      creates.push({ type: 'create', path, text: formatItems(bitems, 0, detectEol(btext)) });
+      continue;
+    }
+    if (!Object.hasOwn(local.files, name)) continue;   // (not one this engine reads: a shared list's own, say)
+    const f = local.files[name];
+    const cur = parseItems(f.text);
+    const btasks = bitems.filter((it) => it.kind === 'task' && it.text !== '');
+    let added = 0;
+    btasks.forEach((it, m) => {
+      if (present.has(keyOf(it, name))) return;
+      const copy = { ...it, raw: '' };
+      let at = -1;
+      for (let k = m - 1; k >= 0 && at < 0; k--) {   // after the task it followed (under its parent when that is the one)
+        const j = btasks[k].id ? findItem(cur, btasks[k].id) : -1;
+        if (j < 0) continue;
+        at = it.level > btasks[k].level ? j + 1 : subtreeEnd(cur, j);
+        copy.level = Math.max(0, it.level - btasks[k].level + cur[j].level);
+      }
+      for (let k = m + 1; k < btasks.length && at < 0; k++) {   // else before the first one after it that is there
+        const j = btasks[k].id ? findItem(cur, btasks[k].id) : -1;
+        if (j < 0) continue;
+        at = j; copy.level = cur[j].level;
+      }
+      if (at < 0) {
+        at = cur.length;
+        for (let k = cur.length - 1; k >= 0; k--) if (cur[k].kind === 'task') { at = k + 1; break; }
+        copy.level = 0;
+      }
+      cur.splice(at, 0, copy);
+      added++;
+      present.add(keyOf(it, name));
+    });
+    if (added) {
+      count += added;
+      writes.push({ type: 'write', path: f.path, expected: f.text, text: formatItems(cur, 0, detectEol(f.text)) });
+    }
+  }
+  plan.ops.push(...creates, ...writes);
+  const added = creates.map((o) => stem(o.path));
+  if (added.length) plan.ops.push({ type: 'order', path: join(listsDir, '.order'), names: orderWith(listsDir, local.all ?? local.names, added) });
+  return { plan, lists: added, tasks: count };
 }
 
 /** Applies a plan to the folder: true when every op was done. */

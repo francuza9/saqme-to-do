@@ -65,6 +65,33 @@ describe('local app server', () => {
     expect((await fetch(`${app.url}/api/sync`, { method: 'OPTIONS' })).headers.get('access-control-allow-origin')).toBeNull();
   });
 
+  it('Backups: one made at the start; bringing one back adds what is missing and nothing else', async () => {
+    const auth = { authorization: `Bearer ${app.token}`, 'content-type': 'application/json' };
+    expect((await fetch(`${app.url}/api/local/backups`)).status).toBe(401);
+    const list = async () => (await fetch(`${app.url}/api/local/backups`, { headers: auth })).json();
+    const first = await until(async () => (await list()).backups[0]);
+    expect(first).toMatchObject({ reason: 'start', lists: 1 });
+    expect((await list()).dir).toBe(join(dir, 'backups'));
+    const restore = async (body) => (await fetch(`${app.url}/api/local/backups/restore`, { method: 'POST', headers: auth, body: JSON.stringify(body) })).json();
+    expect(await restore({ name: 'nope' })).toEqual({ error: 'There is no such backup.' });
+    // the list gets ids from the engine after the backup was made: take a backup with ids, then lose a line
+    const work = join(dir, 'lists', 'Work.md');
+    await until(() => /\^[0-9a-z]{8}/.test(readFileSync(work, 'utf8')));
+    const { newBackup } = await import('../../../local/engine.mjs');
+    const name = newBackup(dir, 'daily', new Date(Date.now() + 1000));
+    expect(name).toMatch(/-daily$/);
+    const full = readFileSync(work, 'utf8');
+    writeFileSync(work, full.split('\n').filter((l) => !l.includes('Call Anna')).join('\n'));
+    await sleep(1600);   // (settled)
+    expect(await restore({ name, dryRun: true })).toEqual({ lists: [], tasks: 1 });
+    expect(readFileSync(work, 'utf8')).not.toContain('Call Anna');   // (a dry run changes nothing)
+    expect(await restore({ name })).toEqual({ lists: [], tasks: 1 });
+    expect(readFileSync(work, 'utf8')).toContain('Call Anna');
+    expect(await restore({ name, dryRun: true })).toEqual({ busy: true, lists: [], tasks: 0 });   // (just written: settling)
+    await sleep(1600);
+    expect(await restore({ name, dryRun: true })).toEqual({ lists: [], tasks: 0 });   // nothing missing any more
+  });
+
   it('gives the window its "Use with AI" instructions, with this lists folder in them', async () => {
     expect((await fetch(`${app.url}/api/local/ai-prompt`)).status).toBe(401);
     const res = await fetch(`${app.url}/api/local/ai-prompt`, { headers: { authorization: `Bearer ${app.token}` } });

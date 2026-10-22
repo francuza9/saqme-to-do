@@ -6,6 +6,7 @@
 import { spawn, spawnSync } from 'node:child_process';
 import { mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
+import { newBackup } from './engine.mjs';
 import {
   compareVersions, currentVersion, deployWorker, downloadAsset, extractRelease, fetchManifest, installRoot, prepareWorkspace, releaseInfo,
 } from './update.mjs';
@@ -112,6 +113,7 @@ export class Updater {
       const dest = this.path(`src-${m.version}`);
       const tree = extractRelease(bytes, dest, m.version);
       this.log(`update: ${m.version} downloaded and checked; installing`);
+      newBackup(this.data, 'update');   // a copy of the lists before anything changes (engine.mjs, docs/sync.md "Backups")
       writeJson(this.path('status.json'), { state: 'installing', version: m.version, at: this.now() });
       this.spawnApply([join(tree, 'local', 'update.mjs'), 'apply', '--source', tree, '--root', this.root, '--data', this.data, '--port', String(this.port),
         '--min-worker-api', String(m.minWorkerApi), '--restart', this.restartMode, '--launcher', process.env.SAQME_LAUNCHER ?? '',

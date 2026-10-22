@@ -115,6 +115,9 @@ if (-not (Get-ChildItem -LiteralPath $listsDir -Filter *.md -File)) {
   if (-not (Test-Path -LiteralPath $orderFile)) { Write-Utf8 $orderFile "General`n" }
 }
 
+# a copy of the lists, each time the app starts (only when they changed since the last one: sync-core.ps1 New-ListsBackup)
+[void](New-ListsBackup $DataDir 'start')
+
 # ---------------------------------------------------------------- settings + open/closed state
 $script:cfg = @{ showCompleted = '0'; active = ''; width = ''; height = ''; theme = 'auto'; notifyAt = '10:00'; autoUpdate = '1'; updatedSeen = '' }
 foreach ($l in (Read-Lines $cfgFile)) { if ($l -match '^(\w+)=(.*)$') { $script:cfg[$matches[1]] = $matches[2] } }
@@ -2290,8 +2293,8 @@ $script:view = 'list'
 # (in this order; the last two are a card of their own, "App")
 $script:SettingsPages = [ordered]@{ general = 'General'; notifications = 'Notifications'; sync = 'Sync & sharing'; yourlists = 'Your lists'; updates = 'Updates'; about = 'About' }
 # where Back (the header, Esc) goes from each view
-$script:ViewParent = @{ settings = 'list'; share = 'list'; keys = 'general'; pair = 'sync'; conflicts = 'sync'; trash = 'yourlists' }
-$script:ViewTitles = @{ list = 'the list'; settings = 'Settings'; keys = 'Keyboard shortcuts'; pair = 'Pair phone'; conflicts = 'Conflicts'; trash = 'Recently deleted'; share = 'Share' }
+$script:ViewParent = @{ settings = 'list'; share = 'list'; keys = 'general'; pair = 'sync'; conflicts = 'sync'; trash = 'yourlists'; backups = 'yourlists' }
+$script:ViewTitles = @{ list = 'the list'; settings = 'Settings'; keys = 'Keyboard shortcuts'; pair = 'Pair phone'; conflicts = 'Conflicts'; trash = 'Recently deleted'; backups = 'Backups'; share = 'Share' }
 foreach ($k in $script:SettingsPages.Keys) { $script:ViewParent[$k] = 'settings'; $script:ViewTitles[$k] = $script:SettingsPages[$k] }
 $script:advancedOpen = $false; $script:focusKey = ''; $script:renderedView = 'list'
 function Get-ViewParent([string]$v) { if ($script:ViewParent.ContainsKey($v)) { return $script:ViewParent[$v] }; return 'settings' }
@@ -2667,6 +2670,7 @@ function Render-SettingsView {
     'pair' { Render-PairView; return }
     'share' { Render-ShareView; return }
     'trash' { Render-TrashView; return }
+    'backups' { Render-BackupsView; return }
     'conflicts' { Render-ConflictsView; return }
     'keys' { Render-KeysView; return }
     'general' { Render-GeneralPage; return }
@@ -2788,7 +2792,7 @@ function Render-SyncPage {
     Add-Heading 'Deletions paused'
     Add-CardRow (New-InfoRow 'Waiting for you' $(if ($script:sync.RestoreHeld) { 'Restoring...' } else { "$g tasks" }) -Dot -Tip $msg)
     Add-CardRow (New-ActionRow 'Restore them' { $script:sync.AllowMassDelete = $false; $script:sync.RestoreHeld = $true; Request-Sync; Render } -Help 'Puts the tasks back into their lists, as they were when they last synced')
-    Add-CardRow (New-ActionRow 'Delete them' { $script:sync.RestoreHeld = $false; $script:sync.AllowMassDelete = $true; Request-Sync; Render } -Danger -Help 'Confirms the paused deletions: the tasks are deleted on your other devices too')
+    Add-CardRow (New-ActionRow 'Delete them' { [void](New-ListsBackup $DataDir 'delete'); $script:sync.RestoreHeld = $false; $script:sync.AllowMassDelete = $true; Request-Sync; Render } -Danger -Help 'Confirms the paused deletions: the tasks are deleted on your other devices too')
     Add-Footnote $msg
   }
   if ($script:rewritten.Count) { Render-RewrittenLists }
@@ -2865,7 +2869,56 @@ function Render-YourListsPage {
   Add-Heading 'Lists'
   Add-CardRow (New-ActionRow 'Open the lists folder' { Start-Process explorer.exe -ArgumentList "`"$listsDir`"" } -Help (Format-Path $listsDir))
   Add-CardRow (New-LinkRow 'Recently deleted' '' 'trash' -Help 'Deleted tasks, ready to restore for 30 days')
+  Add-CardRow (New-LinkRow 'Backups' '' 'backups' -Help 'Copies of your lists, made by themselves: bring back what is missing')
   Add-Footnote "Plain markdown files, one per list, in $(Format-Path $listsDir). Editors and AI assistants can change them too; the app picks up their changes by itself."
+}
+
+# ---------------------------------------------------------------- Settings > Your lists > Backups (sync-core.ps1 New-ListsBackup)
+# Copies of the lists the app makes by itself (when it starts, once a day, before an update, before deletions the user
+# confirms); bringing one back only adds what is missing now (Get-BackupRestorePlan) and changes nothing else.
+$backupsDir = Join-Path $DataDir 'backups'
+function Format-BackupReason([string]$r) {
+  switch ($r) { 'start' { return 'when the app started' } 'daily' { return 'daily' } 'update' { return 'before an update' } 'delete' { return 'before confirmed deletions' } 'restore' { return 'before a restore' } }
+  return $r
+}
+function Render-BackupsView {
+  [void]$list.Children.Add((New-SettingsHeader 'Backups'))
+  $all = @((Get-ListsBackups $DataDir) | Select-Object -First 20)
+  $about = "Saqme copies your lists by itself when it starts, once a day, before an update and before deletions you confirm (only when they changed; the last 10 and one a day for 30 days are kept). Bringing one back adds what is missing now, whole lists or tasks, and changes nothing else."
+  if (-not $all.Count) { Add-Note 'No backups yet: one is made the next time the app starts.' $Ink }
+  else {
+    Add-Heading 'Bring back what is missing from'
+    foreach ($b in $all) {
+      $when = $b.At.ToString('d MMM H:mm', $CI)
+      $what = "$($b.Lists) $(if ($b.Lists -eq 1) { 'list' } else { 'lists' }), $(Format-BackupReason $b.Reason)"
+      Add-CardRow (New-ActionRow $when { param($x) Restore-Backup $x } $b -Value $what -Name "Bring back from the backup of $when" -Help $what)
+    }
+  }
+  Add-Footnote $about
+  Add-CardRow (New-ActionRow 'Open the backups folder' { if (-not (Test-Path -LiteralPath $backupsDir)) { [void](New-Item -ItemType Directory -Path $backupsDir -Force) }; Start-Process explorer.exe -ArgumentList "`"$backupsDir`"" } -Help (Format-Path $backupsDir))
+}
+# what a backup has that the lists lack now comes back, after a yes (-Confirmed: the self-check); -> what was done ('' = nothing)
+function Restore-Backup($b, [switch]$Confirmed) {
+  Commit-Edit
+  if ($script:saveFailed) { Save-Items }
+  $r = Get-BackupRestorePlan (Read-LocalLists $listsDir 1500) $b.Path $listsDir (Get-SharedFileSet $listsDir)
+  if (-not $r.Plan) { Show-Notice 'A list is being written right now. Try again in a moment.'; return '' }
+  if (-not $r.Plan.Ops.Count) { Show-Notice 'Nothing is missing: everything in that backup is in your lists.'; return '' }
+  $parts = @()
+  if ($r.Lists.Count) { $parts += "the $(if ($r.Lists.Count -eq 1) { 'list' } else { 'lists' }) $($r.Lists -join ', ')" }
+  $parts += "$($r.Tasks) $(if ($r.Tasks -eq 1) { 'task' } else { 'tasks' }) in all"
+  $what = $parts -join ', '
+  if (-not $Confirmed) {
+    $ans = [System.Windows.MessageBox]::Show($w, "Bring back from the backup of $($b.At.ToString('d MMM H:mm', $CI)): $what?`n`nNothing in your lists is removed or changed.", 'Saqme To Do', 'OKCancel', 'Question')
+    if ("$ans" -ne 'OK') { return '' }
+  }
+  [void](New-ListsBackup $DataDir 'restore')
+  $done = $(try { Invoke-PlanOps $r.Plan.Ops $listsDir } catch { -1 })
+  if ($done -ne @($r.Plan.Ops).Count) { Show-Notice 'Could not bring it back: a list changed meanwhile. Try again.'; return '' }
+  if ($script:sync) { Request-Sync }
+  [void](Use-Loaded (Load-Items)); Render
+  Show-Notice "Brought back $what."
+  return $what
 }
 
 function Render-AboutPage {
@@ -4208,6 +4261,10 @@ $timer.Add_Tick({
   $script:tick++
   if ($script:tick % 12 -eq 0 -and $script:cfg.theme -eq 'auto' -and (Resolve-Theme 'auto') -ne $script:themeName) { Apply-Theme (Resolve-Theme 'auto') }
   if ($script:tick -eq 6 -or $script:tick % 37 -eq 0) { try { Check-Reminders } catch {} }
+  if ($script:tick % 750 -eq 0) {   # (every 10 minutes or so) a copy of the lists once a day
+    $nb = (Get-ListsBackups $DataDir) | Select-Object -First 1
+    if (-not $nb -or ((Get-Date) - $nb.At).TotalHours -ge 24) { [void](New-ListsBackup $DataDir 'daily') }
+  }
   if ($script:tick % 3 -eq 0) { if ((Tab-Signature) -ne $script:tabSig) { Render-Tabs } }
   # midnight: refresh deadline labels (Today / Tomorrow / overdue)
   if ($script:tick % 75 -eq 0) { $d = (Get-Date).Date; if ($d -ne $script:lastDay) { $script:lastDay = $d; Render } }
@@ -4244,7 +4301,7 @@ if ($SmokeTest) {
     $script:openState[(Open-Key $first)] = '1'; Render
     $text = [IO.File]::ReadAllText($script:todo)
     if ($text -notmatch ('- \[ \] smoke task one due:\d{4}-\d{2}-\d{2}T9:00 \^' + $first.Id)) { throw "unexpected file content: $text" }
-    foreach ($v in @('settings') + @($script:SettingsPages.Keys) + @('keys', 'pair', 'conflicts', 'trash', 'list')) { $script:view = $v; Render }
+    foreach ($v in @('settings') + @($script:SettingsPages.Keys) + @('keys', 'pair', 'conflicts', 'trash', 'backups', 'list')) { $script:view = $v; Render }
     # Settings: every setting and action is on its page, each page opens from Settings the way Enter or a screen
     # reader's Invoke opens it, and Back (the header, Esc) goes up one level. Nothing here is switched or pressed
     # (Start with Windows is the real Startup folder's shortcut). The settings file keeps its keys.
@@ -4254,7 +4311,7 @@ if ($SmokeTest) {
       general       = @('Dark', 'Light', 'Auto', 'Start with Windows', 'open-keys')
       notifications = @('Daily summary time', 'Send a test notification')
       sync          = @('Set up sync', 'Pairing link', 'Connect', 'Invite link', 'Join')
-      yourlists     = @('Copy instructions for your AI', 'Save the instructions for your AI as a file', 'Open the lists folder', 'open-trash')
+      yourlists     = @('Copy instructions for your AI', 'Save the instructions for your AI as a file', 'Open the lists folder', 'open-trash', 'open-backups')
       updates       = @('back')
       about         = @('Open the data folder')
     }
@@ -4281,13 +4338,13 @@ if ($SmokeTest) {
     if ([IO.File]::ReadAllText($aiFile) -cne $ai) { throw 'the saved AI instructions differ from the copied ones' }
     Remove-Item -LiteralPath $aiFile -Force
     if (-not (Save-AiPromptFile (Join-Path $listsDir 'SAQME.md')) -or (Test-Path -LiteralPath (Join-Path $listsDir 'SAQME.md'))) { throw 'the AI instructions were saved into the lists folder' }
-    foreach ($sub in @(@('general', 'keys'), @('yourlists', 'trash'))) {
+    foreach ($sub in @(@('general', 'keys'), @('yourlists', 'trash'), @('yourlists', 'backups'))) {
       Show-View $sub[0]; & $activate (& $find $list "open-$($sub[1])")
       if ($script:view -ne $sub[1]) { throw "$($sub[0]) did not open $($sub[1])" }
       Go-Back
       if ($script:view -ne $sub[0]) { throw "Back from $($sub[1]) went to '$($script:view)'" }
     }
-    foreach ($p in @(@('settings', 'list'), @('share', 'list'), @('keys', 'general'), @('pair', 'sync'), @('conflicts', 'sync'), @('trash', 'yourlists'), @('about', 'settings'))) {
+    foreach ($p in @(@('settings', 'list'), @('share', 'list'), @('keys', 'general'), @('pair', 'sync'), @('conflicts', 'sync'), @('trash', 'yourlists'), @('backups', 'yourlists'), @('about', 'settings'))) {
       if ((Get-ViewParent $p[0]) -ne $p[1]) { throw "Back from $($p[0]) goes to $(Get-ViewParent $p[0])" }
     }
     # with sync set up: Sync now, Pair phone, and Advanced, closed at first, with Turn off sync in it
@@ -4306,7 +4363,7 @@ if ($SmokeTest) {
     $ver = Get-VersionText
     $hasText = { param($root, [string]$t) foreach ($c in (Get-Controls $root)) { if ($c -is [System.Windows.Controls.TextBlock] -and $c.Text -eq $t) { return $true } }; return $false }
     if ($ver -notmatch '^Saqme To Do \d+\.\d+\.\d+$') { throw "version: $ver" }
-    foreach ($v in @('settings') + @($script:SettingsPages.Keys) + @('keys', 'trash')) {
+    foreach ($v in @('settings') + @($script:SettingsPages.Keys) + @('keys', 'trash', 'backups')) {
       Show-View $v
       if ($verBar.Visibility -ne 'Visible' -or -not (& $hasText $verBar $ver)) { throw "no version line under $v" }
     }
@@ -4607,6 +4664,28 @@ if ($SmokeTest) {
     Remove-Item -LiteralPath (Proj-Path 'Switch check') -Force
     Render
     Write-Output 'SWITCHER OK'
+    # Backups (Settings > Your lists > Backups): one made at start; a changed list gets a new one, an unchanged one none;
+    # bringing one back writes a list that is gone again and puts back a task that is gone, and changes nothing else
+    if (-not (Get-ListsBackups $DataDir).Count) { throw 'no backup made when the app started' }
+    Write-TextFileAtomic (Proj-Path 'Backup check') "- [ ] B one ^bkbkbk01`n  - [x] B one sub ^bkbkbk02`n- [ ] B two ^bkbkbk03`n"
+    $bk = New-ListsBackup $DataDir 'daily' ((Get-Date).AddSeconds(1))
+    if (-not $bk) { throw 'no backup of changed lists' }
+    if (New-ListsBackup $DataDir 'daily' ((Get-Date).AddSeconds(2))) { throw 'a backup of unchanged lists' }
+    Write-TextFileAtomic (Proj-Path 'Backup check') "- [ ] B two edited ^bkbkbk03`n"
+    $keep = [IO.File]::ReadAllText((Proj-Path 'General'))
+    Show-View 'backups'
+    $bkRow = & $find $list "Bring back from the backup of $(((Get-ListsBackups $DataDir) | Where-Object { $_.Name -eq $bk }).At.ToString('d MMM H:mm', $CI))"
+    if (-not $bkRow) { throw 'the backup is not on the Backups page' }
+    foreach ($f in (Get-ChildItem -LiteralPath $listsDir -Filter *.md -File)) { $f.LastWriteTimeUtc = [DateTime]::UtcNow.AddSeconds(-10) }   # (settled lists)
+    $did = Restore-Backup ((Get-ListsBackups $DataDir) | Where-Object { $_.Name -eq $bk }) -Confirmed
+    if ($did -notmatch '2 tasks') { throw "backup restore said: $did" }
+    $bkText = [IO.File]::ReadAllText((Proj-Path 'Backup check'))
+    if ($bkText -cne "- [ ] B one ^bkbkbk01`n  - [x] B one sub ^bkbkbk02`n- [ ] B two edited ^bkbkbk03`n") { throw "backup restore wrote: $bkText" }
+    if ([IO.File]::ReadAllText((Proj-Path 'General')) -cne $keep) { throw 'backup restore changed another list' }
+    Show-View 'list'
+    Remove-Item -LiteralPath (Proj-Path 'Backup check') -Force
+    Render
+    Write-Output 'BACKUP OK'
     $first = @($script:items | Where-Object { $_.Kind -eq 'task' -and $_.Text -eq 'smoke task one' })[0]
     if ($script:sync) {
       # with a sync config in the data dir: the real loop must push our task, and a change made on

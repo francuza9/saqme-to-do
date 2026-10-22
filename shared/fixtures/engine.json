@@ -15,7 +15,9 @@
     "for \"keys\" when given: a vanished list written again by itself) and apply it; \"count\" = tasks put back, after /",
     "filesAfter as for plan. replay: whole sync cycles against a server that has S, with the clock \"cycles\" seconds after",
     "the start for each; afterwards every file is \"after\", nothing is held back, no delete reached the server, and the",
-    "lists written again (name, tasks) are \"rewritten\"."
+    "lists written again (name, tasks) are \"rewritten\". backups.prune: which backup folders go (\"pruned\", newest first)",
+    "on \"now\" (local time); backups.restore: with the folder (lists) and a backup's files (backup), the restore plan puts",
+    "\"tasks\" tasks back and writes the lists \"written\" again; every file is \"after\" afterwards."
   ],
   "plan": [
     {
@@ -956,5 +958,53 @@
       },
       "rewritten": [["Shared", 2]]
     }
-  ]
+  ],
+  "backups": {
+    "prune": [
+      { "about": "fewer than ten: every one is kept", "now": "2026-10-22T06:40:00", "names": ["20261022-063000-start", "20261021-080000-daily", "20260901-120000-update"], "pruned": [] },
+      { "about": "the ten newest, then the newest of each of the last 30 days; older ones go", "now": "2026-10-22T06:40:00", "names": ["20261022-060000-start", "20261022-060100-start", "20261022-060200-start", "20261022-060300-start", "20261022-060400-start", "20261022-060500-start", "20261022-060600-start", "20261022-060700-start", "20261022-060800-start", "20261022-060900-start", "20261022-061000-start", "20261022-061100-start", "20261021-200000-daily", "20261021-080000-start", "20261001-090000-update", "20260922-090000-daily", "20260901-100000-start", "20260901-110000-start"], "pruned": ["20261022-060100-start", "20261022-060000-start", "20261021-080000-start", "20260922-090000-daily", "20260901-110000-start", "20260901-100000-start"] }
+    ],
+    "restore": [
+      {
+        "name": "a list whose file is gone comes back as it was",
+        "lists": { "Work.md": "- [ ] W ^wwwwwwww\n" },
+        "backup": { "Work.md": "- [ ] W ^wwwwwwww\n", "Old.md": "# Old\n- [ ] O1 due:2026-12-24T18:30 ^oooooo01\n  - [x] O2 ^oooooo02\n    > a note\n", ".order": "Old\nWork\n" },
+        "tasks": 2,
+        "written": ["Old"],
+        "after": { "Work.md": "- [ ] W ^wwwwwwww\n", "Old.md": "# Old\n- [ ] O1 due:2026-12-24T18:30 ^oooooo01\n  - [x] O2 ^oooooo02\n    > a note\n", ".order": "Work\nOld\n" }
+      },
+      {
+        "name": "an emptied list gets its tasks back in their order and nesting; what was added since stays",
+        "lists": { "Work.md": "# Work\n- [ ] New since ^nnnnnnnn\n" },
+        "backup": { "Work.md": "# Work\n- [ ] A ^aaaaaaaa\n  - [x] A1 ^aaaaaaa1\n    > note\n- [ ] B ^bbbbbbbb\n" },
+        "tasks": 3,
+        "written": [],
+        "after": { "Work.md": "# Work\n- [ ] New since ^nnnnnnnn\n- [ ] A ^aaaaaaaa\n  - [x] A1 ^aaaaaaa1\n    > note\n- [ ] B ^bbbbbbbb\n" }
+      },
+      {
+        "name": "what changed since stays as it is: an edited task keeps its edit, a task moved to another list is not doubled",
+        "lists": { "Work.md": "- [x] A edited ^aaaaaaaa\n", "Home.md": "- [ ] B ^bbbbbbbb\n" },
+        "backup": { "Work.md": "- [ ] A ^aaaaaaaa\n- [ ] B ^bbbbbbbb\n- [ ] C ^cccccccc\n" },
+        "tasks": 1,
+        "written": [],
+        "after": { "Work.md": "- [x] A edited ^aaaaaaaa\n- [ ] C ^cccccccc\n", "Home.md": "- [ ] B ^bbbbbbbb\n" }
+      },
+      {
+        "name": "a list that is gone comes back without the tasks another list has now",
+        "lists": { "Work.md": "- [ ] O2 ^oooooo02\n" },
+        "backup": { "Old.md": "- [ ] O1 ^oooooo01\n  - [ ] O1a ^oooooo1a\n- [ ] O2 ^oooooo02\n" },
+        "tasks": 2,
+        "written": ["Old"],
+        "after": { "Work.md": "- [ ] O2 ^oooooo02\n", "Old.md": "- [ ] O1 ^oooooo01\n  - [ ] O1a ^oooooo1a\n", ".order": "Work\nOld\n" }
+      },
+      {
+        "name": "nothing missing: nothing to write",
+        "lists": { "Work.md": "- [ ] A ^aaaaaaaa\n" },
+        "backup": { "Work.md": "- [ ] A ^aaaaaaaa\n" },
+        "tasks": 0,
+        "written": [],
+        "after": { "Work.md": "- [ ] A ^aaaaaaaa\n" }
+      }
+    ]
+  }
 }

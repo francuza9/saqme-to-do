@@ -14,6 +14,9 @@
 //   POST /api/local/allow-deletes confirm a paused mass delete in the lists folder
 //   POST /api/local/restore-deletes put the tasks of a paused mass delete back into their lists instead
 //   GET  /api/local/ai-prompt     { text }: the "Use with AI" instructions for this lists folder (Settings > Your lists)
+//   GET  /api/local/backups       { dir, backups: [{ name, at, reason, lists }] } (Settings > Your lists > Backups)
+//   POST /api/local/backups/restore { name, dryRun? }: bring back what that backup has and the lists lack now
+//                                  -> { lists, tasks } ({ busy } while a list is being written)
 //   POST /api/local/stop          shut down (used by setup when updating)
 // Updates (local/updater.mjs), for Settings > Updates and `saqme update`:
 //   GET  /api/local/update        what it knows: this version, the newest one, what an update is doing, how it ended
@@ -143,6 +146,12 @@ export function startServer(opts) {
         try { return json(res, 200, { url: opts.connect(link) }); } catch (e) { return json(res, 400, { error: e.message }); }
       }
       case 'GET /api/local/ai-prompt': return json(res, 200, { text: opts.aiPrompt() });
+      case 'GET /api/local/backups': return json(res, 200, opts.backups?.list() ?? { dir: '', backups: [] });
+      case 'POST /api/local/backups/restore': {
+        let b = {};
+        try { b = JSON.parse(body.toString('utf8')); } catch { /* bad JSON */ }
+        try { return json(res, 200, opts.backups.restore(String(b.name ?? ''), !!b.dryRun)); } catch (e) { return json(res, 400, { error: e.message }); }
+      }
       case 'POST /api/local/allow-deletes': opts.onAllowDeletes?.(); return json(res, 200, { ok: true });
       case 'POST /api/local/restore-deletes': opts.onRestoreDeletes?.(); return json(res, 200, { ok: true });
       case 'GET /api/local/cloud-setup': return json(res, 200, opts.cloudSetup.status());

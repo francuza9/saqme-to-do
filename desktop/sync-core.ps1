@@ -1814,6 +1814,164 @@ function Invoke-PlanOps($ops, [string]$listsDir) {
   return $done
 }
 
+# ================================================================ backups (docs/sync.md, "Backups")
+# <data>\backups\<yyyyMMdd-HHmmss>-<reason>\: a copy of the lists (lists\*.md and .order), made when the app starts,
+# once a day, before an update and before held-back deletes are confirmed; not made again while the lists are the
+# same as in the newest one. Kept: the $BackupKeepNewest newest, and the newest of each of the last $BackupKeepDays
+# days. Restoring one only adds what is missing now (Get-BackupRestorePlan): it never removes or changes anything.
+# (engine.mjs newBackup, backupsToPrune, backupRestorePlan; shared/fixtures/engine.json "backups")
+$script:BackupKeepNewest = 10
+$script:BackupKeepDays = 30
+$script:BackupName = '^(\d{8})-(\d{6})-([a-z]+)$'
+
+# what a backup holds: name -> text of each list file (and .order) in $dir
+function Read-BackupFiles([string]$dir) {
+  $out = [ordered]@{}
+  if (-not [IO.Directory]::Exists($dir)) { return $out }
+  $names = @([IO.Directory]::GetFiles($dir) | ForEach-Object { [IO.Path]::GetFileName($_) } | Where-Object { $_ -ceq '.order' -or ($_ -like '*.md' -and -not $_.StartsWith('.')) })
+  foreach ($n in (Sort-Ordinal $names { param($x) $x })) { $out[$n] = [IO.File]::ReadAllBytes((Join-Path $dir $n)) }
+  return $out
+}
+function Get-BackupSignature($files) {
+  $sha = [Security.Cryptography.SHA256]::Create()
+  try {
+    $ms = New-Object IO.MemoryStream
+    foreach ($n in $files.Keys) { $b = $script:Utf8NoBom.GetBytes("$n`0"); $ms.Write($b, 0, $b.Length); $ms.Write($files[$n], 0, $files[$n].Length); $ms.WriteByte(0) }
+    return -join ($sha.ComputeHash($ms.ToArray()) | ForEach-Object { $_.ToString('x2') })
+  } finally { $sha.Dispose() }
+}
+# the backups there are, newest first: @{ Name; Path; At; Reason; Lists }
+function Get-ListsBackups([string]$dataDir) {
+  $root = Join-Path $dataDir 'backups'
+  $out = New-Object System.Collections.ArrayList
+  if (-not [IO.Directory]::Exists($root)) { return ,$out }
+  $names = @([IO.Directory]::GetDirectories($root) | ForEach-Object { [IO.Path]::GetFileName($_) } | Where-Object { $_ -cmatch $script:BackupName })
+  foreach ($n in (Sort-Ordinal $names { param($x) $x })) {
+    [void]($n -cmatch $script:BackupName)
+    $p = Join-Path $root $n
+    $at = [DateTime]::ParseExact("$($matches[1])$($matches[2])", 'yyyyMMddHHmmss', [Globalization.CultureInfo]::InvariantCulture)
+    $lists = @([IO.Directory]::GetFiles($p, '*.md') | Where-Object { -not [IO.Path]::GetFileName($_).StartsWith('.') }).Count
+    $out.Insert(0, @{ Name = $n; Path = $p; At = $at; Reason = $matches[3]; Lists = $lists })
+  }
+  return ,$out
+}
+# Which backups go ($names: backup folder names; $now: this computer's time): all but the $BackupKeepNewest newest and
+# the newest of each of the last $BackupKeepDays days.
+function Get-BackupsToPrune($names, [DateTime]$now) {
+  $sorted = @(foreach ($n in (Sort-Ordinal @($names | Where-Object { $_ -cmatch $script:BackupName }) { param($x) $x })) { $n })
+  [array]::Reverse($sorted)   # (newest first)
+  $keep = @{}; $days = @{}
+  for ($i = 0; $i -lt $sorted.Count; $i++) {
+    $n = $sorted[$i]
+    if ($i -lt $script:BackupKeepNewest) { $keep[$n] = $true }
+    $day = $n.Substring(0, 8)
+    if ($days.ContainsKey($day)) { continue }
+    $days[$day] = $true
+    $d = [DateTime]::ParseExact($day, 'yyyyMMdd', [Globalization.CultureInfo]::InvariantCulture)
+    if (($now.Date - $d).TotalDays -lt $script:BackupKeepDays) { $keep[$n] = $true }
+  }
+  return ,@($sorted | Where-Object { -not $keep.ContainsKey($_) })
+}
+# Makes a backup of the lists, unless they are the same as in the newest one (or there are none); prunes old ones.
+# -> its name, or $null. $reason: start | daily | update | delete | restore. Never throws.
+function New-ListsBackup([string]$dataDir, [string]$reason, [DateTime]$now = (Get-Date)) {
+  try {
+    $lists = Join-Path $dataDir 'lists'
+    $files = Read-BackupFiles $lists
+    if (-not @($files.Keys | Where-Object { $_ -like '*.md' }).Count) { return $null }
+    $root = Join-Path $dataDir 'backups'
+    Assert-RealAppData $root
+    $newest = (Get-ListsBackups $dataDir) | Select-Object -First 1
+    if ($newest -and (Get-BackupSignature (Read-BackupFiles $newest.Path)) -ceq (Get-BackupSignature $files)) { return $null }
+    $name = '{0}-{1}' -f $now.ToString('yyyyMMdd-HHmmss', [Globalization.CultureInfo]::InvariantCulture), $reason
+    $final = Join-Path $root $name
+    if ([IO.Directory]::Exists($final)) { return $null }
+    $tmp = Join-Path $root ".$name.partial"
+    [void][IO.Directory]::CreateDirectory($tmp)
+    foreach ($n in $files.Keys) { [IO.File]::WriteAllBytes((Join-Path $tmp $n), $files[$n]) }
+    [IO.Directory]::Move($tmp, $final)   # whole or not at all
+    foreach ($old in (Get-BackupsToPrune @((Get-ListsBackups $dataDir) | ForEach-Object { $_.Name }) $now)) {
+      try { [IO.Directory]::Delete((Join-Path $root $old), $true) } catch {}
+    }
+    foreach ($p in [IO.Directory]::GetDirectories($root, '.*.partial')) {   # (left by a crash)
+      if ($p -ne $tmp -and ($now - [IO.Directory]::GetLastWriteTime($p)).TotalMinutes -gt 10) { try { [IO.Directory]::Delete($p, $true) } catch {} }
+    }
+    return $name
+  } catch { return $null }
+}
+
+# Restoring a backup: what it has that the lists do not have now comes back; nothing else changes. A list file that is
+# gone is written again (without the tasks that are in another list now); a list that is there gets back the tasks it
+# lost (those no list has now), each after the task it followed in the backup, under the same parent. $local: a fresh
+# Read-LocalLists of the lists folder; $Skip: @{ name = $true } of lists left alone (those shared with this PC: their
+# owner's server has them). -> @{ Plan; Lists (names written again); Tasks (tasks put back) }; Plan $null while some
+# list is not usable right now.
+function Get-BackupRestorePlan($local, [string]$backupDir, [string]$listsDir, $Skip = $null) {
+  if (-not $local.Ok) { return @{ Plan = $null; Lists = @(); Tasks = 0 } }
+  foreach ($n in $local.Names) { if (@('ok', 'unstamped') -notcontains $local.Files[$n].Status) { return @{ Plan = $null; Lists = @(); Tasks = 0 } } }
+  $present = @{}   # ids and (for lines without one) list + text of every task now
+  foreach ($n in $local.Names) {
+    foreach ($it in (Read-Items $local.Files[$n].Text)) { if ($it.Kind -eq 'task' -and $it.Text -ne '') { if ($it.Id) { $present["id:$($it.Id)"] = $true } else { $present["text:$n`t$($it.Text)"] = $true } } }
+  }
+  $isPresent = { param($it, [string]$n) if ($it.Id) { $present.ContainsKey("id:$($it.Id)") } else { $present.ContainsKey("text:$n`t$($it.Text)") } }
+  $plan = @{ Ops = (New-Object System.Collections.ArrayList); Files = @{}; Setting = $null }
+  $creates = New-Object System.Collections.ArrayList; $writes = New-Object System.Collections.ArrayList
+  $count = 0
+  $files = Read-BackupFiles $backupDir
+  foreach ($file in @($files.Keys | Where-Object { $_ -like '*.md' })) {
+    $name = $file.Substring(0, $file.Length - 3)
+    if ($Skip -and $Skip.ContainsKey($name)) { continue }
+    $btext = ConvertFrom-FileBytes $files[$file]
+    $bitems = Read-Items $btext
+    $path = Join-Path $listsDir $file
+    if (-not $local.Files.ContainsKey($name) -and -not (Test-Path -LiteralPath $path)) {
+      # a list that is gone: as it was, without what another list has now
+      foreach ($it in @($bitems)) { if ($it.Kind -eq 'task' -and $it.Text -ne '' -and (& $isPresent $it $name)) { $i = $bitems.IndexOf($it); if ($i -ge 0) { Remove-ItemKeepChildren $bitems $i } } }
+      $count += @($bitems | Where-Object { $_.Kind -eq 'task' -and $_.Text -ne '' }).Count
+      [void]$creates.Add(@{ type = 'create'; path = $path; text = (ConvertTo-MarkdownText $bitems 0 (Get-TextEol $btext)) })
+      continue
+    }
+    if (-not $local.Files.ContainsKey($name)) { continue }   # (not one this engine reads: a shared list's own, say)
+    $f = $local.Files[$name]
+    $cur = Read-Items $f.Text
+    $btasks = @($bitems | Where-Object { $_.Kind -eq 'task' -and $_.Text -ne '' })
+    $added = 0
+    for ($m = 0; $m -lt $btasks.Count; $m++) {
+      $it = $btasks[$m]
+      if (& $isPresent $it $name) { continue }
+      $copy = [pscustomobject]@{ Kind = 'task'; Level = $it.Level; Mark = $it.Mark; MarkRaw = $it.MarkRaw; Indent = $it.Indent; Text = $it.Text; Due = $it.Due; DueTime = $it.DueTime; Notes = $it.Notes; Raw = ''; Id = $it.Id }
+      $at = -1
+      for ($k = $m - 1; $k -ge 0 -and $at -lt 0; $k--) {   # after the task it followed (under its parent when that is the one)
+        $j = $(if ($btasks[$k].Id) { Find-ItemIndex $cur $btasks[$k].Id } else { -1 })
+        if ($j -lt 0) { continue }
+        $at = $(if ($it.Level -gt $btasks[$k].Level) { $j + 1 } else { Get-SubtreeEnd $cur $j })
+        $copy.Level = [Math]::Max(0, $it.Level - $btasks[$k].Level + $cur[$j].Level)
+      }
+      for ($k = $m + 1; $k -lt $btasks.Count -and $at -lt 0; $k++) {   # else before the first one after it that is there
+        $j = $(if ($btasks[$k].Id) { Find-ItemIndex $cur $btasks[$k].Id } else { -1 })
+        if ($j -lt 0) { continue }
+        $at = $j; $copy.Level = $cur[$j].Level
+      }
+      if ($at -lt 0) {
+        $at = $cur.Count; for ($k = $cur.Count - 1; $k -ge 0; $k--) { if ($cur[$k].Kind -eq 'task') { $at = $k + 1; break } }
+        $copy.Level = 0
+      }
+      $cur.Insert($at, $copy)
+      $added++
+      if ($it.Id) { $present["id:$($it.Id)"] = $true } else { $present["text:$name`t$($it.Text)"] = $true }
+    }
+    if ($added) {
+      $count += $added
+      [void]$writes.Add(@{ type = 'write'; path = $f.Path; expected = $f.Text; text = (ConvertTo-MarkdownText $cur 0 (Get-TextEol $f.Text)) })
+    }
+  }
+  foreach ($o in $creates) { [void]$plan.Ops.Add($o) }
+  foreach ($o in $writes) { [void]$plan.Ops.Add($o) }
+  $new = @($creates | ForEach-Object { [IO.Path]::GetFileNameWithoutExtension($_.path) })
+  if ($new.Count) { [void]$plan.Ops.Add(@{ type = 'order'; path = (Join-Path $listsDir '.order'); names = (Get-OrderWith $listsDir $(if ($local.All) { $local.All } else { $local.Names }) $new) }) }
+  return @{ Plan = $plan; Lists = $new; Tasks = $count }
+}
+
 # ================================================================ http
 function Invoke-SaqmeApi([string]$url, [string]$token, [string]$method, $body, [int]$timeoutMs = 25000) {
   [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12

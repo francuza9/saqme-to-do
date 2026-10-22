@@ -85,6 +85,7 @@ function Invoke-Update {
   if ($bad) { Remove-Item -LiteralPath $zip -Force -ErrorAction SilentlyContinue; & $failed $bad; return }
 
   Set-UpdateStatus 'installing' $m.version
+  [void](New-ListsBackup $DataDir 'update')   # a copy of the lists before anything changes (docs/sync.md, "Backups")
   $src = Join-Path $upd "src-$($m.version)"
   if (Test-Path -LiteralPath $src) { Remove-Item -LiteralPath $src -Recurse -Force }
   try {

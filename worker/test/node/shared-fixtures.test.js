@@ -18,6 +18,7 @@ import { keyBetween, isValidKey, rekey } from '../../public/js/keys.js';
 import { normalizeText, normalizeNotes, isValidDate as serverValidDate } from '../../src/merge.js';
 import {
   newState, readLocalLists, addLocalDiff, remotePlan, restorePlan, applyPlanToFolder, rekeyMap, syncCycle, cleanText as engineCleanText,
+  backupsToPrune, backupRestorePlan,
 } from '../../../local/engine.mjs';
 
 const FIXTURES = join(import.meta.dirname, '..', '..', '..', 'shared', 'fixtures');
@@ -270,6 +271,23 @@ describe('engine.json: remotePlan, addLocalDiff (local/engine.mjs)', () => {
       expect(st.Guard).toBeNull();
       expect(sent.filter((e) => e.fields.deleted?.v === true).map((e) => `${e.kind}:${e.id}`)).toEqual([]);
       expect(rewritten.sort()).toEqual(c.rewritten.map(([n, k]) => `${n} ${k}`).sort());
+    });
+  }
+  for (const c of fx.backups.prune) {
+    it(`backups: ${c.about}`, () => { expect(backupsToPrune(c.names, new Date(c.now))).toEqual(c.pruned); });
+  }
+  for (const c of fx.backups.restore) {
+    it(`backup restore: ${c.name}`, () => {
+      const lists = folder(c);
+      const backup = join(lists, '..', 'backup');
+      mkdirSync(backup);
+      for (const [n, t] of Object.entries(c.backup)) writeFileSync(join(backup, n), t);
+      const r = backupRestorePlan(readLocalLists(lists), backup, lists);
+      expect(r.plan).not.toBeNull();
+      expect(r.tasks).toBe(c.tasks);
+      expect(r.lists).toEqual(c.written);
+      expect(applyPlanToFolder(r.plan, lists)).toBe(true);
+      expect(folderFiles(lists)).toEqual(sorted(c.after));
     });
   }
 });

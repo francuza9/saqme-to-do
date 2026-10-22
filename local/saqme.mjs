@@ -32,12 +32,15 @@ import { D1 } from './d1.mjs';
 import { startServer } from './server.mjs';
 import { notify, openWindow } from './desktop.mjs';
 import { APP_DIR, DEFAULT_PORT, appPaths, cloudSetupStatePath, dataPaths, defaultDataDir, sandboxOf } from './paths.mjs';
-import { applyPlanToFolder, openConflicts, readState, saveState, syncCycle } from './engine.mjs';
+import {
+  applyPlanToFolder, backupRestorePlan, listBackups, newBackup, openConflicts, readLocalLists, readState, saveState, syncCycle,
+} from './engine.mjs';
 import { Shares } from './shares.mjs';
 import { aiPrompt } from './ai-prompt.mjs';
 import { handleSync, HttpError } from '../worker/src/sync.js';
 import { computeReminders, localClock } from '../worker/src/reminders.js';
 import { parseInviteLink, parsePairingLink, serverLabel } from '../worker/public/js/pairing.js';
+import { parseItems } from '../worker/public/js/markdown.js';
 import { VERSION } from '../worker/src/version.js';
 import { installRoot, prepareWorkspace } from './update.mjs';
 import { Updater, settingsFile } from './updater.mjs';
@@ -84,25 +87,28 @@ export class EngineLoop {
    * target() -> { transport, deviceId, label } or null (off); onSetting(value) for a synced notifyAt from the server.
    * Shared lists (local/shares.mjs): view() -> which lists it syncs (engine.mjs readLocalLists), scope() -> the one
    * shared list it syncs, afterPlan(plan) right after a plan was applied (before any other engine runs: renames
-   * follow into lists/.remotes.json), onResult(res) after each cycle. expected = { keys, until }: task keys whose
-   * disappearance is not held back as a mass delete, until then. quiet: refusals are expected (notices), not an error.
+   * follow into lists/.remotes.json), onResult(res) after each cycle, onRemoved(keys) with the tasks a plan of this
+   * engine took out of the files (deletes made elsewhere: for the other engines on the folder, expected). expect(keys,
+   * ms): task keys whose disappearance is not held back (engine.mjs addLocalDiff), for ms. quiet: refusals are
+   * expected (notices), not an error.
    */
   constructor({
     name, statePath, listsDir, target, notifyAt = () => '', onSetting = () => {}, onApplied = () => {}, interval, log, settleMs = 1500,
-    view = () => null, scope = () => null, afterPlan = () => {}, onResult = () => {}, quiet = false,
+    view = () => null, scope = () => null, afterPlan = () => {}, onResult = () => {}, onRemoved = () => {}, quiet = false,
   }) {
-    Object.assign(this, { name, statePath, listsDir, target, notifyAt, onSetting, onApplied, interval, log, settleMs, view, scope, afterPlan, onResult, quiet });
+    Object.assign(this, { name, statePath, listsDir, target, notifyAt, onSetting, onApplied, interval, log, settleMs, view, scope, afterPlan, onResult, onRemoved, quiet });
     this.status = { state: 'off', message: '', lastSync: 0, guarded: 0, conflicts: 0, pending: 0, label: '' };
     this.state = null;
     this.allowMassDelete = false;
     this.restoreHeld = false;   // "Restore them": put the held-back deletes back into the files
     this.rewritten = [];        // [{ name, count, at }]: lists whose file was gone, written again from the last sync
-    this.expected = null;
+    this.expected = new Map();   // "task:<id>" -> until (ms)
     this.stopped = false;
     this.wakeTimer = null;
   }
 
   wake() { this.woken = true; this.resolveWait?.(); }
+  expect(keys, ms = 10 * 60_000) { const until = Date.now() + ms; for (const k of keys) this.expected.set(k, until); }
 
   wait(ms) {
     return new Promise((resolve) => {
@@ -120,13 +126,16 @@ export class EngineLoop {
     this.state ??= readState(this.statePath);
     const allow = this.allowMassDelete;
     const restore = this.restoreHeld;
-    const expected = this.expected && this.expected.until > Date.now() ? this.expected.keys : null;
+    for (const [k, until] of this.expected) if (until <= Date.now()) this.expected.delete(k);
+    const expected = this.expected.size ? new Set(this.expected.keys()) : null;
     const scope = this.scope();
     const res = await syncCycle({
       state: this.state, statePath: this.statePath, listsDir: this.listsDir, transport: tgt.transport, deviceId: tgt.deviceId,
       notifyAt: scope ? '' : this.notifyAt(), allowMassDelete: allow, restore, settleMs: this.settleMs, view: this.view(), scope, expected,
       applyPlan: (plan) => {
+        const removed = removedBy(plan);
         const ok = applyPlanToFolder(plan, this.listsDir);
+        if (ok && removed.length) this.onRemoved(removed);
         if (ok) this.afterPlan(plan);
         if (ok && plan.setting != null) this.onSetting(plan.setting);
         if (ok && plan.ops.length) this.onApplied();
@@ -189,6 +198,18 @@ export class EngineLoop {
 
   setStatus(state, message) { this.status.state = state; this.status.message = message; }
   stop() { this.stopped = true; this.resolveWait?.(); }
+}
+
+/** The task keys a plan takes out of the files: deletes made on the other side of this engine. */
+function removedBy(plan) {
+  const ids = (text) => new Set(parseItems(text ?? '').filter((it) => it.kind === 'task' && it.id).map((it) => it.id));
+  const out = [];
+  for (const o of plan.ops) {
+    if (o.type !== 'write' && o.type !== 'trash') continue;
+    const after = o.type === 'write' ? ids(o.text) : new Set();
+    for (const id of ids(o.expected)) if (!after.has(id)) out.push(`task:${id}`);
+  }
+  return out;
 }
 
 // ---------------------------------------------------------------- the app
@@ -345,6 +366,14 @@ export async function startApp({ dataDir = defaultDataDir(), port, interval = 10
   const env = { DB: d1, AUTH_TOKEN: token };
   const local = localTransport(env);
 
+  // a copy of the lists (engine.mjs newBackup, docs/sync.md "Backups"): at the start, then once a day; only when they changed
+  newBackup(p.data, 'start');
+  const backupTimer = setInterval(() => {
+    const newest = listBackups(p.data)[0];
+    if (!newest || Date.now() - newest.at >= 86_400_000) newBackup(p.data, 'daily');
+  }, 10 * 60_000);
+  backupTimer.unref?.();
+
   const shares = new Shares({ lists: p.lists, sync: p.sync, log });
   const files = new EngineLoop({
     name: 'files', statePath: p.filesState, listsDir: p.lists, interval, log, settleMs,
@@ -364,9 +393,12 @@ export async function startApp({ dataDir = defaultDataDir(), port, interval = 10
         .catch((e) => log(`cloud: could not store notifyAt: ${e?.message ?? e}`));
     },
   });
-  // each engine's writes are the other one's news (the folder watcher catches them too)
+  // each engine's writes are the other one's news (the folder watcher catches them too); what one takes out of a file
+  // (a delete in the window, on a phone) is a delete for the others, never held back as if lost
   files.onApplied = () => { cloud.wake(); for (const s of shareLoops.values()) s.loop.wake(); };
   cloud.onApplied = () => files.wake();
+  files.onRemoved = (keys) => { cloud.expect(keys); for (const s of shareLoops.values()) s.loop.expect(keys); };
+  cloud.onRemoved = (keys) => files.expect(keys);
 
   // ---- lists shared with this computer: one engine each, against its owner's server (local/shares.mjs)
   const shareLoops = new Map();   // binding id -> { loop, done }
@@ -385,13 +417,14 @@ export async function startApp({ dataDir = defaultDataDir(), port, interval = 10
       // the owner renamed the list: the binding follows at once, before another engine could take the file
       afterPlan: (plan) => { const n = plan.files[b.project]; if (n && n !== cur()?.file) shares.update(b.id, { file: n }); },
       onApplied: () => files.wake(),
+      onRemoved: (keys) => files.expect(keys),
       onResult: (res) => {
         if (res.access && res.access !== cur()?.access) { shares.update(b.id, { access: res.access }); log(`shares: ${cur()?.file} is now ${res.access === 'edit' ? 'editable' : 'view-only'}`); }
         if (res.status !== 'auth' || !cur()) return;
         // the owner stopped sharing it: it stays as one of this computer's own lists, with new ids; the window's
         // store sees its old tasks go (expected, so not held back as a mass delete) and the new ones come
         const old = shares.end(b.id);
-        files.expected = { keys: new Set(old.map((id) => `task:${id}`)), until: Date.now() + 5 * 60_000 };
+        files.expect(old.map((id) => `task:${id}`), 5 * 60_000);
         stopShare(b.id);
         files.wake(); cloud.wake();
       },
@@ -514,7 +547,24 @@ export async function startApp({ dataDir = defaultDataDir(), port, interval = 10
     onSync: () => { files.wake(); updater?.touch(); },
     aiPrompt: () => aiPrompt(resolve(p.lists)),
     onAllowDeletes: () => {
+      newBackup(p.data, 'delete');
       for (const l of [files, cloud, ...[...shareLoops.values()].map((s) => s.loop)]) { l.allowMassDelete = true; l.restoreHeld = false; l.wake(); }
+    },
+    backups: {
+      list: () => ({ dir: join(p.data, 'backups'), backups: listBackups(p.data).map(({ name, at, reason, lists }) => ({ name, at, reason, lists })) }),
+      // what a backup has that the lists lack now comes back (engine.mjs backupRestorePlan); dryRun: only say what
+      restore: (name, dryRun) => {
+        const b = listBackups(p.data).find((x) => x.name === name);
+        if (!b) throw new Error('There is no such backup.');
+        const r = backupRestorePlan(readLocalLists(p.lists, 1500), b.path, p.lists, new Set(shares.names()));
+        if (!r.plan) return { busy: true, lists: [], tasks: 0 };
+        if (dryRun || !r.plan.ops.length) return { lists: r.lists, tasks: r.tasks };
+        newBackup(p.data, 'restore');
+        if (!applyPlanToFolder(r.plan, p.lists)) return { busy: true, lists: [], tasks: 0 };
+        log(`backups: brought back ${r.tasks} tasks${r.lists.length ? ` (the lists ${r.lists.join(', ')})` : ''} from ${name}`);
+        files.wake(); cloud.wake();
+        return { lists: r.lists, tasks: r.tasks };
+      },
     },
     onRestoreDeletes: () => {
       for (const l of [files, cloud, ...[...shareLoops.values()].map((s) => s.loop)]) { l.restoreHeld = true; l.allowMassDelete = false; l.wake(); }
@@ -570,6 +620,7 @@ export async function startApp({ dataDir = defaultDataDir(), port, interval = 10
       for (const s of running) s.loop.stop();
       clearInterval(reminderTimer);
       clearInterval(updateTimer);
+      clearInterval(backupTimer);
       watcher?.close();
       await Promise.all([...loops, ...running.map((s) => s.done)]);
       await srv.close();

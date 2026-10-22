@@ -876,6 +876,31 @@ Test-Case 'Restore them with nothing held back does nothing; a list written a mo
   Assert-True ($null -eq (Get-RestorePlan $st (Read-LocalLists $d) $d).Plan) 'a list written a moment ago: later'
 }
 
+# ---------------------------------------------------------------- backups (New-ListsBackup, Get-BackupRestorePlan)
+Write-Host 'Backups'
+Test-Case 'backups: one when the lists changed, none while they did not; old ones pruned; bringing one back adds only what is missing' {
+  $data = New-TempLists
+  $lists = Join-Path $data 'lists'; [void](New-Item -ItemType Directory -Path $lists)
+  Assert-True ($null -eq (New-ListsBackup $data 'start' (Get-Date '2026-10-22T06:00:00'))) 'no lists yet'
+  Write-List $lists 'Work' "- [ ] A ^aaaaaaaa`n  - [x] A1 ^aaaaaaa1`n"; Write-List $lists 'Home' "- [ ] H ^hhhhhhhh`n"
+  Assert-Eq (New-ListsBackup $data 'start' (Get-Date '2026-10-22T06:00:00')) '20261022-060000-start'
+  Assert-True ($null -eq (New-ListsBackup $data 'daily' (Get-Date '2026-10-22T07:00:00'))) 'nothing changed'
+  Write-List $lists 'Work' "- [x] A edited ^aaaaaaaa`n"; Remove-Item -LiteralPath (Join-Path $lists 'Home.md')
+  Assert-Eq (New-ListsBackup $data 'daily' (Get-Date '2026-10-22T08:00:00')) '20261022-080000-daily'
+  $all = Get-ListsBackups $data
+  Assert-Eq (@($all | ForEach-Object { "$($_.Name) $($_.Reason) $($_.Lists)" }) -join ',') '20261022-080000-daily daily 1,20261022-060000-start start 2'
+  $r = Get-BackupRestorePlan (Read-LocalLists $lists 0) $all[1].Path $lists
+  Assert-Eq "$($r.Lists -join ',') $($r.Tasks)" 'Home 2'
+  Assert-Eq (Invoke-PlanOps $r.Plan.Ops $lists) @($r.Plan.Ops).Count 'ops done'
+  Assert-Eq (Read-List $lists 'Work') "- [x] A edited ^aaaaaaaa`n  - [x] A1 ^aaaaaaa1`n" 'the edit stays, the lost subtask is back'
+  Assert-Eq (Read-List $lists 'Home') "- [ ] H ^hhhhhhhh`n"
+  for ($d = 0; $d -lt 12; $d++) { Write-List $lists 'Work' "- [ ] day $d ^aaaaaaaa`n"; [void](New-ListsBackup $data 'daily' ((Get-Date '2026-10-23T09:00:00').AddDays($d))) }
+  $names = @((Get-ListsBackups $data) | ForEach-Object { $_.Name })
+  Assert-Eq $names.Count 13 'the ten newest and the newest of each day'
+  Assert-True ($names -notcontains '20261022-060000-start') 'an older one of a day went'
+  Assert-Eq @([IO.Directory]::GetDirectories((Join-Path $data 'backups'), '.*')).Count 0 'nothing half-made left'
+}
+
 # ---------------------------------------------------------------- another app's private copy of AppData (2026-10-22)
 Write-Host 'Another app''s private copy of AppData'
 Test-Case 'a probe folder found in an app''s LocalCache\Roaming names that app; none found, none named' {

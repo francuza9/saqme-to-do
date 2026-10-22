@@ -1547,14 +1547,15 @@ document.addEventListener('keydown', (e) => {
 // violet rows (red when risky) and what needs explaining is a footnote under the card. Rare and risky actions sit at the
 // bottom of their page, under Advanced. A quiet line at the bottom of every view says the version.
 const PAGES = { general: 'General', notifications: 'Notifications', sync: 'Sync & sharing', lists: 'Your lists', updates: 'Updates', about: 'About' };
-const VIEW_TITLES = { list: 'the list', settings: 'Settings', ...PAGES, keys: 'Keyboard shortcuts', trash: 'Recently deleted', conflicts: 'Conflicts' };
+const VIEW_TITLES = { list: 'the list', settings: 'Settings', ...PAGES, keys: 'Keyboard shortcuts', trash: 'Recently deleted', backups: 'Backups', conflicts: 'Conflicts' };
 // where Back (the header, Esc) goes from each view; a page's is Settings
-const VIEW_PARENT = { settings: 'list', keys: 'general', trash: 'lists', conflicts: 'sync' };
+const VIEW_PARENT = { settings: 'list', keys: 'general', trash: 'lists', backups: 'lists', conflicts: 'sync' };
 const parentOf = (view) => VIEW_PARENT[view] ?? 'settings';
 
 /** Opens a view. Keyboard focus goes to the control with the data-fk key `focus`, else to the new view's Back button. */
 function go(view, focus = '') {
   commitAll();
+  if (view === 'backups') ui.backups = null;   // (read again each time the page opens)
   const fromList = ui.view === 'list';
   ui.view = view;
   ui.focusKey = focus || (view === 'list' ? '' : 'back');
@@ -1666,7 +1667,7 @@ matchMedia('(prefers-color-scheme: light)').addEventListener('change', applyThem
 
 const VIEWS = {
   settings: settingsHome, general: generalPage, notifications: notificationsPage, sync: syncPage, lists: listsPage,
-  updates: updatesPage, about: aboutPage, keys: keysPage, trash: trashPage, conflicts: conflictsPage,
+  updates: updatesPage, about: aboutPage, keys: keysPage, trash: trashPage, backups: backupsPage, conflicts: conflictsPage,
 };
 /** Every view but the list: its header (Back, title), its cards, and the version line at the bottom. */
 function renderSettingsView() {
@@ -1897,6 +1898,7 @@ function listsPage() {
       actionRow('Export lists', exportLists, { help: 'Markdown files in a zip, the same format as the desktop app' }),
       actionRow('Import lists', importLists, { help: 'Markdown files or a zip of them. Tasks already here are skipped.' }),
       linkRow('Recently deleted', '', 'trash', { help: 'Restore deleted tasks and lists' }),
+      l ? linkRow('Backups', '', 'backups', { help: 'Copies of your lists, made by themselves: bring back what is missing' }) : null,
     ),
     foot(l ? `Plain markdown files, one per list, in ${l.lists}: this window, AI assistants and any editor can change them. Export saves them in a zip; Import adds lists from such files (tasks already here are skipped).`
       : 'Export saves your lists as markdown files in a zip, the same format as the desktop app. Import takes such files or a zip of them; tasks already here are skipped.'),
@@ -2660,6 +2662,48 @@ function trashPage() {
   for (const [pid, tasks] of byList) out.push(head(store.get('project', pid)?.fields.name.v ?? 'Other lists'), card(tasks.map((r) => row(r, r.fields.text.v || 'Untitled'))));
   out.push(foot('Newest first. Right after a delete, Undo in its message brings it back too.'));
   return out;
+}
+
+// ---------------------------------------------------------------- Settings > Your lists > Backups (the Linux/macOS window)
+// Copies of the lists the app makes by itself (local/engine.mjs newBackup, docs/sync.md "Backups"); bringing one back
+// only adds what is missing now (backupRestorePlan) and changes nothing else. The Windows app has the same page.
+const BACKUP_REASONS = { start: 'when the app started', daily: 'daily', update: 'before an update', delete: 'before confirmed deletions', restore: 'before a restore' };
+const backupTime = (at) => new Date(at).toLocaleString([], { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' });
+async function loadBackups() {
+  try { ui.backups = await api('local/backups'); } catch (e) { ui.backups = { dir: '', backups: [] }; toast(`Could not read the backups: ${e.message}`); }
+  if (ui.view === 'backups') requestRender();
+}
+function backupsPage() {
+  if (!ui.local) return [note('Backups are made by the desktop app.')];
+  if (!ui.backups) { loadBackups(); return [note('Reading the backups…')]; }
+  const about = 'Saqme copies your lists by itself when it starts, once a day, before an update and before deletions you confirm (only when they changed; the last 10 and one a day for 30 days are kept). Bringing one back adds what is missing now, whole lists or tasks, and changes nothing else.';
+  const all = ui.backups.backups.slice(0, 20);
+  if (!all.length) return [note('No backups yet: one is made the next time the app starts.'), foot(about)];
+  return [
+    head('Bring back what is missing from'),
+    card(all.map((b) => actionRow(backupTime(b.at), () => restoreBackup(b), {
+      value: `${b.lists} ${b.lists === 1 ? 'list' : 'lists'}, ${BACKUP_REASONS[b.reason] ?? b.reason}`, name: `Bring back from the backup of ${backupTime(b.at)}`, fk: `backup:${b.name}`,
+    }))),
+    foot(`${about} They are in ${ui.backups.dir}.`),
+  ];
+}
+async function restoreBackup(b) {
+  let r;
+  try { r = await api('local/backups/restore', { name: b.name, dryRun: true }); } catch (e) { toast(`Could not read that backup: ${e.message}`); return; }
+  if (r.busy) { toast('A list is being written right now. Try again in a moment.'); return; }
+  if (!r.tasks && !r.lists.length) { toast('Nothing is missing: everything in that backup is in your lists.'); return; }
+  const what = [r.lists.length ? `the ${r.lists.length === 1 ? 'list' : 'lists'} ${r.lists.join(', ')}` : '', `${r.tasks} ${r.tasks === 1 ? 'task' : 'tasks'} in all`].filter(Boolean).join(', ');
+  sheet(`Bring back from the backup of ${backupTime(b.at)}?`, [
+    h('p', {}, `Back come ${what}. Nothing in your lists is removed or changed.`),
+    h('div', { class: 'btn-row' },
+      h('button', { class: 'btn', onclick: closeSheet }, 'Cancel'),
+      h('button', { class: 'btn primary', onclick: async () => {
+        closeSheet();
+        try { const done = await api('local/backups/restore', { name: b.name }); toast(done.busy ? 'A list changed meanwhile. Try again.' : `Brought back ${what}.`); } catch (e) { toast(`Could not bring it back: ${e.message}`); }
+        ui.backups = null;
+        if (ui.view === 'backups') requestRender();
+      } }, 'Bring back')),
+  ]);
 }
 
 function describe(field, v) {

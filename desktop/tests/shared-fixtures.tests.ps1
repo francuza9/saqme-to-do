@@ -326,6 +326,29 @@ foreach ($c in $engine['replay']) {
   }
 }
 
+foreach ($c in $engine['backups']['prune']) {
+  Test-Case "backups: $($c['about'])" {
+    $got = Get-BackupsToPrune @($c['names']) ([DateTime]::Parse($c['now'], [Globalization.CultureInfo]::InvariantCulture))
+    Assert-Eq (@($got) -join ',') (@($c['pruned']) -join ',') 'pruned'
+  }
+}
+foreach ($c in $engine['backups']['restore']) {
+  Test-Case "backup restore: $($c['name'])" {
+    $lists = New-FixtureFolder $c
+    try {
+      $backup = Join-Path (Split-Path $lists) 'backup'
+      [void](New-Item -ItemType Directory -Path $backup)
+      foreach ($n in $c['backup'].Keys) { [IO.File]::WriteAllText((Join-Path $backup $n), $c['backup'][$n], (New-Object System.Text.UTF8Encoding($false))) }
+      $r = Get-BackupRestorePlan (Read-LocalLists $lists) $backup $lists
+      Assert-True ($null -ne $r.Plan) 'a plan'
+      Assert-Eq $r.Tasks ([int]$c['tasks']) 'tasks put back'
+      Assert-Eq (@($r.Lists) -join ',') (@($c['written']) -join ',') 'lists written again'
+      Assert-Eq (Invoke-PlanOps $r.Plan.Ops $lists) @($r.Plan.Ops).Count 'ops done'
+      Assert-Eq (ConvertTo-Canon (Get-FolderFiles $lists)) (ConvertTo-Canon $c['after']) 'files afterwards'
+    } finally { Remove-Item -LiteralPath (Split-Path $lists) -Recurse -Force -ErrorAction SilentlyContinue }
+  }
+}
+
 # ---------------------------------------------------------------- "Use with AI"
 Write-Host 'ai-prompt.json: Get-AiPrompt (rules.ps1)'
 $aiFx = Read-Fixture 'ai-prompt.json'
