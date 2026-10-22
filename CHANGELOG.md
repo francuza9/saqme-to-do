@@ -1,6 +1,6 @@
 # Changes
 
-## Unreleased
+## 1.2.4
 
 - **Menu button instead of the gear:** the Settings button at the top left is now ☰ (three lines) on Windows, the phone
   and Linux/macOS. Ctrl+, and everything else about the button are unchanged.
