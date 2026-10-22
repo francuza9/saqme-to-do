@@ -1,5 +1,10 @@
 # Changes
 
+## 1.2.5
+
+- **The lists menu stays open (Windows).** Clicking the list's name at the top opened the lists menu and closed it
+  again on the same click, so you could not switch lists with the mouse. It now opens when the click is let go.
+
 ## 1.2.4
 
 - **Menu button instead of the gear:** the Settings button at the top left is now ☰ (three lines) on Windows, the phone
