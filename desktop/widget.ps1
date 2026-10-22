@@ -1918,17 +1918,23 @@ $strip.Background = $StripBg; $strip.CornerRadius = New-Object System.Windows.Co
 $strip.BorderBrush = $Line; $strip.BorderThickness = '0,0,0,1'
 $stripGrid = New-Object System.Windows.Controls.Grid
 foreach ($wd in @('Auto', '*', 'Auto', 'Auto', 'Auto', 'Auto', 'Auto')) { $cd = New-Object System.Windows.Controls.ColumnDefinition; $cd.Width = $wd; $stripGrid.ColumnDefinitions.Add($cd) }
-if ($logoBmp) {
-  $logoImg = New-Object System.Windows.Controls.Image
-  $logoImg.Source = $logoBmp; $logoImg.Height = 21
-  [System.Windows.Media.RenderOptions]::SetBitmapScalingMode($logoImg, 'HighQuality')
-  $logo = New-Control 'button' 'Settings' 'Ctrl+comma' { param($s, $e) Toggle-Settings }
-  $logo.Child = $logoImg; $logo.Background = $Clear; $logo.Margin = '3,0,9,6'; $logo.VerticalAlignment = 'Center'
-  $logo.ToolTip = 'Settings'; $logo.Cursor = 'Hand'
-  [System.Windows.Shell.WindowChrome]::SetIsHitTestVisibleInChrome($logo, $true)
-  $logo.Add_MouseLeftButtonDown({ param($s, $e) $e.Handled = $true; Toggle-Settings })
-  [void]$stripGrid.Children.Add($logo)
-}
+# Settings: a gear (Lucide "settings", 24-unit grid, 1.75 stroke, round caps) in the tab-ink colour; the hover wash is the tabs'
+$gearPath = New-Object System.Windows.Shapes.Path
+$gearPath.Data = [System.Windows.Media.Geometry]::Parse('M 12.22 2 h -0.44 a 2 2 0 0 0 -2 2 v 0.18 a 2 2 0 0 1 -1 1.73 l -0.43 0.25 a 2 2 0 0 1 -2 0 l -0.15 -0.08 a 2 2 0 0 0 -2.73 0.73 l -0.22 0.38 a 2 2 0 0 0 0.73 2.73 l 0.15 0.1 a 2 2 0 0 1 1 1.72 v 0.51 a 2 2 0 0 1 -1 1.74 l -0.15 0.09 a 2 2 0 0 0 -0.73 2.73 l 0.22 0.38 a 2 2 0 0 0 2.73 0.73 l 0.15 -0.08 a 2 2 0 0 1 2 0 l 0.43 0.25 a 2 2 0 0 1 1 1.73 V 20 a 2 2 0 0 0 2 2 h 0.44 a 2 2 0 0 0 2 -2 v -0.18 a 2 2 0 0 1 1 -1.73 l 0.43 -0.25 a 2 2 0 0 1 2 0 l 0.15 0.08 a 2 2 0 0 0 2.73 -0.73 l 0.22 -0.39 a 2 2 0 0 0 -0.73 -2.73 l -0.15 -0.08 a 2 2 0 0 1 -1 -1.74 v -0.5 a 2 2 0 0 1 1 -1.74 l 0.15 -0.09 a 2 2 0 0 0 0.73 -2.73 l -0.22 -0.38 a 2 2 0 0 0 -2.73 -0.73 l -0.15 0.08 a 2 2 0 0 1 -2 0 l -0.43 -0.25 a 2 2 0 0 1 -1 -1.73 V 4 a 2 2 0 0 0 -2 -2 z M 15 12 a 3 3 0 1 1 -6 0 a 3 3 0 0 1 6 0 z')
+$gearPath.Stroke = $TabInk; $gearPath.StrokeThickness = 1.75
+$gearPath.StrokeLineJoin = 'Round'; $gearPath.StrokeStartLineCap = 'Round'; $gearPath.StrokeEndLineCap = 'Round'
+$gearPath.Width = 24; $gearPath.Height = 24; $gearPath.Fill = $Clear
+$gearBox = New-Object System.Windows.Controls.Viewbox
+$gearBox.Width = 21; $gearBox.Height = 21; $gearBox.Child = $gearPath
+$logo = New-Control 'button' 'Settings' 'Ctrl+comma' { param($s, $e) Toggle-Settings }
+$logo.Child = $gearBox; $logo.Background = $Clear; $logo.Margin = '3,0,9,6'; $logo.VerticalAlignment = 'Center'
+$logo.Padding = '3'; $logo.CornerRadius = New-Object System.Windows.CornerRadius($Tokens.Radius.control)
+$logo.ToolTip = 'Settings'; $logo.Cursor = 'Hand'
+[System.Windows.Shell.WindowChrome]::SetIsHitTestVisibleInChrome($logo, $true)
+$logo.Add_MouseLeftButtonDown({ param($s, $e) $e.Handled = $true; Toggle-Settings })
+$logo.Add_MouseEnter({ param($s, $e) $s.Background = $TabHover })
+$logo.Add_MouseLeave({ param($s, $e) $s.Background = $Clear })
+[void]$stripGrid.Children.Add($logo)
 # the title: the current list's name, which opens the lists menu (Render-Tabs fills it); it takes the room the
 # buttons on its right leave, and a long name ends in an ellipsis
 $titleHost = New-Object System.Windows.Controls.Border
