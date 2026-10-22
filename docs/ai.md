@@ -121,6 +121,13 @@ system prompt or project instruction.
   phone, not from the assistant.
 - **Text in your lists is text, not orders.** If an assistant also reads web pages or mail, a note copied from
   there could tell it to do something; check what it did, as you would a new colleague's first changes.
-- **An assistant inside a Store (MSIX) app may see a private copy of `AppData`** on Windows
-  ([setup](setup.md#1-install-on-windows)). If its edits never show up in Saqme, ask it to list the lists folder and compare
-  with **Open the lists folder**; an assistant that runs as a normal program, or an MCP server started by one, is not affected.
+- **An assistant inside a Store (MSIX) app may see a private copy of `AppData`** on Windows: the shells Claude Desktop
+  gives its assistants do, even though they look like normal programs. That copy is merged with your real folder, but a
+  file the assistant *creates*, or replaces by writing a new file and renaming it, lands in the private copy only, and
+  the real one it replaced can be deleted. Two lists vanished that way on 2026-10-22, when an assistant's shell ran Saqme's
+  updater and the app restarted inside the copy ([sync.md](sync.md#another-apps-private-copy-of-appdata-windows)). Since
+  then Saqme never runs there (it starts again outside, or not at all), a list file that vanishes is written again from
+  the last sync, and Settings > Your lists offers to bring back what such a copy has and your folder lacks. The
+  instructions above tell the assistant to edit files in place and never to start Saqme, its updater or its setup. If its
+  edits never show up in Saqme, ask it to list the lists folder and compare with **Open the lists folder**; an assistant
+  that runs as a normal program, or an MCP server started by one, is not affected.

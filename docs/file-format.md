@@ -107,6 +107,7 @@ Windows (`%APPDATA%\SaqmeToDo`):
 | `.widget-settings` | app settings (`theme`, `notifyAt`, window size, …), `key=value` |
 | `.widget-pos` | window position |
 | `recently-deleted.json` | tasks deleted in the widget in the last 30 days, as list lines with their ids (*Settings > Your lists > Recently deleted* restores them) |
+| `backups\<yyyyMMdd-HHmmss>-<reason>\` | copies of the lists (`*.md` and `.order`), made by the app: at start, once a day, before an update, before confirmed deletions; the 10 newest and one a day for 30 days are kept (*Settings > Your lists > Backups* brings back what is missing, [sync.md](sync.md#desktop-engine-powershell-and-its-javascript-port)) |
 | `sync\config.json` | server address, access token, this device's id (private) |
 | `sync\state.json` | sync engine state (server rows, last synced base, unsent changes) |
 | `sync\sync.log` | sync log (errors and summaries; rotated at 256 KB) |
@@ -126,6 +127,7 @@ Windows, `sync/remotes.json` and `sync/shares/` as on Windows, plus
 | `local/server.json`, `local/settings.json` | port and process of the running app; `{"port": N}` chosen at setup |
 | `local/saqme.log` | the app's log (rotated at 256 KB) |
 | `sync/config.json`, `sync/state.json` | cloud sync, as on Windows (only when sync is set up) |
+| `backups/` | copies of the lists, as on Windows (*Settings > Your lists > Backups* in the window) |
 
 Only the daily summary time (`notifyAt`) and the phone's time zone are synced settings; theme, window and
 open/closed state stay per device.

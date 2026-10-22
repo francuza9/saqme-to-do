@@ -2,6 +2,37 @@
 
 ## Unreleased
 
+**A list file that vanishes can never cost tasks again.** On 2026-10-22 two lists vanished from the real lists
+folder on Windows (24 tasks; the delete guard held them, nothing reached other devices). The cause: AI sessions in
+Claude Desktop ran Saqme's updater from their shell, and Windows gives programs started there Claude's private copy of
+`AppData` even though they have no package identity of their own. The widget restarted inside that copy; saving a list
+there (temp file + replace) put the new file in Claude's copy and deleted the real one. Reproduced in a scratch folder
+(`scripts\dev\container-check.ps1`).
+
+- **Windows: never inside another app's private copy of `AppData`.** The app, its updater and setup notice it (a probe
+  folder made in `AppData` that lands in an app's `LocalCache`), start again outside it through WMI, or refuse to run
+  and say why. Every writer of lists and sync state refuses `AppData` there too.
+- **A vanished list is written again, never deleted.** A list file gone without going through `lists/.trash` (how the
+  apps delete a list) used to be deleted on every device after 10 seconds when it had fewer than 5 tasks (also a list
+  shared with others). Now it is always held back, then written again from the last sync, in its old place in the list
+  order; the app says so (*Lists written again*). Both engines.
+- **An emptied list waits for you.** Every task of a list gone at once (the file emptied or written over by another
+  program) is held under *Deletions paused*, however few. Deletes made in the Windows app are never held; on Linux and
+  macOS, what one of the app's two engines takes out of a file is a delete for the other, not a pause.
+- **Restore them** puts a vanished list back in its old place in the list order, not at the end.
+- **Backups.** Both apps keep copies of the lists in the data folder's `backups` (at start, once a day, before an update,
+  before confirmed deletions; the 10 newest and one a day for 30 days). **Settings > Your lists > Backups** brings back
+  what is missing now, whole lists or tasks, and changes nothing else.
+- **Windows: another app's copy.** When another app's private copy of the data folder has lists or tasks the real one
+  lacks, the app says so once and **Settings > Your lists** offers to bring them back (that copy is only read).
+- **Linux and macOS:** `saqme serve` / `open` refuse to start inside a Flatpak, a strictly confined Snap or a macOS App
+  Sandbox (another, empty data folder) unless the folder is named.
+- *Use with AI*: the instructions now tell an assistant to edit list files in place and never to start Saqme, its
+  updater or setup itself.
+- Tests: shared fixtures for both engines (held lists, emptied lists, restore order, backups) and a replay of the
+  incident; at the previous release a small or shared list vanishing sent a project delete. `container-check.ps1` and
+  the PowerShell unit tests cover the container checks; the widget's self-check makes and restores a backup.
+
 **Saqme without any account, on more systems.** Every app already worked with no Cloudflare account; setup on
 Linux and macOS now gets the app running on older systems too, and nothing points a new user at Cloudflare
 before they ask for sync.

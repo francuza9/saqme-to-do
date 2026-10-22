@@ -49,6 +49,7 @@ Example, \`Work.md\`:
 - A new list is a new file, \`Name.md\`, starting with \`# Name\`. The name can't contain \`\\ / : * ? " < > |\`.
 - Leave the files whose names start with a dot alone, except \`.order\`: they belong to the app.
 - Files are UTF-8 and keep their line endings.
+- Change a file where it is (open, edit, save): don't write a new file and rename it over a list. Never start the Saqme app, its updater or its setup yourself: from some assistants' shells that works on a private copy of the folder instead of mine.
 - If it is unclear which list or task I mean, ask before you change anything.
 `;
 }

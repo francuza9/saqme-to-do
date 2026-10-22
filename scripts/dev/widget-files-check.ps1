@@ -36,6 +36,9 @@ if (`$m -eq 'ok') {
 }
 "@, $utf8)
 $env:SAQME_SETUP_SCRIPT = $fakeSetup
+# (scratch folders and a stand-in setup: the checks below run the same inside an AI assistant's shell, whose private
+# copy of AppData would otherwise make Set up sync refuse, as it should for real data: sync-core.ps1 Get-AppDataRedirect)
+$env:SAQME_TEST_REDIRECT = 'none'
 
 # ---------------------------------------------------------------- the widget copy, driven by ask.txt
 $w = [IO.File]::ReadAllText((Join-Path $app 'widget.ps1'))

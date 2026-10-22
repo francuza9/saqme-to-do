@@ -64,11 +64,15 @@
   in `sync-core.ps1`. Every save is checked by `Get-UnexplainedLoss`: only an explicit delete, a move to
   another list or Ctrl+Z may remove a task, and a save that would lose any other task is refused
   ([sync.md](sync.md#desktop-engine-powershell-and-its-javascript-port)). Deletes go to *Recently deleted* (`recently-deleted.json`,
-  30 days); Ctrl+Z undoes the last change while the files are as it left them.
+  30 days); Ctrl+Z undoes the last change while the files are as it left them. A list file that vanishes is
+  written again from the last sync, one that is emptied is held under *Deletions paused*, and *Backups* keeps
+  copies of the lists.
 
 Data folder (`%APPDATA%\SaqmeToDo`, see [file-format.md](file-format.md)):
-`lists\*.md` (your lists), `.widget-settings`, `.widget-pos`, `recently-deleted.json`, `sync\config.json` (server URL + token +
-device id), `sync\state.json` (sync engine state), `sync\sync.log`, `cloud.json` (what setup generated).
+`lists\*.md` (your lists), `.widget-settings`, `.widget-pos`, `recently-deleted.json`, `backups\` (copies of the lists, made by
+the app), `sync\config.json` (server URL + token + device id), `sync\state.json` (sync engine state), `sync\sync.log`,
+`cloud.json` (what setup generated). The app never runs on another app's private copy of AppData (a Store app's
+container): it starts again outside it or refuses ([sync.md](sync.md#another-apps-private-copy-of-appdata-windows)).
 
 ## Linux and macOS app
 

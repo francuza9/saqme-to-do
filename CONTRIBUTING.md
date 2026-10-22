@@ -109,6 +109,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts\dev\widget-shots.ps1
 powershell -NoProfile -ExecutionPolicy Bypass -File scripts\dev\render-widget.ps1 -Out C:\temp\shots             # the README shots (sample lists)
 powershell -NoProfile -ExecutionPolicy Bypass -File scripts\dev\uia-check.ps1                                    # what screen readers see (UI Automation)
 powershell -NoProfile -ExecutionPolicy Bypass -File scripts\dev\widget-files-check.ps1                             # the widget and other programs writing the same list
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts\dev\container-check.ps1                                # from a shell inside a Store app (Claude Desktop): the 2026-10-22 incident, reproduced and checked
 ```
 
 Linux, macOS (or WSL):

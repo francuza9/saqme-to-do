@@ -67,9 +67,12 @@ repository folder.
 
 Run setup from File Explorer or a normal PowerShell / Terminal window. A shell that belongs to a Store
 (MSIX-packaged) app, such as the one an AI assistant in a desktop app uses, sees a private copy of `AppData`
-and the registry: anything installed from there would be invisible to Saqme started from the Start menu. Setup
-notices this, stops before changing anything and prints the command to run in a normal window instead (the
-app's **Set up sync** does the same when Saqme itself was started from such a shell).
+and the registry: anything installed from there would be invisible to Saqme started from the Start menu. Such
+a shell may have no package identity of its own (an AI assistant's shell in Claude Desktop), so setup also
+checks where a new folder in `AppData` lands. Setup notices this, stops before changing anything and prints
+the command to run in a normal window instead (the app's **Set up sync** does the same). Saqme itself, or its
+updater, started from such a shell starts again outside it, or does not run at all: saving lists inside that
+copy is how two lists vanished from the real folder on 2026-10-22 ([sync.md](sync.md#another-apps-private-copy-of-appdata-windows)).
 
 What setup does on Windows (no administrator rights needed, everything is per user):
 
@@ -452,6 +455,9 @@ run from it) does not update itself: `git pull` and run setup.
 | "N tasks vanished from the lists folder … deletions paused" | A list file was emptied or replaced in one go. **Settings > Sync & sharing > Deletions paused > Restore them** puts the tasks back into their lists as they last synced (tasks added since stay); if it was on purpose, **Delete them** confirms it (Linux/macOS: or `saqme restore-deletes` / `saqme allow-deletes`). |
 | Phone shows the welcome screen after installing | Expected on iPhone: type the pairing code (**Pair phone** on the computer, or the one Safari showed) into the field on that screen. *Wrong or expired*: show a new one; a code works once, for 10 minutes. Pasting the pairing link works too. |
 | Setup stops: "running inside another app's package" | It was started from a shell that belongs to a Store app (for example an AI assistant in a desktop app); Windows would keep what it installs in that app's private copy of `AppData`. Run the command it prints from File Explorer (double-click `setup.cmd`) or Win+R. In the app: quit Saqme from the tray icon, start it from the Start menu, then **Set up sync**. |
+| Saqme says "started from inside another app" and does not start | The same, for the app: it was started from such a shell (an AI assistant ran it or its updater) and could not start again outside it. Start it from the Start menu. |
+| *Lists written again* in Settings > Sync & sharing | A list's file vanished from the lists folder without being deleted in the app (another program, a sync client, another app's private copy of `AppData`); Saqme wrote it again from the last sync instead of deleting anything. To delete a list, use *Delete list* in its menu. |
+| Settings > Your lists offers *Bring back from Claude* (or another app) | That app has a private copy of your data folder with lists or tasks your real one lacks (Saqme ran inside it before 1.2.3). Bringing them back only adds what is missing. The copy itself is never changed; once nothing is missing you can delete it (keep its `cloud.json`, if any). |
 | Linux/macOS window says it is "not connected" | It was opened from a bookmark. Open Saqme from the menu (or `saqme open`); that hands the window its key. |
 | Linux/macOS: "Port 47613 is used by another program" | Run setup again with `--port 47700` (any free port). |
 | Linux: no reminders | Install `libnotify-bin` (Debian/Ubuntu) or `libnotify` (Fedora) for `notify-send`, and check that `saqme status` says it is running. |

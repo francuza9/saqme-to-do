@@ -55,9 +55,10 @@ function Resolve-WidgetDataDir([string]$DataDir, [switch]$SmokeTest, [string]$Ap
 # this process is in one (Assert-RealAppData).
 
 # A new folder in AppData lands in an app's LocalCache\Roaming when this process gets that app's copy: -> the app's
-# package folder name, or '' (none). Checked once per runspace; SAQME_TEST_REDIRECT pretends (tests).
+# package folder name, or '' (none). Checked once per runspace; SAQME_TEST_REDIRECT pretends (tests: an app's name,
+# or "none" for a scratch sandbox that runs inside such a copy, as a test started from an AI assistant's shell does).
 function Get-AppDataRedirect([switch]$Fresh) {
-  if ($env:SAQME_TEST_REDIRECT) { return $env:SAQME_TEST_REDIRECT }
+  if ($env:SAQME_TEST_REDIRECT) { return $(if ($env:SAQME_TEST_REDIRECT -eq 'none') { '' } else { $env:SAQME_TEST_REDIRECT }) }
   if ($Fresh -or $null -eq $script:AppDataRedirect) { $script:AppDataRedirect = Find-AppDataRedirect $env:APPDATA $env:LOCALAPPDATA }
   return $script:AppDataRedirect
 }

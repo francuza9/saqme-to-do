@@ -131,20 +131,30 @@ One cycle:
    indentation and line order, deletes for lines that vanished). Positions: the longest run of siblings
    whose base keys are still in increasing order keeps its keys; only moved lines get new ones.
    A list moved to `lists/.trash` (how the apps delete one) deletes its project. A list that is simply
-   gone (moved out and back, a sync client re-downloading the folder, `git checkout`) decides nothing until
-   it has been gone for two cycles and 10 seconds. Deletes are never decided while any list was unusable
-   (the line may just have moved there), and are **held back** when a large share vanishes at once: 5+
-   tasks and more than half of one list (a gone list counts with all its tasks), or 25+ tasks and more than
-   half of all. Settings → Sync & sharing → *Deletions paused* shows it, with two ways out. **Delete them**
-   confirms: exactly what was held back is deleted, and whatever vanished since is weighed again.
-   **Restore them** (`saqme restore-deletes` on Linux/macOS) undoes it instead, as the first thing the next
-   cycle does (`restorePlan` / `Get-RestorePlan`): each held-back task goes back into its list as S has it
-   (text, status, deadline with its time, notes, id), under its parent and among its siblings by position,
-   merged into what the file holds now (tasks added since stay where they are); a list whose file is gone
-   is written again under its name, at the end of `.order`. That plan goes through the same apply path as
-   remote plans (all or nothing, refused while the list is being edited or changed since it was read: the
-   request then stays and the next cycle tries again). Once it is applied the guard is cleared, and the
-   next diff finds nothing gone. Tested by `shared/fixtures/engine.json` ("restore") on both engines.
+   gone (moved out and back, a sync client re-downloading the folder, `git checkout`, another program, a
+   copy of the app in another app's private AppData) decides nothing until it has been gone for two cycles
+   and 10 seconds, and then never becomes a delete by itself (see "A list that vanishes" below). Deletes are
+   never decided while any list was unusable (the line may just have moved there), and are **held back**
+   (the *guard*) until the user decides when:
+   - a list's file is gone (not through `lists/.trash`), however few tasks it had, a list shared with
+     others included;
+   - every task a list had is gone at once (the file emptied, or written over by another program);
+   - a large share vanishes at once: 5+ tasks and more than half of one list, or 25+ tasks and more than
+     half of all.
+
+   Deletes made in the app are never held back: the Windows widget passes the tasks the user deleted to the
+   engine as *expected*, and on Linux/macOS a task one engine takes out of a file is expected by the other
+   (below). Settings → Sync & sharing → *Deletions paused* shows what is held, with two ways out. **Delete
+   them** confirms (after a backup of the lists): exactly what was held back is deleted, and whatever
+   vanished since is weighed again. **Restore them** (`saqme restore-deletes` on Linux/macOS) undoes it
+   instead, as the first thing the next cycle does (`restorePlan` / `Get-RestorePlan`): each held-back task
+   goes back into its list as S has it (text, status, deadline with its time, notes, id), under its parent and
+   among its siblings by position, merged into what the file holds now (tasks added since stay where they
+   are); a list whose file is gone is written again under its name, in its old place in `.order` (at the end
+   when it had none). That plan goes through the same apply path as remote plans (all or nothing, refused
+   while the list is being edited or changed since it was read: the request then stays and the next cycle
+   tries again). Once it is applied the guard is cleared, and the next diff finds nothing gone. Tested by
+   `shared/fixtures/engine.json` ("diff", "restore", "replay") on both engines.
 3. Fold the changes into S and the outbox, save, send, store the returned rows in R.
 4. If every list was usable in step 1 and none changed since, build a **plan** that makes the files match
    R where R differs from S (a cycle that had to leave a list out never plans: that list's newest edits
@@ -204,6 +214,64 @@ first contact: they pull everything and merge the lists in again, so what the re
 the files and what was written since is not skipped. Resending the old base instead would re-apply the
 deletes a restore is usually meant to undo.
 
+**A list that vanishes.** Only `lists/.trash` says a list was deleted (the apps' *Delete list*, or a delete on
+another device, put it there). A list file that is gone any other way is held back like above and then, in
+the same cycle, **written again** from S (`Restore-VanishedLists` / `restoreVanished`, the restore plan for
+that list only): the same lines and ids, in its old place in `.order`. Its delete is never sent; the guard
+for it clears once the file is back. The app says so: a notification and *Lists written again* in Settings →
+Sync & sharing on Windows, *Lists written again* in the window and `saqme status` on Linux/macOS, and a line
+in the sync log. If the write-back cannot happen yet (a list being edited, the folder not usable) the list
+stays held, and *Restore them* does the same. A list file that is *emptied* is not written back by itself
+(that may be an edit): its tasks are held until the user restores or confirms. Lists that have no sync at
+all are covered by backups (below).
+
+**Backups.** Both apps keep copies of the lists in `<data>/backups/<yyyyMMdd-HHmmss>-<reason>/` (`lists/*.md`
+and `.order`, nothing else): when the app starts, once a day, before an update (`update.ps1`,
+`local/updater.mjs`), before held-back deletes are confirmed, and before a backup is brought back. None is
+made while the lists are the same as in the newest one. The 10 newest are kept, and the newest of each of
+the last 30 days. Settings → Your lists → **Backups** lists them; bringing one back (`Get-BackupRestorePlan`
+/ `backupRestorePlan`) only **adds what is missing now**: a list whose file is gone is written again
+(without the tasks another list has now), and a list that is there gets back the tasks no list has any more,
+each after the task it followed in the backup, under the same parent. Nothing that is there is removed or
+changed, so an edit made since is never undone; sync then sends what came back (a task that was deleted
+elsewhere comes back as not deleted). Lists shared with this computer are left to their owner's server. A
+backup is made in a hidden `.…partial` folder and renamed when complete. Tested by
+`shared/fixtures/engine.json` ("backups") on both engines and the widget's self-check.
+
+### Another app's private copy of AppData (Windows)
+
+A Store (MSIX) app such as Claude Desktop runs in a container in which Windows gives `%APPDATA%` a private
+copy per app (`%LOCALAPPDATA%\Packages\<app>\LocalCache\Roaming`), merged with the real folder: a program
+in it sees both, but new files go to the private copy, and so does a file *replaced* through a temp file
+(`File.Replace`, how the apps save atomically), while the real file it replaced is **deleted**. Programs such
+an app starts (an AI assistant's shell, and anything that shell starts) can be in that container **without
+a package identity of their own**, so `GetCurrentPackageFullName` says "no package". That is what happened on
+2026-10-22: AI sessions in Claude Desktop ran the app's updater from their shell; the updater restarted the
+widget inside the container; the widget's next save of two lists moved them into Claude's private copy and
+deleted them from the real folder. The widget in the container saw the merged view and noticed nothing; the
+next widget started from the Start menu found two lists gone, and the guard held the 24 tasks
+(`scripts/dev/container-check.ps1` reproduces it in a scratch folder).
+
+Since then:
+
+- `Get-AppDataRedirect` (`sync-core.ps1`) makes a uniquely named folder in `%APPDATA%` and looks for it in
+  every app's `LocalCache\Roaming`: found there, this process is in that app's container. Checked once per
+  process, besides the package identity.
+- The widget and the updater, on a data or install folder in AppData, start again outside the container
+  (through WMI, `Start-OutsideContainer`, with the same arguments and `-Relaunched`) or, if that fails, do
+  not run: the widget says why in a dialog and touches nothing. Setup and the widget's *Set up sync* stop
+  with an explanation, as for a packaged shell. The self-check and tests in a temp folder run anywhere.
+- Every writer of lists and sync state (`Write-TempFile`, `Invoke-PlanOps`, `Save-SyncState`,
+  `Save-ShareKeys`, the widget's own settings files) refuses an AppData path while the process is in such a
+  container (`Assert-RealAppData`).
+- The widget looks for copies of the data folder in other apps' private AppData (`Find-PrivateCopies`); one
+  with lists or tasks the real folder lacks is offered in Settings → Your lists (*Bring back from <app>*,
+  the same restore as a backup). That copy itself is only read.
+
+On Linux and macOS a sandbox (Flatpak, a strictly confined Snap, a macOS App Sandbox) gives a separate data
+folder rather than a merged one, so nothing is deleted, but the app would run on an empty list: `saqme serve`
+and `saqme open` refuse to start there unless the data folder is named (`--data`, `SAQME_DATA`).
+
 ## Linux and macOS: one folder, two engines
 
 The Linux/macOS app keeps a local copy of the sync server (the Worker's own code on SQLite) for its window,
@@ -216,7 +284,9 @@ window <-> local store <-> [engine] <-> lists/*.md <-> [engine] <-> your Worker 
 ```
 
 Both engines live in one process and apply their plans synchronously, so they never write a list at the
-same moment; each re-checks a file's content before replacing it. Conflicts between this computer and other
+same moment; each re-checks a file's content before replacing it. A task one engine's plan takes out of a file
+(deleted in the window, or on another device) is *expected* by the other for ten minutes, so that engine sends
+the delete instead of holding it back as vanished (`EngineLoop.onRemoved` / `expect`). Conflicts between this computer and other
 devices are recorded by your Worker (visible on the phones); conflicts between the window and the files are
 recorded by the local store (visible in the window). The cloud engine also syncs `notifyAt` between the
 local store and the Worker.
@@ -555,6 +625,10 @@ Cloudflare and GitHub.
 
 - A change saved on a device is never dropped by sync: it stays in the outbox until the server has it, and
   the losing side of any concurrent edit is kept as a conflict. Deletes are tombstones.
+- A list file that vanishes, or loses all its tasks at once, never becomes a delete without the user: the
+  first is written again from the last sync, the second is held under *Deletions paused*. Replayed on both
+  engines from the 2026-10-22 incident (`shared/fixtures/engine.json`, "replay"). Backups of the lists cover
+  what sync cannot (no sync, or a delete that was confirmed).
 - Moving a task (drag and drop, Alt+Up/Down, touch drag on the phone) only ever changes its place, never
   deletes it: covered by randomized tests in `desktop/tests/sync-core.tests.ps1` (thousands of moves keep
   every task; moves reach the server as new places only), the widget's self-check (drags through its mouse
