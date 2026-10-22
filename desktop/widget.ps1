@@ -234,6 +234,13 @@ function New-Control([string]$role, [string]$name, [string]$help = '', [scriptbl
   Set-Name $b $name $help
   return $b
 }
+# Press feedback (a11y.cs, docs/design.md "Motion"): while the mouse button is down on it, a control shrinks a little
+# ($scale, e.g. 0.92 for an icon) and/or tints ($brush, a row: rows only tint). Plain Borders (no a11y.cs) have none.
+function Set-Press($el, [double]$scale = 1, $brush = $null) {
+  if (-not $script:HasA11y -or $el -isnot [Saqme.AccessibleBorder]) { return }
+  $el.PressScale = $scale
+  if ($brush) { $el.PressBrush = $brush }
+}
 # Wraps a purely visual element (a placeholder over a text box, an icon) so screen readers skip it; keeps its
 # place in a Grid. The text box or button next to it carries the words.
 function Hide-Decoration($el) {
@@ -354,6 +361,24 @@ $script:stylesTemplate = @'
 </ResourceDictionary>
 '@
 
+# The focus ring is for the keyboard only. WPF draws a control's focus visual after keys (and after every focus change
+# when Windows' "Underline access keys" is on); the ring is visible only while this element is, which follows the last
+# kind of input (Set-InputKind): a click or a tap never leaves a ring, also not on focus the app moves after it.
+$script:ringCue = New-Object System.Windows.Controls.Border
+$script:ringCue.Visibility = 'Hidden'   # (until a key is pressed)
+function Set-InputKind([string]$kind) {
+  $v = $(if ($kind -eq 'keys') { 'Visible' } else { 'Hidden' })
+  if ($script:ringCue.Visibility -ne $v) { $script:ringCue.Visibility = $v }
+}
+$script:ModKeys = @('LeftShift', 'RightShift', 'LeftCtrl', 'RightCtrl', 'LeftAlt', 'RightAlt', 'LWin', 'RWin', 'CapsLock', 'System')
+function Watch-KeyInput($e) {
+  $k = [string]$(if ($e.Key -eq 'System') { $e.SystemKey } else { $e.Key })
+  if ($script:ModKeys -contains $k) { return }
+  # typing in a text box is not moving around (Tab and Esc are)
+  if ($e.OriginalSource -is [System.Windows.Controls.TextBox] -and $k -ne 'Tab' -and $k -ne 'Escape') { return }
+  Set-InputKind 'keys'
+}
+
 # everything colour-dependent is (re)built here; Apply-Theme also repaints the window live
 function Set-Palette([string]$name) {
   $script:themeName = $name
@@ -383,10 +408,20 @@ function Set-Palette([string]$name) {
   foreach ($k in 'MenuBg', 'Edge', 'Ink', 'MenuHover', 'Line', 'TipBg', 'TipFg', 'Thumb') { $x = $x.Replace("{$k}", $T[$k]) }
   $x = $x.Replace('{Font}', [System.Security.SecurityElement]::Escape($script:FontSource)).Replace('{LabelSize}', [string]$TypeSize.label).Replace('{SmallSize}', [string]$TypeSize.small)
   $script:Styles = [Windows.Markup.XamlReader]::Parse($x)
-  # keyboard focus ring for the widget's own controls: 2 px violet, drawn only for keyboard focus
-  $script:FocusRing = [Windows.Markup.XamlReader]::Parse(('<Style xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"><Setter Property="Control.Template"><Setter.Value>' +
-    '<ControlTemplate><Rectangle Stroke="{0}" StrokeThickness="2" RadiusX="6" RadiusY="6" Margin="-1" SnapsToDevicePixels="True"/></ControlTemplate>' +
-    '</Setter.Value></Setter></Style>') -f $T.Accent)
+  # keyboard focus ring for the widget's own controls: 2 px violet, drawn only for keyboard focus (its Visibility is
+  # the ring cue's, above)
+  $ring = New-Object System.Windows.FrameworkElementFactory([System.Windows.Shapes.Rectangle])
+  $ring.SetValue([System.Windows.Shapes.Shape]::StrokeProperty, (Brush $T.Accent))
+  $ring.SetValue([System.Windows.Shapes.Shape]::StrokeThicknessProperty, [double]2)
+  $ring.SetValue([System.Windows.Shapes.Rectangle]::RadiusXProperty, [double]6)
+  $ring.SetValue([System.Windows.Shapes.Rectangle]::RadiusYProperty, [double]6)
+  $ring.SetValue([System.Windows.FrameworkElement]::MarginProperty, (New-Object System.Windows.Thickness(-1)))
+  $ring.SetValue([System.Windows.UIElement]::SnapsToDevicePixelsProperty, $true)
+  $cue = New-Object System.Windows.Data.Binding('Visibility'); $cue.Source = $script:ringCue
+  $ring.SetBinding([System.Windows.UIElement]::VisibilityProperty, $cue)
+  $tpl = New-Object System.Windows.Controls.ControlTemplate; $tpl.VisualTree = $ring
+  $script:FocusRing = New-Object System.Windows.Style
+  $script:FocusRing.Setters.Add((New-Object System.Windows.Setter([System.Windows.Controls.Control]::TemplateProperty, $tpl)))
 }
 Set-Palette (Resolve-Theme $script:cfg.theme)
 
@@ -731,6 +766,7 @@ function New-IconButton([int]$code, [string]$tip, [scriptblock]$onActivate = $nu
   $t = New-Object System.Windows.Controls.TextBlock
   $t.Text = G $code; $t.FontFamily = $MDL2; $t.FontSize = 10.5; $t.Foreground = $Ink
   $b.Child = $t; $b.Margin = '3,0,0,0'; $b.Padding = '3'; $b.Cursor = 'Hand'; $b.ToolTip = $tip; $b.Background = $Clear
+  $b.CornerRadius = New-Object System.Windows.CornerRadius($Tokens.Radius.chip); Set-Press $b 0.9 $GroupPress
   return $b
 }
 
@@ -762,7 +798,7 @@ function New-DuePill($it) {
     $b.Padding = '8,1,8,2'; $t.FontWeight = 'Medium'
     if ($over) { $b.Background = $RedSoft; $t.Foreground = $Red } else { $b.Background = $AmberSoft; $t.Foreground = $Amber }
   }
-  $b.Child = $t
+  $b.Child = $t; Set-Press $b 0.96
   $b.Add_MouseLeftButtonUp({ param($s, $e) $e.Handled = $true; Show-DuePopup $s.Tag $s })
   return $b
 }
@@ -825,7 +861,7 @@ function New-Row($node) {
     $chev.Cursor = 'Hand'; $chev.ToolTip = $(if ($open) { 'Collapse' } else { 'Expand' })
     $chev.Tag = @{ Item = $it; Open = $open }
     $chev.Add_MouseLeftButtonUp({ param($s, $e) $e.Handled = $true; Toggle-RowOpen $s })
-    $chev.Child = $chevGlyph
+    $chev.Child = $chevGlyph; $chev.CornerRadius = New-Object System.Windows.CornerRadius($Tokens.Radius.chip); Set-Press $chev 0.9 $GroupPress
   } else { $chev = New-Object System.Windows.Controls.Border }
   $chev.VerticalAlignment = 'Top'; $chev.Margin = '0,4,0,0'; $chev.Padding = '2,3,2,3'; $chev.Background = $Clear
   [System.Windows.Controls.Grid]::SetColumn($chev, 1); [void]$g.Children.Add($chev)
@@ -836,6 +872,7 @@ function New-Row($node) {
   $chip.Child = (New-Chip $st 17); $chip.Background = $Clear
   $chip.Margin = "0,2,$($Tokens.Row.chipGap),0"; $chip.VerticalAlignment = 'Top'; $chip.Cursor = $(if ($ro) { 'Arrow' } else { 'Hand' })
   $chip.Tag = $it; $chip.ToolTip = $st.Name
+  if (-not $ro) { Set-Press $chip 0.86 }
   $chip.Add_MouseLeftButtonUp({ param($s, $e) $e.Handled = $true; Show-StatusMenu $s })
   [System.Windows.Controls.Grid]::SetColumn($chip, 2); [void]$g.Children.Add($chip)
 
@@ -846,7 +883,9 @@ function New-Row($node) {
   $tb.Foreground = $(if ($st.Strike -and $it -eq $script:sel) { $Faint } else { Brush $st.Text }); $tb.Cursor = $(if ($ro) { 'Arrow' } else { 'IBeam' }); $tb.Tag = $it; $tb.Background = $Clear
   if ($st.Strike) { $tb.TextDecorations = [System.Windows.TextDecorations]::Strikethrough }
   if ($st.Italic) { $tb.FontStyle = 'Italic' }
-  $tb.Add_MouseLeftButtonUp({ param($s, $e) $e.Handled = $true; Begin-Edit $s })
+  # (pressing the text, which edits it, tints the line until it is let go: press feedback)
+  if (-not $ro) { $tb.Add_PreviewMouseLeftButtonDown({ param($s, $e) $r = $s.Parent.Parent; if ($r.Tag -ne $script:sel) { $r.Background = $GroupPress; $r.BorderBrush = $GroupPress } }) }
+  $tb.Add_MouseLeftButtonUp({ param($s, $e) $e.Handled = $true; $r = $s.Parent.Parent; if ($r) { Paint-TaskRow $r ($r.Tag -eq $script:sel) }; Begin-Edit $s })
   [System.Windows.Controls.Grid]::SetColumn($tb, 3); [void]$g.Children.Add($tb)
 
   # 3: on the right of the first line, the row's value: notes mark, subtask progress, deadline (rightmost)
@@ -1290,7 +1329,7 @@ function New-PopupItem([string]$text, [string]$hint, [scriptblock]$onActivate = 
   Set-Tabular $h
   [System.Windows.Controls.Grid]::SetColumn($h, 1)
   [void]$g.Children.Add($a); [void]$g.Children.Add($h)
-  $b.Child = $g
+  $b.Child = $g; Set-Press $b 1 $GroupPress
   $b.Add_MouseEnter({ param($s, $e) $s.Background = $MenuHover })
   $b.Add_MouseLeave({ param($s, $e) $s.Background = $Clear })
   return $b
@@ -1315,6 +1354,11 @@ function New-ShadowHost($content, [double]$depth, [double]$opacity) {
   $g = New-Object System.Windows.Controls.Grid
   Set-CrispText $g
   [void]$g.Children.Add($sh); [void]$g.Children.Add($content)
+  # (the root of the window and of every popup: the last kind of input, for the focus ring; also input that something
+  # inside already handled)
+  $g.AddHandler([System.Windows.UIElement]::PreviewMouseDownEvent, [System.Windows.Input.MouseButtonEventHandler]{ Set-InputKind 'pointer' }, $true)
+  $g.AddHandler([System.Windows.UIElement]::PreviewTouchDownEvent, [System.EventHandler[System.Windows.Input.TouchEventArgs]]{ Set-InputKind 'pointer' }, $true)
+  $g.AddHandler([System.Windows.UIElement]::PreviewKeyDownEvent, [System.Windows.Input.KeyEventHandler]{ param($s, $e) Watch-KeyInput $e }, $true)
   return $g
 }
 
@@ -1634,7 +1678,7 @@ function New-TitleButton {
   $t.Text = $name; $t.FontFamily = $UI; $t.FontSize = $TypeSize.title; $t.FontWeight = 'SemiBold'; $t.Foreground = $Ink
   $t.TextTrimming = 'CharacterEllipsis'; $t.TextWrapping = 'NoWrap'; $t.VerticalAlignment = 'Center'
   [void]$dp.Children.Add($t)
-  $b.Child = $dp; $b.ToolTip = $tip; Set-Name $b $label $help
+  $b.Child = $dp; $b.ToolTip = $tip; Set-Name $b $label $help; Set-Press $b 0.98
   $b.Add_MouseEnter({ param($s, $e) $s.Background = $TabHover })
   $b.Add_MouseLeave({ param($s, $e) $s.Background = $Clear })
   $b.Add_MouseLeftButtonDown({ param($s, $e) $e.Handled = $true; Toggle-ListsMenu })
@@ -1745,7 +1789,7 @@ function New-ListRow([string]$name) {
     $vt.Text = $v; $vt.FontFamily = $UI; $vt.FontSize = $TypeSize.meta; $vt.Foreground = $ink; $vt.Margin = '12,2,0,0'; $vt.VerticalAlignment = 'Top'; Set-Tabular $vt
     [System.Windows.Controls.Grid]::SetColumn($vt, 3); [void]$g.Children.Add($vt)
   }
-  $b.Child = $g; Set-Name $b $label
+  $b.Child = $g; Set-Name $b $label; Set-Press $b 1 $GroupPress
   $b.Add_MouseEnter({ param($s, $e) $s.Background = $MenuHover })
   $b.Add_MouseLeave({ param($s, $e) $s.Background = $Clear })
   $b.Add_MouseLeftButtonUp({ param($s, $e) $e.Handled = $true; Choose-List ([string]$s.Tag) })
@@ -1787,7 +1831,7 @@ function Show-ListsMenu {
   $ng = New-Object System.Windows.Controls.StackPanel; $ng.Orientation = 'Horizontal'
   $np = New-Object System.Windows.Controls.TextBlock; $np.Text = G 0xE710; $np.FontFamily = $MDL2; $np.FontSize = 11; $np.Foreground = $Accent; $np.Width = 22; $np.VerticalAlignment = 'Center'
   $nt = New-Object System.Windows.Controls.TextBlock; $nt.Text = 'New list'; $nt.FontFamily = $UI; $nt.FontSize = $TypeSize.label; $nt.FontWeight = 'Medium'; $nt.Foreground = $Accent; $nt.VerticalAlignment = 'Center'
-  [void]$ng.Children.Add($np); [void]$ng.Children.Add($nt); $nb.Child = $ng
+  [void]$ng.Children.Add($np); [void]$ng.Children.Add($nt); $nb.Child = $ng; Set-Press $nb 1 $GroupPress
   $nb.Add_MouseEnter({ param($s, $e) $s.Background = $MenuHover })
   $nb.Add_MouseLeave({ param($s, $e) $s.Background = $Clear })
   $nb.Add_MouseLeftButtonUp({ param($s, $e) $e.Handled = $true; Close-ListsMenu $false; Begin-TabEdit $null })
@@ -1962,14 +2006,16 @@ $menuPath.StrokeLineJoin = 'Round'; $menuPath.StrokeStartLineCap = 'Round'; $men
 $menuPath.Width = 24; $menuPath.Height = 24; $menuPath.Fill = $Clear
 $menuBox = New-Object System.Windows.Controls.Viewbox
 $menuBox.Width = 21; $menuBox.Height = 21; $menuBox.Child = $menuPath
-$logo = New-Control 'button' 'Settings' 'Ctrl+comma' { param($s, $e) Toggle-Settings }
+# (a toggle button: pressed while Settings is open, and then it closes them; Update-Header)
+$logo = New-Control 'togglebutton' 'Settings' 'Ctrl+comma' { param($s, $e) Toggle-Settings }
 $logo.Child = $menuBox; $logo.Background = $Clear; $logo.Margin = '3,0,9,6'; $logo.VerticalAlignment = 'Center'
 $logo.Padding = '3'; $logo.CornerRadius = New-Object System.Windows.CornerRadius($Tokens.Radius.control)
-$logo.ToolTip = 'Settings'; $logo.Cursor = 'Hand'
+$logo.ToolTip = 'Settings'; $logo.Cursor = 'Hand'; Set-Press $logo 0.92
+if ($script:HasA11y) { $logo.IsChecked = $false }
 [System.Windows.Shell.WindowChrome]::SetIsHitTestVisibleInChrome($logo, $true)
 $logo.Add_MouseLeftButtonDown({ param($s, $e) $e.Handled = $true; Toggle-Settings })
-$logo.Add_MouseEnter({ param($s, $e) $s.Background = $TabHover })
-$logo.Add_MouseLeave({ param($s, $e) $s.Background = $Clear })
+$logo.Add_MouseEnter({ param($s, $e) if ($script:view -eq 'list') { $s.Background = $TabHover } })
+$logo.Add_MouseLeave({ param($s, $e) $s.Background = $(if ($script:view -eq 'list') { $Clear } else { $Selected }) })
 [void]$stripGrid.Children.Add($logo)
 # the title: the current list's name, which opens the lists menu (Render-Tabs fills it); it takes the room the
 # buttons on its right leave, and a long name ends in an ellipsis
@@ -1991,13 +2037,13 @@ $conflictBadge.CornerRadius = New-Object System.Windows.CornerRadius($Tokens.Rad
 $conflictBadge.Background = $AmberSoft; $conflictBadge.Visibility = 'Collapsed'; $conflictBadge.Margin = '0,0,3,0'; $conflictBadge.VerticalAlignment = 'Center'
 $conflictBadge.ToolTip = 'Changed on two devices at once - click to choose'
 $cbText = New-Object System.Windows.Controls.TextBlock; $cbText.FontFamily = $UI; $cbText.FontSize = $TypeSize.small; $cbText.FontWeight = 'Medium'; $cbText.Foreground = $Amber
-$conflictBadge.Child = $cbText
+$conflictBadge.Child = $cbText; Set-Press $conflictBadge 0.94
 $conflictBadge.Add_MouseLeftButtonDown({ param($s, $e) $e.Handled = $true; Show-View 'conflicts' })
 # the cloud glyph is a button whose name says the sync state in words (the glyph and its colour are extra)
 $syncButton = New-Control 'button' 'Sync' 'Opens Settings, Sync & sharing' { param($s, $e) Request-Sync; Show-View 'sync' }
 $syncGlyph = New-Object System.Windows.Controls.TextBlock
 $syncGlyph.FontFamily = $MDL2; $syncGlyph.FontSize = 13
-$syncButton.Child = $syncGlyph; $syncButton.Padding = '5,4,5,3'; $syncButton.Cursor = 'Hand'
+$syncButton.Child = $syncGlyph; $syncButton.Padding = '5,4,5,3'; $syncButton.Cursor = 'Hand'; Set-Press $syncButton 0.92
 $syncButton.Background = $Clear; $syncButton.Visibility = 'Collapsed'; $syncButton.VerticalAlignment = 'Center'
 $syncButton.Add_MouseLeftButtonDown({ param($s, $e) $e.Handled = $true; Request-Sync; Show-View 'sync' })
 foreach ($x in @($conflictBadge, $syncButton)) { [System.Windows.Shell.WindowChrome]::SetIsHitTestVisibleInChrome($x, $true); [void]$syncBox.Children.Add($x) }
@@ -2012,7 +2058,7 @@ function New-WinButton([int]$code, [string]$tip, [bool]$danger, [scriptblock]$on
   $t = New-Object System.Windows.Controls.TextBlock
   $t.Text = G $code; $t.FontFamily = $MDL2; $t.FontSize = 9.5; $t.Foreground = $TabInk
   $t.HorizontalAlignment = 'Center'; $t.VerticalAlignment = 'Center'
-  $b.Child = $t
+  $b.Child = $t; Set-Press $b 0.92
   $b.Add_MouseEnter({ param($s, $e) if ($s.Tag) { $s.Background = $CloseHover; $s.Child.Foreground = $CloseGlyph } else { $s.Background = $TabHover } })
   $b.Add_MouseLeave({ param($s, $e) $s.Background = $Clear; $s.Child.Foreground = $TabInk })
   return $b
@@ -2178,11 +2224,149 @@ $list = New-AccessibleList 'list' 'Tasks'
 $list.Margin = "$CardInset,0,$CardInset,4"
 $list.UseLayoutRounding = $true   # (the hairlines stay one crisp pixel)
 $scroll.Content = $list
-[void]$dock.Children.Add($scroll)
 $tabGroup = 0
 foreach ($area in @($strip, $scroll, $addBorder, $verBar)) {
   [System.Windows.Input.KeyboardNavigation]::SetTabNavigation($area, 'Local'); [System.Windows.Input.KeyboardNavigation]::SetTabIndex($area, $tabGroup); $tabGroup++
 }
+
+# ---------------------------------------------------------------- moving between views (docs/design.md, "Motion")
+# Settings moves as on an iPhone: a page that opens slides in from the right over the one it came from, which moves a
+# little to the left and dims; Back does the reverse. Opening Settings from the list, and going back to it, is a quick
+# fade (the header's list name, sync and Options fade with it). The view left behind is its own elements, moved to
+# $ghost, over or under the new view and taking no clicks, Tab or focus; they go when the move ends. The new view takes
+# clicks and keys at once, keyboard focus included. A move while one runs ends that one first, so quick clicks never
+# leave two views or one half moved. With Windows' animation effects off, or the window not on screen, nothing moves.
+$ghostHost = New-Object System.Windows.Controls.Border
+$ghostHost.Margin = $scroll.Margin; $ghostHost.ClipToBounds = $true; $ghostHost.IsHitTestVisible = $false; $ghostHost.Visibility = 'Collapsed'
+[System.Windows.Input.KeyboardNavigation]::SetTabNavigation($ghostHost, 'None')
+$ghost = New-Object System.Windows.Controls.StackPanel
+$ghostHost.Child = $ghost
+$stage = New-Object System.Windows.Controls.Grid   # where the view is: the view, and the one leaving
+$stage.ClipToBounds = $true
+[void]$stage.Children.Add($scroll); [void]$stage.Children.Add($ghostHost)
+[void]$dock.Children.Add($stage)
+$scrollShift = New-Object System.Windows.Media.TranslateTransform; $scroll.RenderTransform = $scrollShift
+$ghostShift = New-Object System.Windows.Media.TranslateTransform; $ghostHost.RenderTransform = $ghostShift
+# the phone app's numbers (app.js): a page 280 ms, Settings from the list and back 200 ms (what leaves: 140 ms),
+# ease-out cubic; the header 140 ms out, 180 ms in
+$MoveMs = 280; $FadeMs = 200; $FadeOutMs = 140; $HeadInMs = 180
+$moveEase = New-Object System.Windows.Media.Animation.CubicEase; $moveEase.EasingMode = 'EaseOut'; $moveEase.Freeze()
+$script:move = $null   # the move that runs: @{ Kind; Tracks (what goes from where to where, in how long); Header }
+$script:shownView = $null; $script:movedAt = [datetime]::MinValue; $script:swallowUp = $false
+# '' = as Windows says; 'off' = never (renders of a view at rest); 'on' = always, also off screen (the self-check);
+# 'hold' = a move is set up but waits at its first frame (renders of frames: Show-ViewMoveAt)
+$script:motion = ''
+$moveTimer = New-Object System.Windows.Threading.DispatcherTimer
+$moveTimer.Add_Tick({ Finish-ViewMove })
+function Test-Motion {
+  if ($script:motion) { return $script:motion -ne 'off' }
+  return ([System.Windows.SystemParameters]::ClientAreaAnimation -and [System.Windows.SystemParameters]::UIEffects -and $w.IsVisible -and $w.WindowState -ne 'Minimized')
+}
+function Get-ViewDepth([string]$v) { $d = 0; while ($v -ne 'list' -and $d -lt 9) { $v = Get-ViewParent $v; $d++ }; return $d }
+function New-Track($target, $prop, [double]$from, [double]$to, [double]$ms, [double]$rest) { return @{ T = $target; P = $prop; From = $from; To = $to; Ms = $ms; Rest = $rest } }
+# Instead of $list.Children.Clear() in Render: the view's elements go away, or, when another view comes and things may
+# move, to the ghost (scrolled as they were) while the new view moves in. Then the header follows the view.
+function Clear-View {
+  $from = $script:shownView; $to = $script:view
+  $script:shownView = $to
+  if ($from -eq $to) { $list.Children.Clear(); Update-Header; return }
+  $script:movedAt = [datetime]::UtcNow
+  Finish-ViewMove
+  if ($null -eq $from -or -not $list.Children.Count -or -not (Test-Motion)) {
+    $list.Children.Clear(); $scroll.ScrollToTop(); Update-Header; return
+  }
+  # (keyboard focus in the view that leaves goes to the window meanwhile; Render puts it where it belongs)
+  if ($list.IsKeyboardFocusWithin) { [void]$w.Focus() }
+  $top = $scroll.VerticalOffset
+  $old = @($list.Children); $list.Children.Clear()
+  foreach ($c in $old) { [void]$ghost.Children.Add($c) }
+  $ghost.Margin = New-Object System.Windows.Thickness($list.Margin.Left, ($list.Margin.Top - $top), $list.Margin.Right, 0)
+  # (both opaque while they move: the window's surface; not $Card, which the grouped lists' $script:card is too)
+  $ghostHost.Background = $outer.Background; $scroll.Background = $outer.Background
+  $ghostHost.Visibility = 'Visible'
+  $scroll.ScrollToTop()
+  $wd = $(if ($stage.ActualWidth -gt 0) { $stage.ActualWidth } else { $w.Width })
+  $PX = [System.Windows.Media.TranslateTransform]::XProperty; $PY = [System.Windows.Media.TranslateTransform]::YProperty; $PO = [System.Windows.UIElement]::OpacityProperty
+  $kind = $(if ($from -eq 'list' -or $to -eq 'list') { 'fade' } elseif ((Get-ViewDepth $to) -lt (Get-ViewDepth $from)) { 'back' } else { 'push' })
+  $tracks = New-Object System.Collections.ArrayList
+  if ($kind -eq 'push') {
+    [System.Windows.Controls.Panel]::SetZIndex($ghostHost, 0); [System.Windows.Controls.Panel]::SetZIndex($scroll, 1)
+    [void]$tracks.Add((New-Track $ghostShift $PX 0 (-0.3 * $wd) $MoveMs 0)); [void]$tracks.Add((New-Track $ghostHost $PO 1 0.5 $MoveMs 1))
+    [void]$tracks.Add((New-Track $scrollShift $PX $wd 0 $MoveMs 0))
+  } elseif ($kind -eq 'back') {
+    [System.Windows.Controls.Panel]::SetZIndex($ghostHost, 2); [System.Windows.Controls.Panel]::SetZIndex($scroll, 1)
+    [void]$tracks.Add((New-Track $ghostShift $PX 0 $wd $MoveMs 0))
+    [void]$tracks.Add((New-Track $scrollShift $PX (-0.3 * $wd) 0 $MoveMs 0)); [void]$tracks.Add((New-Track $scroll $PO 0.5 1 $MoveMs 1))
+  } else {
+    [System.Windows.Controls.Panel]::SetZIndex($ghostHost, 2); [System.Windows.Controls.Panel]::SetZIndex($scroll, 1)
+    [void]$tracks.Add((New-Track $ghostHost $PO 1 0 $FadeOutMs 1))
+    [void]$tracks.Add((New-Track $scroll $PO 0 1 $FadeMs 1)); [void]$tracks.Add((New-Track $scrollShift $PY 8 0 $FadeMs 0))
+  }
+  $script:move = @{ Kind = $kind; Tracks = $tracks; Header = $false }
+  if (($from -eq 'list') -ne ($to -eq 'list')) {
+    # the header's list name, sync and Options fade out into Settings, in out of them (Update-Header ends it)
+    $script:move.Header = $true
+    foreach ($x in @($titleHost, $syncBox, $menuBtn)) {
+      $x.Visibility = 'Visible'
+      if ($to -eq 'list') { [void]$tracks.Add((New-Track $x $PO 0 1 $HeadInMs 1)) } else { [void]$tracks.Add((New-Track $x $PO 1 0 $FadeOutMs 1)) }
+    }
+  }
+  Update-Header
+  if ($script:motion -eq 'hold') { Show-ViewMoveAt 0; return }
+  $longest = 0
+  foreach ($t in $tracks) {
+    $a = New-Object System.Windows.Media.Animation.DoubleAnimation($t.From, $t.To, (New-Object System.Windows.Duration([TimeSpan]::FromMilliseconds($t.Ms))))
+    $a.EasingFunction = $moveEase
+    $t.T.BeginAnimation($t.P, $a)
+    $longest = [math]::Max($longest, $t.Ms)
+  }
+  $moveTimer.Interval = [TimeSpan]::FromMilliseconds($longest + 40); $moveTimer.Start()
+}
+# the move as it stands $ms into it (renders of its frames; the first frame of a move that waits)
+function Show-ViewMoveAt([double]$ms) {
+  if (-not $script:move) { return }
+  foreach ($t in $script:move.Tracks) {
+    $p = $ms / $t.Ms; if ($p -lt 0) { $p = 0.0 } elseif ($p -gt 1) { $p = 1.0 }
+    $p = $moveEase.Ease($p)
+    $t.T.BeginAnimation($t.P, $null); $t.T.SetValue($t.P, [double]($t.From + ($t.To - $t.From) * $p))
+  }
+}
+# the move that runs ends now: the ghost goes, the view and the header are as they are at rest
+function Finish-ViewMove {
+  $moveTimer.Stop()
+  $m = $script:move
+  if (-not $m) { return }
+  $script:move = $null
+  foreach ($t in $m.Tracks) { $t.T.BeginAnimation($t.P, $null); $t.T.SetValue($t.P, [double]$t.Rest) }
+  $ghost.Children.Clear(); $ghostHost.Visibility = 'Collapsed'
+  $scroll.Background = $null
+  [System.Windows.Controls.Panel]::SetZIndex($ghostHost, 0); [System.Windows.Controls.Panel]::SetZIndex($scroll, 0)
+  Update-Header
+}
+# The header in Settings (any view but the list): only ☰, pressed (the selected tint, ink), and the window buttons. The
+# list's name, sync and conflicts, and Options step aside, keeping their room (Hidden: nothing moves, the strip still
+# drags the window); while a move fades them, it sets their visibility when it ends.
+function Update-Header {
+  $in = $script:view -ne 'list'
+  $logo.Background = $(if ($in) { $Selected } elseif ($logo.IsMouseOver) { $TabHover } else { $Clear })
+  $menuPath.Stroke = $(if ($in) { $Ink } else { $TabInk })
+  if ($script:HasA11y) { $logo.IsChecked = $in }
+  $fading = $script:move -and $script:move.Header
+  foreach ($x in @($titleHost, $syncBox, $menuBtn)) {
+    $x.IsHitTestVisible = -not $in
+    if (-not $fading) { $x.Visibility = $(if ($in) { 'Hidden' } else { 'Visible' }) }
+  }
+}
+# a double click whose first click opened a view is one click: its second press, landing on that view, does nothing
+$script:pressAt = [datetime]::MinValue
+$w.Add_PreviewMouseLeftButtonDown({ param($s, $e)
+  $now = [datetime]::UtcNow
+  $second = $e.ClickCount -ge 2 -and $script:movedAt -gt $script:pressAt -and ($now - $script:movedAt).TotalMilliseconds -lt 500
+  $script:pressAt = $now
+  if ($second) { $e.Handled = $true; $script:swallowUp = $true } })
+$w.Add_PreviewMouseLeftButtonUp({ param($s, $e) if ($script:swallowUp) { $script:swallowUp = $false; $e.Handled = $true } })
+# (keys anywhere in the window, also with keyboard focus on the window itself: the focus ring, Set-InputKind)
+$w.AddHandler([System.Windows.UIElement]::PreviewKeyDownEvent, [System.Windows.Input.KeyEventHandler]{ param($s, $e) Watch-KeyInput $e }, $true)
 
 # ---------------------------------------------------------------- render
 function Build-Tree {
@@ -2258,7 +2442,7 @@ function Render {
   $fromSettings = $script:renderedView -ne 'list'; $script:renderedView = 'list'
   $hadFocus = $list.IsKeyboardFocusWithin -or ($fromSettings -and $verBar.IsKeyboardFocusWithin)
   $verBar.Visibility = 'Collapsed'
-  $list.Children.Clear(); Reset-Groups
+  Clear-View; Reset-Groups
   if ($script:HasA11y) { $list.Role = 'list' }
   Set-Name $list "$($script:proj) tasks"
   $share = Get-ShareOf $script:proj
@@ -2581,8 +2765,9 @@ function New-RowButton([string]$name, [string]$help, $content, [scriptblock]$do,
   if ($help) { $b.ToolTip = $help }
   $b.Add_MouseEnter({ param($s, $e) $s.Background = $GroupHover })
   $b.Add_MouseLeave({ param($s, $e) $s.Background = $GroupBg })
-  $b.Add_PreviewMouseLeftButtonDown({ param($s, $e) $s.Background = $GroupPress })
-  $b.Add_MouseLeftButtonUp({ param($s, $e) $e.Handled = $true; $s.Background = $GroupHover; & $s.Tag.Do $s.Tag.Arg })
+  # pressed: the row tints (Set-Press: and fades back when let go); without a11y.cs, here
+  if ($script:HasA11y) { Set-Press $b 1 $GroupPress } else { $b.Add_PreviewMouseLeftButtonDown({ param($s, $e) $s.Background = $GroupPress }) }
+  $b.Add_MouseLeftButtonUp({ param($s, $e) $e.Handled = $true; if (-not $script:HasA11y) { $s.Background = $GroupHover }; & $s.Tag.Do $s.Tag.Arg })
   return $b
 }
 function New-Chevron { $c = New-Text (G 0xE76C) 11 $TabInk; $c.FontFamily = $MDL2; $c.TextWrapping = 'NoWrap'; $c.Margin = '0,1,0,0'; return (Hide-Decoration $c) }
@@ -2604,6 +2789,10 @@ function New-SwitchRow([string]$label, [bool]$on, [scriptblock]$onToggle, [strin
   if ($help) { Set-Name $tg $label $help }
   $r = New-InfoRow $label '' $tg
   $r.Tag = $tg; $r.Cursor = 'Hand'
+  # (the whole row is the switch: pressed, it tints like a row that is a button)
+  $r.Add_PreviewMouseLeftButtonDown({ param($s, $e) $s.Background = $GroupPress })
+  $r.Add_PreviewMouseLeftButtonUp({ param($s, $e) $s.Background = $GroupBg })   # (before the switch takes the release)
+  $r.Add_MouseLeave({ param($s, $e) $s.Background = $GroupBg })
   $r.Add_MouseLeftButtonUp({ param($s, $e) if (-not $e.Handled) { $e.Handled = $true; & $s.Tag.Tag.F (-not $s.Tag.Tag.On) } })
   return $r
 }
@@ -2612,7 +2801,7 @@ function New-TextButton([string]$text, [scriptblock]$onClick, $fg = $null, $arg 
   $b = New-Control 'button' $text '' { param($s, $e) & $s.Tag.F $s.Tag.A }
   $b.Background = $Clear; $b.CornerRadius = New-Object System.Windows.CornerRadius($Tokens.Radius.control); $b.Padding = '8,3,8,4'; $b.Margin = '0,-3,-6,-3'; $b.Cursor = 'Hand'
   $b.Child = (New-Text $text $TypeSize.body $(if ($fg) { $fg } else { $Accent })); $b.Child.TextWrapping = 'NoWrap'
-  $b.Tag = @{ F = $onClick; A = $arg }
+  $b.Tag = @{ F = $onClick; A = $arg }; Set-Press $b 0.96
   $b.Add_MouseEnter({ param($s, $e) $s.Background = $GroupPress })
   $b.Add_MouseLeave({ param($s, $e) $s.Background = $Clear })
   $b.Add_MouseLeftButtonUp({ param($s, $e) $e.Handled = $true; & $s.Tag.F $s.Tag.A })
@@ -2648,7 +2837,7 @@ function New-Segmented($options, [string]$current, [scriptblock]$onPick, [string
     $b.CornerRadius = New-Object System.Windows.CornerRadius($Tokens.Radius.chip); $b.Padding = '11,3,11,4'; $b.Cursor = 'Hand'
     $t = New-Text $o[1] $TypeSize.label $TabInk; $t.FontWeight = 'Medium'; $t.TextWrapping = 'NoWrap'
     if ($o[0] -eq $current) { $b.Background = $Accent; $t.Foreground = $OnAccent; $t.FontWeight = 'SemiBold' } else { $b.Background = $Clear }
-    $b.Child = $t; $b.Tag = @{ V = $o[0]; F = $onPick }
+    $b.Child = $t; $b.Tag = @{ V = $o[0]; F = $onPick }; Set-Press $b 0.96
     $b.Add_MouseLeftButtonUp({ param($s, $e) $e.Handled = $true; & $s.Tag.F $s.Tag.V })
     [void]$sp.Children.Add($b)
   }
@@ -2662,7 +2851,7 @@ function New-Toggle([bool]$on, [scriptblock]$onToggle, [string]$name = '') {
   $b.Background = $(if ($on) { $Accent } else { $GroupLine })
   $k = New-Object System.Windows.Shapes.Ellipse; $k.Width = 14; $k.Height = 14; $k.Fill = $(if ($on) { $OnAccent } else { $Paper })
   $k.HorizontalAlignment = $(if ($on) { 'Right' } else { 'Left' }); $k.Margin = '3,0,3,0'
-  $b.Child = $k; $b.Tag = @{ On = $on; F = $onToggle }
+  $b.Child = $k; $b.Tag = @{ On = $on; F = $onToggle }; Set-Press $b 0.94
   $b.Add_MouseLeftButtonUp({ param($s, $e) $e.Handled = $true; & $s.Tag.F (-not $s.Tag.On) })
   return $b
 }
@@ -2677,7 +2866,7 @@ function New-SettingsHeader([string]$title) {
   $c.Foreground = $TabInk; $c.VerticalAlignment = 'Center'; $c.Margin = '0,1,10,0'
   $t = New-Text $title $TypeSize.title $Ink; $t.FontWeight = 'SemiBold'
   [void]$sp.Children.Add($c); [void]$sp.Children.Add($t)
-  $h.Child = $sp
+  $h.Child = $sp; Set-Press $h 0.97
   $h.Add_MouseEnter({ param($s, $e) $s.Background = $Hover })
   $h.Add_MouseLeave({ param($s, $e) $s.Background = $Clear })
   $h.Add_MouseLeftButtonUp({ param($s, $e) $e.Handled = $true; Go-Back })
@@ -2692,11 +2881,12 @@ function Render-Settings {
   $changed = $script:view -ne $script:renderedView
   $f = [System.Windows.Input.Keyboard]::FocusedElement
   $keep = $(if (-not $changed -and $f -is [System.Windows.DependencyObject] -and $list.IsKeyboardFocusWithin) { Get-FocusKey $f } else { '' })
-  $list.Children.Clear(); Reset-Groups
+  Clear-View; Reset-Groups
   if ($script:HasA11y) { $list.Role = 'group' }
   Set-Name $list $(if ($script:view -eq 'share') { 'Share' } elseif ($script:ViewTitles.ContainsKey($script:view)) { $script:ViewTitles[$script:view] } else { 'Settings' })
   $script:visible = New-Object System.Collections.ArrayList; $script:rows = New-Object System.Collections.ArrayList
   Render-SettingsView
+  $script:shownView = $script:view   # (a view that cannot show here is Settings: Render-SettingsView)
   Close-Card
   $verBar.Visibility = 'Visible'; Update-VersionDisplay
   $want = $(if ($script:focusKey) { $script:focusKey } elseif ($changed) { 'back' } else { $keep })
@@ -3520,7 +3710,7 @@ function Update-VersionDisplay {
     $b = New-Control 'link' "$text. $($badge.Text)" 'Opens Settings, Updates' { param($s, $e) Show-View 'updates' }
     [System.Windows.Automation.AutomationProperties]::SetAutomationId($b, 'version')
     $b.Child = $row; $b.Tag = 'updates'; $b.Cursor = 'Hand'; $b.Background = $Clear; $b.Padding = '6,3,6,3'; $b.Margin = "$($CardPad - 6),0,0,0"; $b.HorizontalAlignment = 'Left'
-    $b.CornerRadius = New-Object System.Windows.CornerRadius($Tokens.Radius.control); $b.ToolTip = 'Open Updates'
+    $b.CornerRadius = New-Object System.Windows.CornerRadius($Tokens.Radius.control); $b.ToolTip = 'Open Updates'; Set-Press $b 0.97
     $b.Add_MouseEnter({ param($s, $e) $s.Background = $Hover })
     $b.Add_MouseLeave({ param($s, $e) $s.Background = $Clear })
     $b.Add_MouseLeftButtonUp({ param($s, $e) $e.Handled = $true; Show-View 'updates' })
@@ -4743,6 +4933,84 @@ if ($SmokeTest) {
     Remove-Item -LiteralPath (Proj-Path 'Switch check') -Force
     Render
     Write-Output 'SWITCHER OK'
+    # Focus ring, header, press feedback and moving between views (docs/design.md, "Motion"; no window on screen here,
+    # so nothing moves by itself: $script:motion 'on' sets moves up as on screen, and they are ended by hand)
+    if (-not $script:HasA11y) { throw 'a11y.cs did not load' }
+    $mvRoot = $w.Content   # (the window's root, where the kind of input is watched)
+    $mvSrc = New-Object System.Windows.Interop.HwndSource(0, 0, 0, 0, 0, 'mvkeys', [IntPtr]::Zero)
+    $mvKey = { param($el, [string]$k)
+      $ke = New-Object System.Windows.Input.KeyEventArgs([System.Windows.Input.Keyboard]::PrimaryDevice, $mvSrc, 0, [System.Windows.Input.Key]$k)
+      $ke.RoutedEvent = [System.Windows.UIElement]::PreviewKeyDownEvent; $el.RaiseEvent($ke) }
+    $mvClick = { $me = New-Object System.Windows.Input.MouseButtonEventArgs([System.Windows.Input.Mouse]::PrimaryDevice, 0, 'Left'); $me.RoutedEvent = [System.Windows.UIElement]::PreviewMouseDownEvent; $mvRoot.RaiseEvent($me) }
+    # the ring of every control (its focus visual) shows while the keyboard is in use, never after a click
+    $probe = New-Object System.Windows.Controls.Control; $probe.Template = $script:FocusRing.Setters[0].Value; [void]$probe.ApplyTemplate()
+    $ringEl = [System.Windows.Media.VisualTreeHelper]::GetChild($probe, 0)
+    & $mvClick
+    if ($ringEl.Visibility -ne 'Hidden') { throw 'a focus ring shows after a click' }
+    & $mvKey $mvRoot 'Tab'
+    if ($ringEl.Visibility -ne 'Visible' -or $ringEl.Stroke.Color -ne $Accent.Color -or $ringEl.StrokeThickness -ne 2) { throw 'no focus ring after Tab' }
+    & $mvClick; & $mvKey $addBox 'A'
+    if ($ringEl.Visibility -ne 'Hidden') { throw 'typing in a text box shows the focus ring' }
+    Show-View 'general'; & $mvClick; & $mvKey $mvRoot 'Escape'   # (Esc, which the window handles: Back)
+    if ($script:view -ne 'settings' -or $ringEl.Visibility -ne 'Visible') { throw "Esc: view '$($script:view)', ring $($ringEl.Visibility)" }
+    $mvSrc.Dispose()
+    # in Settings the header is only the Settings button, pressed, and the window buttons; the list brings the rest back
+    $headOk = { param([bool]$in)
+      $peer = [System.Windows.Automation.Peers.UIElementAutomationPeer]::CreatePeerForElement($logo)
+      $toggles = $null -ne $peer.GetPattern([System.Windows.Automation.Peers.PatternInterface]::Toggle)
+      $aside = @($titleHost, $syncBox, $menuBtn | Where-Object { $_.Visibility -ne $(if ($in) { 'Hidden' } else { 'Visible' }) -or $_.IsHitTestVisible -eq $in }).Count
+      return ($aside -eq 0 -and $toggles -and $logo.IsChecked -eq $in -and ($logo.Background -eq $Selected) -eq $in -and
+        @($minBtn, $maxBtn, $clsBtn | Where-Object { $_.Visibility -ne 'Visible' }).Count -eq 0 -and $null -ne $peer.GetPattern([System.Windows.Automation.Peers.PatternInterface]::Invoke)) }
+    if (-not (& $headOk $true)) { throw 'the header in Settings is not the pressed Settings button and the window buttons' }
+    Show-View 'list'
+    if (-not (& $headOk $false)) { throw 'the header in the list is not back' }
+    # pressed, a row tints and fades back to its rest (at once without motion); a button shrinks only with motion
+    Show-View 'settings'
+    $pr = & $find $list 'open-general'; $prRest = $pr.Background
+    [Saqme.AccessibleBorder]::Motion = $false
+    $pr.Press($true)
+    if ($pr.Background -ne $GroupPress) { throw 'a pressed row does not tint' }
+    $pr.Press($false)
+    if ($pr.Background -ne $prRest) { throw 'a row let go does not go back to its rest' }
+    $logo.Press($true)
+    if ($logo.RenderTransform -is [System.Windows.Media.ScaleTransform] -and $logo.RenderTransform.ScaleX -ne 1) { throw 'a button shrinks without motion' }
+    $logo.Press($false)
+    [Saqme.AccessibleBorder]::Motion = $true
+    if ([System.Windows.SystemParameters]::ClientAreaAnimation -and [System.Windows.SystemParameters]::UIEffects) {
+      $logo.Press($true)
+      if ($logo.RenderTransform -isnot [System.Windows.Media.ScaleTransform] -or -not $logo.RenderTransform.HasAnimatedProperties) { throw 'a pressed button does not shrink' }
+      $logo.Press($false)
+      # pressed again while its tint fades back (a quick double click), a row still comes back to its own rest
+      $pr.Press($true); $pr.Press($false); $pr.Press($true)
+      [Saqme.AccessibleBorder]::Motion = $false; $pr.Press($false); [Saqme.AccessibleBorder]::Motion = $true
+      if ($pr.Background -ne $prRest) { throw 'a row pressed again while its tint faded back does not come back to its rest' }
+    }
+    # moves: from the list a fade, a page in a push, Back the other way; each takes the view that was on screen to the
+    # ghost, ends the one before, and the header waits for the move; any number of quick clicks end as one view
+    Show-View 'list'; $script:motion = 'on'
+    $listCount = $list.Children.Count
+    Toggle-Settings
+    if ($script:move.Kind -ne 'fade' -or $ghost.Children.Count -ne $listCount -or $ghostHost.Visibility -ne 'Visible' -or -not (& $find $list 'open-general') -or $titleHost.Visibility -ne 'Visible' -or $titleHost.IsHitTestVisible) { throw 'opening Settings is not a fade from the list' }
+    $homeCount = $list.Children.Count
+    & $activate (& $find $list 'open-general')
+    if ($script:move.Kind -ne 'push' -or $ghost.Children.Count -ne $homeCount -or [System.Windows.Controls.Panel]::GetZIndex($scroll) -le [System.Windows.Controls.Panel]::GetZIndex($ghostHost)) { throw "a page does not push over Settings ($($script:move.Kind), $($ghost.Children.Count) of $homeCount)" }
+    if ($titleHost.Visibility -ne 'Hidden') { throw 'the header did not settle when the move before ended' }
+    Go-Back
+    if ($script:move.Kind -ne 'back' -or [System.Windows.Controls.Panel]::GetZIndex($scroll) -ge [System.Windows.Controls.Panel]::GetZIndex($ghostHost) -or -not (& $find $list 'open-general')) { throw 'Back does not move the page off' }
+    $script:motion = 'hold'
+    & $activate (& $find $list 'open-general')
+    Show-ViewMoveAt 140
+    $mid = $scrollShift.X
+    if (-not ($mid -gt 0 -and $mid -lt $w.Width) -or $ghostShift.X -ge 0 -or $ghostHost.Opacity -ge 1) { throw "half way, a page is not half in ($mid)" }
+    $script:motion = 'on'
+    foreach ($k in 1..7) { Toggle-Settings; $kb = & $find $list 'open-sync'; if ($k % 3 -eq 0 -and $kb) { & $activate $kb } }
+    Finish-ViewMove
+    $atRest = { $ghost.Children.Count -eq 0 -and $ghostHost.Visibility -eq 'Collapsed' -and $scrollShift.X -eq 0 -and $scrollShift.Y -eq 0 -and $ghostShift.X -eq 0 -and $scroll.Opacity -eq 1 -and $ghostHost.Opacity -eq 1 -and -not $script:move }
+    $backs = 0; foreach ($c in (Get-Controls $list)) { if ((Get-FocusKey $c) -eq 'back') { $backs++ } }
+    if (-not (& $atRest) -or -not (& $headOk ($script:view -ne 'list')) -or $backs -ne [int]($script:view -ne 'list') -or $script:shownView -ne $script:view) { throw "quick clicks left the view '$($script:view)' half moved ($backs Back buttons)" }
+    $script:motion = ''; Show-View 'list'
+    if (-not (& $atRest) -or -not (& $headOk $false)) { throw 'the list after the moves' }
+    Write-Output 'MOTION OK'
     # Backups (Settings > Your lists > Backups): one made at start; a changed list gets a new one, an unchanged one none;
     # bringing one back writes a list that is gone again and puts back a task that is gone, and changes nothing else
     if (-not (Get-ListsBackups $DataDir).Count) { throw 'no backup made when the app started' }
@@ -4853,6 +5121,10 @@ if ($SmokeTest) {
       foreach ($theme in 'dark', 'light') {
         Apply-Theme $theme
         foreach ($v in @('list', 'settings') + @($script:SettingsPages.Keys) + @('pair', 'conflicts')) { $script:view = $v; Render; & $shot "$v-$theme" }
+        # a page on its way in, half way (docs/design.md, "Motion"): Settings > General
+        $script:view = 'settings'; Render
+        $script:motion = 'hold'; $script:view = 'general'; Render; Show-ViewMoveAt 140; & $shot "move-general-$theme"
+        Finish-ViewMove; $script:motion = ''
       }
     }
     Write-Output 'SMOKE OK'

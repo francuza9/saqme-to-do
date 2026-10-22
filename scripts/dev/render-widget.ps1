@@ -12,8 +12,11 @@
 #     -Advanced  with the Advanced part of the Settings pages open
 #     -Open      the list as it looks in use: every task with notes open, and Completed shown
 #     -Menu      also the lists menu (opened under the title), as <Prefix>-menu-<theme>.png
+#     -From      also the move from this view to -View (docs/design.md, "Motion") as frames, <Prefix>-<ms>ms-<theme>.png,
+#                -At milliseconds into it (default 70, 140, 210). Views are otherwise drawn at rest.
 param([Parameter(Mandatory)][string]$Out, [string]$Prefix = 'desktop', [string]$Project = 'Work', [int]$Width = 440, [int]$Height = 660,
-  [string]$View = 'list', [string]$Sample = '', [switch]$Full, [switch]$Busy, [switch]$Advanced, [switch]$Open, [switch]$Menu)
+  [string]$View = 'list', [string]$Sample = '', [switch]$Full, [switch]$Busy, [switch]$Advanced, [switch]$Open, [switch]$Menu,
+  [string]$From = '', [int[]]$At = @(70, 140, 210))
 $ErrorActionPreference = 'Stop'
 $root = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
 $tmp = Join-Path ([IO.Path]::GetTempPath()) ('saqme-render-' + [guid]::NewGuid().ToString('N').Substring(0, 6))
@@ -71,13 +74,30 @@ try {
 `$w.Width = $Width; `$w.Height = $Height
 $(if ($Busy) { $busyState })
 `$script:advancedOpen = `$$([bool]$Advanced)
+`$script:motion = 'off'; [Saqme.AccessibleBorder]::Motion = `$false   # (views at rest; -From holds a move for its frames)
 if (`$$([bool]$Open)) { foreach (`$it in `$script:items) { if (`$it.Kind -eq 'task' -and `$it.Notes) { `$script:openState[(Open-Key `$it)] = '1' } } }
 if (-not `$$([bool]$Full)) { `$w.Show() }   # (a window on screen would lay its content out at its own height)
 `$script:view = '$($View.Replace("'", "''"))'
+`$settle = { foreach (`$i in 1..3) { `$w.Dispatcher.Invoke([action]{}, [System.Windows.Threading.DispatcherPriority]::ContextIdle); `$w.UpdateLayout() } }
+`$frame = {
+  param([string]`$name)
+  `$frtb = New-Object System.Windows.Media.Imaging.RenderTargetBitmap([int](`$w.ActualWidth * 2), [int](`$w.ActualHeight * 2), 192, 192, [System.Windows.Media.PixelFormats]::Pbgra32)
+  `$frtb.Render(`$outer)
+  `$fenc = New-Object System.Windows.Media.Imaging.PngBitmapEncoder
+  `$fenc.Frames.Add([System.Windows.Media.Imaging.BitmapFrame]::Create(`$frtb))
+  `$fFile = [IO.File]::Create('$((Join-Path $Out $Prefix).Replace("'", "''"))-' + `$name + '.png'); try { `$fenc.Save(`$fFile) } finally { `$fFile.Close() }
+}
 foreach (`$th in 'dark', 'light') {
+  if ('$($From.Replace("'", "''"))') {
+    # the move into the view: from -From, held, then drawn at each -At; the view at rest follows, as without -From
+    `$script:view = '$($From.Replace("'", "''"))'; Apply-Theme `$th; Render; `$w.UpdateLayout(); & `$settle
+    `$script:motion = 'hold'; `$script:view = '$($View.Replace("'", "''"))'; Render; `$w.UpdateLayout(); & `$settle
+    foreach (`$ms in @($(@($At) -join ', '))) { Show-ViewMoveAt `$ms; `$w.UpdateLayout(); & `$frame "`${ms}ms-`$th" }
+    Finish-ViewMove; `$script:motion = 'off'
+  }
   Apply-Theme `$th; Render; `$w.UpdateLayout()
   # let the work the widget queues for after layout run (the tab strip scrolls the current project into view)
-  foreach (`$i in 1..3) { `$w.Dispatcher.Invoke([action]{}, [System.Windows.Threading.DispatcherPriority]::ContextIdle); `$w.UpdateLayout() }
+  & `$settle
   `$shotW = `$w.ActualWidth; `$shotH = `$w.ActualHeight
   if (`$$([bool]$Full)) {
     # as tall as the content: measured without a height limit, so the list's scroll area takes all it needs

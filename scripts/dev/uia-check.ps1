@@ -149,6 +149,8 @@ try {
   Check (@($acc | Where-Object { $_.Type -eq 'ListItem' -and $_.Name -match 'overdue' }).Count -ge 1) 'an overdue deadline is said in words, not only in red'
   $title = @($acc | Where-Object { $_.Type -eq 'Button' -and $_.Patterns -contains 'ExpandCollapse' -and $_.Name -notmatch '^Completed' })
   Check ($title.Count -eq 1 -and $title[0].Name -eq 'Work' -and $title[0].State -eq ' [Collapsed]' -and $title[0].Patterns -contains 'Invoke') "the title is a menu button named by the current list, collapsed ('$(($title | ForEach-Object { $_.Name + $_.State }) -join ' | ')')"
+  $setBtn = @($acc | Where-Object { $_.Type -eq 'Button' -and $_.Name -eq 'Settings' })
+  Check ($setBtn.Count -eq 1 -and $setBtn[0].Patterns -contains 'Invoke' -and $setBtn[0].State -eq ' [Off]') "the Settings button is a toggle button, not pressed in the list ('$($setBtn[0].State)')"
   Check (@($acc | Where-Object { $_.Type -eq 'TabItem' }).Count -eq 0) 'no tab strip any more'
   if ($title.Count -eq 1) {
     $ec = $title[0].El.GetCurrentPattern([System.Windows.Automation.ExpandCollapsePattern]::Pattern)
@@ -204,6 +206,16 @@ try {
   Check (@($acc | Where-Object { $_.Type -eq 'Text' -and $_.Name -eq 'App' }).Count -eq 1) "the second card's heading (App) is read out"
   $rowHelp = @($acc | Where-Object { $_.Type -eq 'Button' -and $_.El.Current.AutomationId -like 'open-*' -and -not $_.Help })
   Check ($rowHelp.Count -eq 0) "each page row describes what is on the page (its old second line)$(if ($rowHelp.Count) { ': not ' + (($rowHelp | ForEach-Object { $_.Name }) -join ', ') })"
+  # in Settings the header is only the Settings button, pressed, and the window buttons (docs/design.md, "Motion")
+  # (the header: the buttons on the Settings button's line, left to right)
+  $headerIn = {
+    param($tree)
+    $sb = @($tree | Where-Object { $_.Type -eq 'Button' -and $_.Name -eq 'Settings' })[0].El.Current.BoundingRectangle
+    @($tree | Where-Object { $_.Type -eq 'Button' -and $_.El.Current.BoundingRectangle.Top -lt $sb.Bottom -and $_.El.Current.BoundingRectangle.Bottom -gt $sb.Top } |
+      Sort-Object { $_.El.Current.BoundingRectangle.Left } | ForEach-Object { $_.Name + $_.State }) -join ' | '
+  }
+  $head = & $headerIn $acc
+  Check ($head -eq 'Settings [On] | Minimize | Fullscreen | Close (keeps running in the tray)') "the header in Settings: the pressed Settings button and the window buttons ($head)"
   Set-Content $orderAsk 'x'; Remove-Item $orderFile -ErrorAction SilentlyContinue
   [void](Wait-For { Test-Path $orderFile }); Start-Sleep -Milliseconds 200
   $order = @(Get-Content $orderFile)
@@ -257,6 +269,31 @@ try {
   }
   [void](& $invoke (& $byId 'open-updates') 'the Updates row')
   [void](Test-View 'Settings > Updates' $win)
+
+  # quick clicks (docs/design.md, "Motion"): the Settings button five times, then a page opened and closed at once,
+  # over and over; when the moves are over there is one view, and the header goes with it
+  $settled = {
+    param([string]$what)
+    Start-Sleep -Milliseconds 1200
+    $tree = New-Object System.Collections.ArrayList; Get-Tree $win 0 $tree
+    $backs = @($tree | Where-Object { $_.El.Current.AutomationId -eq 'back' }).Count
+    $inSettings = $backs -eq 1
+    $head = & $headerIn $tree
+    $want = $(if ($inSettings) { 'Settings [On] | Minimize | Fullscreen | Close (keeps running in the tray)' } else { 'Settings [Off] | Work [Collapsed] | Options | Minimize | Fullscreen | Close (keeps running in the tray)' })
+    $twice = @($tree | Where-Object { $_.El.Current.AutomationId -like 'open-*' } | Group-Object { $_.El.Current.AutomationId } | Where-Object { $_.Count -gt 1 }).Count
+    Check ($backs -le 1 -and $twice -eq 0 -and $head -eq $want) "$what ends as one view, $(if ($inSettings) { 'Settings' } else { 'the list' }), with its header ($head)"
+    return $inSettings
+  }
+  $setInv = $settings.GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern)
+  foreach ($i in 1..5) { $setInv.Invoke() }   # (from Updates: the list, Settings, the list, Settings, the list)
+  if (& $settled 'five quick clicks on Settings') { $setInv.Invoke() }
+  $setInv.Invoke(); Start-Sleep -Milliseconds 900
+  $gen = & $byId 'open-general'; $back = & $byId 'back'
+  if ($gen -and $back) {
+    # (Back goes one level up from where it is: General, Settings, General, Settings, General)
+    foreach ($el in @($gen, $back, $gen, $back, $gen)) { try { $el.GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern).Invoke() } catch {} }
+    [void](& $settled 'a page opened and closed five times at once')
+  } else { Check $false 'Settings opened for the quick Back and forth' }
 } finally {
   Set-Content $quitFile 'x'
   [void](Wait-For { $proc.HasExited } 8000)
