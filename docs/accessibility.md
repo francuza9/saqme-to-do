@@ -91,7 +91,7 @@ milliseconds) and falls back to the old elements if that ever fails.
   is reported as selected. Status chips, chevrons and deadlines inside a task are buttons ("Status: Blocked /
   waiting", "Expand subtasks and notes", "Deadline: 17 Oct, overdue"). The theme choice is three radio buttons;
   *Start with Windows* is a check box with its state; all other controls are named buttons, including the
-  window buttons and the settings button (the logo). Every text box has a name and a hint (placeholders are
+  window buttons and the settings button (the gear). Every text box has a name and a hint (placeholders are
   not labels). Decorative glyphs and placeholders are hidden from screen readers; hidden hover tools are not
   in the tree.
 - **Settings.** A list of pages, each a button whose name says the page and how it stands ("Sync & sharing,

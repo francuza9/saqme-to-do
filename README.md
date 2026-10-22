@@ -114,7 +114,7 @@ Prefer to look first? Download the repository as a ZIP and run **`setup.cmd`** (
 2. **Add it to the Home Screen:** on iPhone tap **Share**, then **Add to Home Screen**; on Android, **Install app**.
    On iPhone, open Saqme from the Home Screen and type the **pairing code** shown under the QR code (and in
    Safari after step 1): iOS gives Home Screen apps storage of their own, so the app starts unpaired.
-3. **Turn on reminders:** in Saqme on the Home Screen, tap the logo to open **Settings**, then
+3. **Turn on reminders:** in Saqme on the Home Screen, tap the gear to open **Settings**, then
    **Notifications**, and switch **Notifications** on (iOS 16.4 or later).
 
 <p align="center">

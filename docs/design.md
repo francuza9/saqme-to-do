@@ -148,7 +148,7 @@ mouse); the margins around them are kept small so text gets the width. Phone: th
   "Completed · 2" (a disclosure you can open, its chevron at the right end).
 - The add bar is drawn like the next line of the list: its "+" sits in the chip column and "Add a task" in
   the text column, in a card of its own at the bottom (on the phone above the home indicator).
-- The header is Settings (the logo) on the left, the current list's name with its ⌄, and on the right
+- The header is Settings (the gear) on the left, the current list's name with its ⌄, and on the right
   conflicts (when there are some) and sync (on Windows also the window buttons); lists are switched, added and
   managed from that name ([The list switcher](#the-list-switcher)).
 
@@ -219,7 +219,7 @@ app (and the Linux/macOS window, the same app) draws it as below; the Windows wi
 the same in its own controls, see the end of this section.
 
 ```
- [logo]  Work ⌄ •                              [cloud]    ← display 22/28 ink, ⌄ smoke, • violet
+ [gear]  Work ⌄ •                              [cloud]    ← display 22/28 ink, ⌄ smoke, • violet
         ╭────────────────────────────────╮
         │  ✓  Work                 2 due │                 ← current list checked (violet); "2 due" alert
         │     ───────────────────────────│
@@ -258,7 +258,7 @@ the same in its own controls, see the end of this section.
   move, Enter switches, Esc closes it, Tab closes it and goes on; Ctrl+M (also Shift+F10, the menu key) opens
   the focused list's own menu. Focus goes back to the title.
 - **Windows** (`desktop/widget.ps1`) has the same switcher in WPF, on the frame-coloured header between the
-  logo and the sync and window buttons:
+  gear and the sync and window buttons:
   - The title is the list's name in *title* type (18 / 24, semibold) with a small ⌄ in smoke (it turns while
     the menu is open), a shared list's badge, and the violet dot; one button (UI Automation: a button with
     Invoke and ExpandCollapse, so Narrator says "collapsed" / "expanded"). Its tooltip says which lists are due.

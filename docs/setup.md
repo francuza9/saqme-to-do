@@ -90,7 +90,7 @@ Without options nothing is sent anywhere: the lists stay on this PC. Add sync an
 a pairing link from a device that already syncs there. `setup.cmd -Cloud` does the same from the command line.
 `-CloudOnly` redoes only the cloud part.
 
-**Settings in the Windows app** (the logo at the top left, *Options > Settings*, or Ctrl+,) is a short list of
+**Settings in the Windows app** (the gear at the top left, *Options > Settings*, or Ctrl+,) is a short list of
 pages in two groups; each row shows how it stands on the right (the theme, the time, *Synced 2 min ago*, the
 version). Esc (or the title) goes back one level.
 
@@ -255,7 +255,7 @@ Needs iOS 16.4 or later for notifications (everything else works on older versio
    welcome screen. Type the 8-character code that Safari showed after step 1, or the one under the QR code on
    the computer (**Pair phone**), into *Pairing code or link* and tap **Pair**. A code works once and for 10
    minutes; **Pair phone** shows a new one each time. Pasting the whole pairing link works too.
-4. **Turn on notifications:** tap the logo (top left), then **Notifications**, switch **Notifications** on and
+4. **Turn on notifications:** tap the gear (top left), then **Notifications**, switch **Notifications** on and
    tap **Allow**. **Send a test notification** should show one within seconds (only the Home Screen app may send
    them, not Safari).
 
