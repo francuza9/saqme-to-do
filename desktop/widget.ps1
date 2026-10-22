@@ -2860,8 +2860,30 @@ function Save-AiPromptAs {
   Show-Notice $(if ($err) { $err } else { "Saved $([IO.Path]::GetFileName($dlg.FileName))." })
 }
 
+# Another app's private copy of the data folder (sync-core.ps1 Find-PrivateCopies: the app ran inside that app's container
+# before 1.2.3) with lists or tasks the real folder lacks: offered here, read only. Checked at the start and on this page.
+$script:copyFindings = @()
+function Update-CopyFindings {
+  $found = @()
+  foreach ($c in (Find-PrivateCopies $DataDir)) {
+    $r = Get-BackupRestorePlan (Read-LocalLists $listsDir 1500) $c.Lists $listsDir (Get-SharedFileSet $listsDir)
+    if ($r.Plan -and $r.Plan.Ops.Count) { $found += @{ App = $c.App; Name = $c.Name; Path = $c.Lists; Lists = @($r.Lists); Tasks = $r.Tasks } }
+  }
+  $script:copyFindings = $found
+}
+function Render-CopyFindings {
+  Add-Heading 'In another app''s copy of your data'
+  foreach ($c in $script:copyFindings) {
+    Add-CardRow (New-ActionRow "Bring back from $($c.Name)" { param($x) if (Restore-Missing $x.Path "$($x.Name)'s copy") { Update-CopyFindings; Render } } $c -Value (Format-Missing $c) -Help (Format-Missing $c))
+    Add-CardRow (New-ActionRow "Open $($c.Name)'s copy" { param($x) Start-Process explorer.exe -ArgumentList "`"$($x.Path)`"" } $c -Help (Format-Path $c.Path))
+  }
+  Add-Footnote "A program started from inside another app (an AI assistant's shell in a Store app) worked on that app's private copy of your data folder, so these lists or tasks are not in your real one. Bringing them back adds what is missing and changes nothing else. Saqme never changes that copy; once nothing is missing, you can delete it (keep its cloud.json, if there is one: setup's keys)."
+}
+
 function Render-YourListsPage {
   [void]$list.Children.Add((New-SettingsHeader 'Your lists'))
+  if ($script:view -eq 'yourlists' -and -not $SmokeTest) { Update-CopyFindings }
+  if ($script:copyFindings.Count) { Render-CopyFindings }
   Add-Heading 'Use with AI'
   Add-CardRow (New-ActionRow 'Copy instructions for your AI' { Copy-AiPrompt } -Help 'Where your lists are and how to edit them, to paste into Claude, ChatGPT, Cursor...')
   Add-CardRow (New-ActionRow 'Save them as a file...' { Save-AiPromptAs } -Name 'Save the instructions for your AI as a file' -Help 'SAQME.md, to add to an assistant''s instructions, a Claude Project or a skill')
@@ -2891,25 +2913,31 @@ function Render-BackupsView {
     foreach ($b in $all) {
       $when = $b.At.ToString('d MMM H:mm', $CI)
       $what = "$($b.Lists) $(if ($b.Lists -eq 1) { 'list' } else { 'lists' }), $(Format-BackupReason $b.Reason)"
-      Add-CardRow (New-ActionRow $when { param($x) Restore-Backup $x } $b -Value $what -Name "Bring back from the backup of $when" -Help $what)
+      Add-CardRow (New-ActionRow $when { param($x) [void](Restore-Backup $x) } $b -Value $what -Name "Bring back from the backup of $when" -Help $what)
     }
   }
   Add-Footnote $about
   Add-CardRow (New-ActionRow 'Open the backups folder' { if (-not (Test-Path -LiteralPath $backupsDir)) { [void](New-Item -ItemType Directory -Path $backupsDir -Force) }; Start-Process explorer.exe -ArgumentList "`"$backupsDir`"" } -Help (Format-Path $backupsDir))
 }
 # what a backup has that the lists lack now comes back, after a yes (-Confirmed: the self-check); -> what was done ('' = nothing)
-function Restore-Backup($b, [switch]$Confirmed) {
+function Restore-Backup($b, [switch]$Confirmed) { return (Restore-Missing $b.Path "the backup of $($b.At.ToString('d MMM H:mm', $CI))" -Confirmed:$Confirmed) }
+# "the list(s) X, N tasks in all"
+function Format-Missing($r) {
+  $parts = @()
+  if (@($r.Lists).Count) { $parts += "the $(if (@($r.Lists).Count -eq 1) { 'list' } else { 'lists' }) $(@($r.Lists) -join ', ')" }
+  $parts += "$($r.Tasks) $(if ($r.Tasks -eq 1) { 'task' } else { 'tasks' }) in all"
+  return ($parts -join ', ')
+}
+# what the lists folder $source has (a backup, another app's copy) and the lists lack now comes back (Get-BackupRestorePlan)
+function Restore-Missing([string]$source, [string]$from, [switch]$Confirmed) {
   Commit-Edit
   if ($script:saveFailed) { Save-Items }
-  $r = Get-BackupRestorePlan (Read-LocalLists $listsDir 1500) $b.Path $listsDir (Get-SharedFileSet $listsDir)
+  $r = Get-BackupRestorePlan (Read-LocalLists $listsDir 1500) $source $listsDir (Get-SharedFileSet $listsDir)
   if (-not $r.Plan) { Show-Notice 'A list is being written right now. Try again in a moment.'; return '' }
-  if (-not $r.Plan.Ops.Count) { Show-Notice 'Nothing is missing: everything in that backup is in your lists.'; return '' }
-  $parts = @()
-  if ($r.Lists.Count) { $parts += "the $(if ($r.Lists.Count -eq 1) { 'list' } else { 'lists' }) $($r.Lists -join ', ')" }
-  $parts += "$($r.Tasks) $(if ($r.Tasks -eq 1) { 'task' } else { 'tasks' }) in all"
-  $what = $parts -join ', '
+  if (-not $r.Plan.Ops.Count) { Show-Notice "Nothing is missing: everything in $from is in your lists."; return '' }
+  $what = Format-Missing $r
   if (-not $Confirmed) {
-    $ans = [System.Windows.MessageBox]::Show($w, "Bring back from the backup of $($b.At.ToString('d MMM H:mm', $CI)): $what?`n`nNothing in your lists is removed or changed.", 'Saqme To Do', 'OKCancel', 'Question')
+    $ans = [System.Windows.MessageBox]::Show($w, "Bring back from $($from): $what?`n`nNothing in your lists is removed or changed.", 'Saqme To Do', 'OKCancel', 'Question')
     if ("$ans" -ne 'OK') { return '' }
   }
   [void](New-ListsBackup $DataDir 'restore')
@@ -4192,6 +4220,14 @@ $names = @(Get-ProjectNames)
 $start = $script:cfg.active
 if ($names -notcontains $start) { $start = $names[0] }
 Switch-Project $start
+# another app's private copy of the data folder with something the real one lacks: say so once (Settings > Your lists)
+if (-not $SmokeTest) {
+  try { Update-CopyFindings } catch {}
+  foreach ($c in $script:copyFindings) {
+    $msg = "$($c.Name) has a private copy of your lists folder with what yours lacks ($(Format-Missing $c)). Settings > Your lists can bring it back."
+    Show-Notice $msg; Show-Toast 'Saqme To Do' $msg 'Saqme To Do'
+  }
+}
 
 # live reload when files change on disk (e.g. an AI assistant edits a list or adds a project)
 $script:tick = 0
@@ -4685,6 +4721,11 @@ if ($SmokeTest) {
     Show-View 'list'
     Remove-Item -LiteralPath (Proj-Path 'Backup check') -Force
     Render
+    # another app's private copy with something the real folder lacks: offered on Your lists (not changed, only read)
+    $script:copyFindings = @(@{ App = 'Some.App_abcdefghijklm'; Name = 'Some.App'; Path = $backupsDir; Lists = @('Lost'); Tasks = 3 })
+    Show-View 'yourlists'
+    if (-not (& $find $list 'Bring back from Some.App') -or -not (& $find $list "Open Some.App's copy")) { throw 'Your lists does not offer what another app''s copy has' }
+    $script:copyFindings = @(); Show-View 'list'
     Write-Output 'BACKUP OK'
     $first = @($script:items | Where-Object { $_.Kind -eq 'task' -and $_.Text -eq 'smoke task one' })[0]
     if ($script:sync) {

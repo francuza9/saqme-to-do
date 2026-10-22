@@ -944,6 +944,17 @@ Test-Case 'in another app''s copy, every writer refuses AppData (nothing written
     Remove-Item -LiteralPath $target -Recurse -Force -ErrorAction SilentlyContinue
   }
 }
+Test-Case 'copies of the data folder in other apps'' private AppData are found (only for a data folder in Roaming)' {
+  $root = New-TempLists
+  $ad = Join-Path $root 'Roaming'; $la = Join-Path $root 'Local'
+  [void](New-Item -ItemType Directory -Path (Join-Path $la 'Packages\Claude_pzs8sxrjxfjjc\LocalCache\Roaming\SaqmeToDo\lists'))
+  [void](New-Item -ItemType Directory -Path (Join-Path $la 'Packages\Other.App_abcdefghijklm\LocalCache\Roaming\Else'))
+  $f = Find-PrivateCopies (Join-Path $ad 'SaqmeToDo') $ad $la   # (a list, returned whole)
+  Assert-Eq $f.Count 1
+  Assert-Eq "$($f[0].App) $($f[0].Name)" 'Claude_pzs8sxrjxfjjc Claude'
+  Assert-True ($f[0].Lists.EndsWith('LocalCache\Roaming\SaqmeToDo\lists')) $f[0].Lists
+  Assert-Eq (Find-PrivateCopies 'D:\data\saqme' $ad $la).Count 0 'a data folder elsewhere has none'
+}
 Test-Case 'this test run: inside another app''s copy of AppData or not (reported, not asserted)' {
   $r = Get-AppDataRedirect -Fresh
   Write-Host ("       this shell sees {0}" -f $(if ($r) { "$r's private copy of AppData: the app would start again outside it" } else { 'the real AppData' }))

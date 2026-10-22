@@ -92,6 +92,27 @@ function Assert-RealAppData([string]$path) {
   $app = Get-AppDataRedirect
   if ($app) { throw "Refused to write $path`: this program was started from inside another app ($app), so Windows would keep the change in that app's private copy of AppData instead of your real folder. Start Saqme from the Start menu." }
 }
+# Copies of this data folder that other apps' private AppData holds (the app ran there before 1.2.3, or another
+# program wrote there): @{ App (package folder); Name (its short name); Lists (that copy's lists folder) } each. Only
+# for a data folder in AppData\Roaming. Read, never changed: the widget offers to bring back what they have and the
+# real folder lacks (Get-BackupRestorePlan), in Settings > Your lists.
+function Find-PrivateCopies([string]$dataDir, [string]$AppData = $env:APPDATA, [string]$LocalAppData = $env:LOCALAPPDATA) {
+  $out = New-Object System.Collections.ArrayList
+  if (-not $AppData -or -not $LocalAppData) { return ,$out }
+  try { $full = [IO.Path]::GetFullPath($dataDir).TrimEnd('\'); $root = [IO.Path]::GetFullPath($AppData).TrimEnd('\') + '\' } catch { return ,$out }
+  if (-not $full.StartsWith($root, [StringComparison]::OrdinalIgnoreCase)) { return ,$out }
+  $rel = $full.Substring($root.Length)
+  $pkgs = Join-Path $LocalAppData 'Packages'
+  try { $apps = [IO.Directory]::GetDirectories($pkgs) } catch { return ,$out }
+  foreach ($a in $apps) {
+    $lists = [IO.Path]::Combine($a, 'LocalCache', 'Roaming', $rel, 'lists')
+    if (-not [IO.Directory]::Exists($lists)) { continue }
+    $app = [IO.Path]::GetFileName($a)
+    [void]$out.Add(@{ App = $app; Name = ($app -replace '_[0-9a-z]{13}$', ''); Lists = $lists })   # (without the publisher id)
+  }
+  return ,$out
+}
+
 # Runs $commandLine through WMI: the new process belongs to the WMI service, outside any app's container (its window
 # hidden). -> $true when it started.
 function Start-OutsideContainer([string]$commandLine) {
