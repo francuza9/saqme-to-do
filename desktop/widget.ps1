@@ -2247,9 +2247,10 @@ $stage.ClipToBounds = $true
 [void]$dock.Children.Add($stage)
 $scrollShift = New-Object System.Windows.Media.TranslateTransform; $scroll.RenderTransform = $scrollShift
 $ghostShift = New-Object System.Windows.Media.TranslateTransform; $ghostHost.RenderTransform = $ghostShift
-# the phone app's numbers (app.js): a page 280 ms, Settings from the list and back 200 ms (what leaves: 140 ms),
-# ease-out cubic; the header 140 ms out, 180 ms in
-$MoveMs = 280; $FadeMs = 200; $FadeOutMs = 140; $HeadInMs = 180
+# the phone app's numbers (app.js), ease-out cubic: a page 280 ms; Settings from the list and back a fade through (the
+# view left behind out in 90 ms, the new one in from 60 ms on, in 160 ms, so the two never show at once); the header's
+# parts out in 120 ms, in like the view
+$MoveMs = 280; $FadeOutMs = 90; $FadeDelay = 60; $FadeMs = 160; $HeadOutMs = 120
 $moveEase = New-Object System.Windows.Media.Animation.CubicEase; $moveEase.EasingMode = 'EaseOut'; $moveEase.Freeze()
 $script:move = $null   # the move that runs: @{ Kind; Tracks (what goes from where to where, in how long); Header }
 $script:shownView = $null; $script:movedAt = [datetime]::MinValue; $script:swallowUp = $false
@@ -2263,7 +2264,7 @@ function Test-Motion {
   return ([System.Windows.SystemParameters]::ClientAreaAnimation -and [System.Windows.SystemParameters]::UIEffects -and $w.IsVisible -and $w.WindowState -ne 'Minimized')
 }
 function Get-ViewDepth([string]$v) { $d = 0; while ($v -ne 'list' -and $d -lt 9) { $v = Get-ViewParent $v; $d++ }; return $d }
-function New-Track($target, $prop, [double]$from, [double]$to, [double]$ms, [double]$rest) { return @{ T = $target; P = $prop; From = $from; To = $to; Ms = $ms; Rest = $rest } }
+function New-Track($target, $prop, [double]$from, [double]$to, [double]$ms, [double]$rest, [double]$delay = 0) { return @{ T = $target; P = $prop; From = $from; To = $to; Ms = $ms; Rest = $rest; Delay = $delay } }
 # Instead of $list.Children.Clear() in Render: the view's elements go away, or, when another view comes and things may
 # move, to the ghost (scrolled as they were) while the new view moves in. Then the header follows the view.
 function Clear-View {
@@ -2300,7 +2301,7 @@ function Clear-View {
   } else {
     [System.Windows.Controls.Panel]::SetZIndex($ghostHost, 2); [System.Windows.Controls.Panel]::SetZIndex($scroll, 1)
     [void]$tracks.Add((New-Track $ghostHost $PO 1 0 $FadeOutMs 1))
-    [void]$tracks.Add((New-Track $scroll $PO 0 1 $FadeMs 1)); [void]$tracks.Add((New-Track $scrollShift $PY 8 0 $FadeMs 0))
+    [void]$tracks.Add((New-Track $scroll $PO 0 1 $FadeMs 1 $FadeDelay)); [void]$tracks.Add((New-Track $scrollShift $PY 8 0 $FadeMs 0 $FadeDelay))
   }
   $script:move = @{ Kind = $kind; Tracks = $tracks; Header = $false }
   if (($from -eq 'list') -ne ($to -eq 'list')) {
@@ -2308,7 +2309,7 @@ function Clear-View {
     $script:move.Header = $true
     foreach ($x in @($titleHost, $syncBox, $menuBtn)) {
       $x.Visibility = 'Visible'
-      if ($to -eq 'list') { [void]$tracks.Add((New-Track $x $PO 0 1 $HeadInMs 1)) } else { [void]$tracks.Add((New-Track $x $PO 1 0 $FadeOutMs 1)) }
+      if ($to -eq 'list') { [void]$tracks.Add((New-Track $x $PO 0 1 $FadeMs 1 $FadeDelay)) } else { [void]$tracks.Add((New-Track $x $PO 1 0 $HeadOutMs 1)) }
     }
   }
   Update-Header
@@ -2316,9 +2317,10 @@ function Clear-View {
   $longest = 0
   foreach ($t in $tracks) {
     $a = New-Object System.Windows.Media.Animation.DoubleAnimation($t.From, $t.To, (New-Object System.Windows.Duration([TimeSpan]::FromMilliseconds($t.Ms))))
-    $a.EasingFunction = $moveEase
+    $a.EasingFunction = $moveEase; $a.BeginTime = [TimeSpan]::FromMilliseconds($t.Delay)
+    $t.T.SetValue($t.P, [double]$t.From)   # (where it waits until it begins)
     $t.T.BeginAnimation($t.P, $a)
-    $longest = [math]::Max($longest, $t.Ms)
+    $longest = [math]::Max($longest, $t.Delay + $t.Ms)
   }
   $moveTimer.Interval = [TimeSpan]::FromMilliseconds($longest + 40); $moveTimer.Start()
 }
@@ -2326,7 +2328,7 @@ function Clear-View {
 function Show-ViewMoveAt([double]$ms) {
   if (-not $script:move) { return }
   foreach ($t in $script:move.Tracks) {
-    $p = $ms / $t.Ms; if ($p -lt 0) { $p = 0.0 } elseif ($p -gt 1) { $p = 1.0 }
+    $p = ($ms - $t.Delay) / $t.Ms; if ($p -lt 0) { $p = 0.0 } elseif ($p -gt 1) { $p = 1.0 }
     $p = $moveEase.Ease($p)
     $t.T.BeginAnimation($t.P, $null); $t.T.SetValue($t.P, [double]($t.From + ($t.To - $t.From) * $p))
   }

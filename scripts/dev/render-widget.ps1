@@ -13,10 +13,11 @@
 #     -Open      the list as it looks in use: every task with notes open, and Completed shown
 #     -Menu      also the lists menu (opened under the title), as <Prefix>-menu-<theme>.png
 #     -From      also the move from this view to -View (docs/design.md, "Motion") as frames, <Prefix>-<ms>ms-<theme>.png,
-#                -At milliseconds into it (default 70, 140, 210). Views are otherwise drawn at rest.
+#                -At milliseconds into it (default '70,140,210'). Views are otherwise drawn at rest.
 param([Parameter(Mandatory)][string]$Out, [string]$Prefix = 'desktop', [string]$Project = 'Work', [int]$Width = 440, [int]$Height = 660,
   [string]$View = 'list', [string]$Sample = '', [switch]$Full, [switch]$Busy, [switch]$Advanced, [switch]$Open, [switch]$Menu,
-  [string]$From = '', [int[]]$At = @(70, 140, 210))
+  [string]$From = '', [string]$At = '70,140,210')
+$frames = @($At -split '[,\s]+' | Where-Object { $_ -match '^\d+$' } | ForEach-Object { [int]$_ })
 $ErrorActionPreference = 'Stop'
 $root = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
 $tmp = Join-Path ([IO.Path]::GetTempPath()) ('saqme-render-' + [guid]::NewGuid().ToString('N').Substring(0, 6))
@@ -92,7 +93,7 @@ foreach (`$th in 'dark', 'light') {
     # the move into the view: from -From, held, then drawn at each -At; the view at rest follows, as without -From
     `$script:view = '$($From.Replace("'", "''"))'; Apply-Theme `$th; Render; `$w.UpdateLayout(); & `$settle
     `$script:motion = 'hold'; `$script:view = '$($View.Replace("'", "''"))'; Render; `$w.UpdateLayout(); & `$settle
-    foreach (`$ms in @($(@($At) -join ', '))) { Show-ViewMoveAt `$ms; `$w.UpdateLayout(); & `$frame "`${ms}ms-`$th" }
+    foreach (`$ms in @($($frames -join ', '))) { Show-ViewMoveAt `$ms; `$w.UpdateLayout(); & `$frame "`${ms}ms-`$th" }
     Finish-ViewMove; `$script:motion = 'off'
   }
   Apply-Theme `$th; Render; `$w.UpdateLayout()
