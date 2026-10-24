@@ -492,6 +492,7 @@ it is written) and `API_VERSION`, a whole number that goes up when the Worker le
 | 2 | 1.1.0 | shared lists (`/api/shares/*`, `/api/join/*`) |
 | 3 | 1.1.0 | the relay for lists shared with a phone that has sync of its own (`/api/remotes/*`) |
 | 4 | 1.2.0 | the Worker updates itself (`/api/update/*`, [below](#the-sync-service-updates-itself)) |
+| 5 | after 1.2.5 | the AI connector (`/api/connector`, the MCP endpoint `/api/mcp/<key>`; [ai.md](ai.md#connect-your-ai)) |
 
 Every `/api/health`, `/api/config` and `/api/sync` answer carries `version` and `api` (the local server of the
 Linux/macOS app says the same about itself). An answer without `api` comes from a Worker before 1.1.0: API 1.
@@ -620,6 +621,16 @@ defence, for both. Not opting in leaves the Worker as before: updated only by a 
 The Cloudflare API calls above follow wrangler 4.151's own deploy code (`worker/node_modules/wrangler`), which uses
 the same versions and deployments endpoints; covered by `worker/test/node/self-update.test.js` against a stand-in
 Cloudflare and GitHub.
+
+## The AI connector
+
+The MCP server at `/api/mcp/<key>` ([ai.md](ai.md#connect-your-ai)) is one more writer of the same rows: its tools
+make the field changes a device would (`{ v, ts: now, base: <the ts it read> }`) and apply them with `applyAndWrite`,
+the write path of `/api/sync`, as the device `ai-connector`. So its edits get a `seq`, reach every device with its next
+sync and merge with concurrent edits like a device's (newest wins, the other kept as a conflict); moves change `place`
+only (the subtasks' project too, when a task moves to another list); deletes and restores set `deleted`; a new list is
+a project row. It never removes a row and never deletes a project. A task moved out of a list the owner shares
+leaves the people's copies as `gone`, as any move does. It reads `tz` (the setting the apps sync) for "today".
 
 ## Guarantees and limits
 

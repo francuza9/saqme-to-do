@@ -1,5 +1,5 @@
 // "Use with AI": the instructions an AI assistant needs to manage the lists folder, with this computer's real
-// path filled in. Shown by Settings > Your lists > Use with AI (copy, save as a file) and `saqme ai-prompt`.
+// path filled in. Shown by Settings > Use with AI > With the files (copy, save as a file) and `saqme ai-prompt`.
 // The Windows app has the same text in desktop/rules.ps1 (Get-AiPrompt); shared/fixtures/ai-prompt.json holds
 // the expected output for both, so change the wording in both places and in the fixture's .md files.
 

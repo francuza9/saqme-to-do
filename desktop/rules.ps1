@@ -160,7 +160,7 @@ function Get-Reminders($tasks, [datetime]$Now, [string]$notifyAt, $notified) {
 }
 
 # "Use with AI": the instructions an AI assistant needs to manage the lists folder, with the real path filled in
-# (Settings > Your lists > Use with AI). local/ai-prompt.mjs has the same text for the Linux/macOS app;
+# (Settings > Use with AI > With the files). local/ai-prompt.mjs has the same text for the Linux/macOS app;
 # shared/fixtures/ai-prompt.json holds the expected output for both. LF line endings, ASCII only.
 function Get-AiPrompt([string]$listsDir) {
   $template = @'

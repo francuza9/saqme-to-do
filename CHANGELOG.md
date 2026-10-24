@@ -1,5 +1,29 @@
 # Changes
 
+## Unreleased
+
+**Connect your AI** (docs/ai.md). With sync, Claude, ChatGPT and any assistant that takes an MCP connector manage your
+lists from one URL: Settings > Use with AI > **Copy connector URL**, then add it to the assistant as a custom
+connector (claude.ai: Settings > Connectors > Add custom connector, and it is in the Claude apps on your phone and
+computers too; ChatGPT: Developer mode, Create). No sign-in, no key to type. This is now the recommended way;
+letting an assistant on your computer edit the markdown files stays, under *With the files*.
+
+- **Your sync service is the connector:** an MCP server on your own Worker (`/api/mcp/<key>`). The assistant can see
+  your lists and today's date in your time zone, list tasks by list, status, deadline or text, add tasks (with
+  subtasks), change, move (with their subtasks) and delete them (into *Recently deleted*, restorable), and make
+  lists. It cannot delete a list. Its changes reach every device with the next sync, as one more device's would.
+- **Its own key:** the URL is not your sync key (and does not reveal it). **New connector URL** replaces it,
+  **Disconnect** turns it off; either shuts the old URL out at once. It is ready for everyone with sync, nothing to
+  set up: a sync service set up before gets it with its next update (the Worker updates its own database).
+- **Careful with deletes:** at most 25 deleted tasks an hour through the connector, as the apps hold back mass deletes;
+  more is left to you, in the app. At most 120 calls a minute.
+- **Settings > Use with AI** is a page of its own on Windows, Linux/macOS and the phone: *Connect your AI* first, then
+  (on computers) the instructions for an assistant in the lists folder, which moved there from *Your lists*.
+- Lists others share with you are on their owners' sync services, so the connector cannot reach them; lists you share
+  work as usual.
+- Sync service API 5. Tests: `connector.test.js` (the key, each tool, ids, deletes into Recently deleted, no list
+  delete, sync round trip, shared lists), `connector-engine.test.js` (the AI's edits in a lists folder's files).
+
 ## 1.2.5
 
 - **The lists menu stays open (Windows).** Clicking the list's name at the top opened the lists menu and closed it

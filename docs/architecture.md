@@ -29,6 +29,7 @@
 | `worker/src/schema.js`, `migrations.js` | The Worker updates its own database on the first request after a deploy (the migrations of `worker/migrations/`, recorded in wrangler's `d1_migrations`). |
 | `worker/src/pairing.js` | One-time pairing codes for phones (the app on an iPhone's Home Screen). |
 | `worker/src/shares.js` | Shared lists: invites, claims, the people a list is shared with, share keys, move codes, a share's browser reminders ([sync.md](sync.md#shared-lists)). The scope a share key gets is in `sync.js`. |
+| `worker/src/connector.js`, `mcp.js` | The AI connector: its address and key (an HMAC of the sync key and a nonce in D1), and the MCP server at `/api/mcp/<key>` whose tools read D1 and write through the sync path ([ai.md](ai.md#connect-your-ai)). |
 | `worker/src/remotes.js` | Lists others share with you, kept by your own Worker for your phone apps: the relay to their owners' Workers and the reading of their deadlines for your reminders ([sync.md](sync.md#the-relay-lists-shared-with-a-phone-that-has-its-own-sync)). |
 | `worker/src/merge.js` | Pure merge rules (per field, conflicts, edit vs delete, cycle checks). |
 | `worker/src/sync.js` | D1 access for `/api/sync`: optimistic batches, paging. |
@@ -133,14 +134,16 @@ container): it starts again outside it or refuses ([sync.md](sync.md#another-app
   cache everything; copies of the app hosted elsewhere reach the API across origins (see CORS below).
 - **Auth:** single user. `AUTH_TOKEN` (256-bit, base64url) is a Worker secret; each API call needs
   `Authorization: Bearer <token>`, compared via SHA-256 digests in constant time. `/api/health` is public,
-  and so is `/api/pair/claim`, which answers only for an open pairing code.
+  and so is `/api/pair/claim`, which answers only for an open pairing code. The AI connector's endpoint
+  `/api/mcp/<key>` takes the key in its address instead, and nothing else (below).
 - **D1 tables:** `tasks`, `projects`, `settings`, `conflicts` (all with per-field timestamps and a change
   `seq`), `push_subscriptions`, `notified` (reminder dedupe), `meta` (`seq`, `db_id`, `lock`, `origin`),
   `shares` (the people a list is shared with: digests of their invite code and key, access, revoked) and
   `moved_out` (tasks that left a project, so people it is shared with are told; migration `0002_shares.sql`);
   `share_push` (a share's own push subscriptions, for someone using the list in the browser), `remotes` and
   `remote_tasks` (lists others share with you, for your phones: the relay and your reminders; migration
-  `0003_remotes.sql`). Rows are never hard-deleted: deletes are tombstones, so *Recently deleted* can restore
+  `0003_remotes.sql`); `connector` (the AI connector's nonce, on/off and rate limits; migration
+  `0004_connector.sql`). Rows are never hard-deleted: deletes are tombstones, so *Recently deleted* can restore
   them.
 - **Shared lists:** a share key (from an invite) reaches one project: its `/api/sync` is scoped to it, with
   view access every change is refused; besides that it can leave, make a move code, and keep push
@@ -283,6 +286,17 @@ disagree, decide which side is right, fix the other one and keep the case in the
   itself; no route returns it, no app or D1 row keeps it. Its routes (`/api/update/…`) take the owner's key
   only. The Worker uses it for Cloudflare's API alone, and installs only releases of this repository checked by
   SHA-256; what it can do and what it trusts: [sync.md](sync.md#the-sync-service-updates-itself).
+- **The AI connector** (`worker/src/connector.js`, `mcp.js`): a capability URL, `/api/mcp/<key>`, for Claude, ChatGPT
+  and other MCP clients that add a server by URL. The key is HMAC-SHA-256(`AUTH_TOKEN`, a random nonce kept in D1):
+  D1 holds neither the key nor a digest of it, the sync key cannot be worked out from it, and every app with the sync
+  key can show it (`GET /api/connector`). *New connector URL* replaces the nonce; *Disconnect* turns it off (and
+  replaces it). The endpoint ignores `Authorization` headers, so neither the sync key nor a share key reaches the
+  tools; keys are compared as SHA-256 digests in constant time; a wrong one reads one row and writes nothing (404).
+  Its writes go through the sync merge as device `ai-connector`; no tool deletes a list; deletes are tombstones, at
+  most 25 tasks an hour; 120 calls a minute. Lists shared with the user are not reachable through it (they are on
+  their owners' Workers). The Linux/macOS local server serves no connector of its own and passes the window's
+  Settings > Use with AI to the cloud Worker. Covered by `worker/test/workers/connector.test.js` and
+  `test/node/connector-engine.test.js` (MCP edits reach a lists folder through the desktop engine).
 - **CORS:** the Worker's API answers cross-origin requests, so a copy of the app on a static host can pair
   with it. That gives other sites nothing: there are no cookies, and every call needs the token (the
   pairing code claim needs an open code).

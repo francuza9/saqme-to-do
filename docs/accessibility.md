@@ -15,7 +15,7 @@ part is checked; and what is not verified automatically. Target: WCAG 2.2 level 
   hidden heading naming the list, and one list
   per section (tasks, *Postponed*, *Completed*) under real headings. Each task is a list item with
   `aria-level` for nesting, so "level 2" tells a subtask apart. Settings, each of its pages (General,
-  Notifications, Sync & sharing, Your lists, Updates in the Linux/macOS window, About), *Keyboard shortcuts*,
+  Notifications, Sync & sharing, Your lists, Use with AI, Updates in the Linux/macOS window, About), *Keyboard shortcuts*,
   *Recently deleted* and *Conflicts* have a Back button that says where it goes ("Back to Settings") and a
   level-1 heading; their cards have level-2 headings (level 3 in the Share sheet, under its title).
 - **The list switcher.** The title is a menu button (`aria-haspopup="menu"`, `aria-expanded`) named by the

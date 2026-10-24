@@ -6,7 +6,7 @@ This page lists what you get on each platform, how to start, and what only works
 
 | Platform | Works without an account? | How to start | What needs sync, or is missing |
 |---|---|---|---|
-| **Windows** | Yes, by default | the PowerShell one-liner or `setup.cmd` ([setup.md, 1](setup.md#1-install-on-windows)) | lists on phones and other computers; sharing a list |
+| **Windows** | Yes, by default | the PowerShell one-liner or `setup.cmd` ([setup.md, 1](setup.md#1-install-on-windows)) | lists on phones and other computers; sharing a list; connecting Claude or ChatGPT (the AI connector) |
 | **Linux** | Yes, by default | `curl -fsSL …/scripts/setup.sh \| bash` ([setup.md, 2](setup.md#2-install-on-linux-or-macos)) | the same. Needs Node.js 22.13+; setup downloads one. It runs on x64 with glibc 2.17+ (Ubuntu 18.04, CentOS 7 and newer) and on arm64 with glibc 2.28+; musl (Alpine) needs your own Node.js |
 | **macOS** | Yes, by default | the same command | the same. macOS 11 or newer (setup downloads Node.js 22 on 11–13.4, 24 on 13.5+) |
 | **Android** | Yes | open <https://francuza9.github.io/saqme-to-do/> in Chrome, **Use it on this device**, then **Install app** | **reminders** (push notifications come from your sync service); lists on other devices. Back up with **Export lists** |
@@ -16,8 +16,8 @@ This page lists what you get on each platform, how to start, and what only works
 ## What "without an account" means on each
 
 - **Windows, Linux, macOS:** the full app. Your lists are markdown files in a folder (`%APPDATA%\SaqmeToDo\lists`,
-  `~/.local/share/saqme/lists`, `~/Library/Application Support/Saqme To Do/lists`). An AI assistant can edit them
-  ([ai.md](ai.md)). Reminders come from the computer itself (Windows notifications, `notify-send`, Notification
+  `~/.local/share/saqme/lists`, `~/Library/Application Support/Saqme To Do/lists`). An AI assistant on the computer
+  can edit them ([ai.md, With the files](ai.md#with-the-files)); connecting Claude or ChatGPT by URL needs sync. Reminders come from the computer itself (Windows notifications, `notify-send`, Notification
   Center), and the app updates itself from GitHub releases. **Settings > Sync & sharing** shows *Set up sync*,
   and nothing happens there until you choose it.
 - **Linux and macOS: what has to match the system.** The app is JavaScript run by Node.js (it uses the built-in

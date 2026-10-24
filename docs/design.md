@@ -322,7 +322,7 @@ the same in its own controls, see the end of this section.
   grouped cards: a few rounded shapes on a calm background, hairlines inside, nothing boxed within a card (an
   open task's notes are quiet text, not a box; buttons in a row are text).
 - **Settings is a list of pages.** Settings shows one row per page in two cards (General, Notifications,
-  Sync & sharing, Your lists; then *App*: Updates, About), each with its icon, a short value and a chevron;
+  Sync & sharing, Your lists, Use with AI; then *App*: Updates, About), each with its icon, a short value and a chevron;
   each page is short, cards of one-line rows again. Places you go to have a chevron, actions are violet rows.
   Rare or risky actions sit at the bottom of their page under *Advanced*, a row that opens the rest of its card.
   A quiet meta line under every Settings view says the version; a violet dot (with words) marks what needs a
