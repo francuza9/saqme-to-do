@@ -53,7 +53,7 @@ try {
   // Use with AI: without cloud sync the connector says what it needs; the files option works anyway
   await page.click('[data-fk="open:ai"]');
   await page.waitForSelector('.view-header h1:has-text("Use with AI")');
-  check(await page.isVisible('.g-row:has-text("Connect your AI") .g-value:has-text("Needs sync")') && /Set up sync first/.test(await page.textContent('#list')), 'Use with AI: the connector needs sync, and says so');
+  check(await page.isVisible('.g-row:has-text("Connect your AI") .g-value:has-text("Needs sync")') && /turn on sync first/.test(await page.textContent('#list')), 'Use with AI: connecting an AI app needs sync, and it says so');
   // the instructions with this lists folder in them, on the clipboard and as SAQME.md
   const wanted = aiPrompt(join(dir, 'lists'));
   await page.click('[data-fk="do:Copy instructions for your AI"]');

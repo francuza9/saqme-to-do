@@ -2958,7 +2958,7 @@ function Render-SettingsHome {
   $nl = $(if ($n -eq 1) { '1 list' } else { "$n lists" })
   & $page 'yourlists' $nl $nl 'Lists folder, recently deleted' 0xE8FD
   $ai = Get-AiSummary
-  & $page 'ai' $ai.Short $ai.Text 'Connect Claude, ChatGPT or another assistant, or let one work in the lists folder' 0xE8F2
+  & $page 'ai' $ai.Short $ai.Text 'Connect Claude, ChatGPT or another AI app to your lists' 0xE8F2
   Add-Heading 'App'
   $badge = Get-UpdateBadge
   $upd = $(if ($badge) { $badge } else { Get-UpdateSummary })
@@ -3164,17 +3164,33 @@ function Send-Connector([string]$kind, [string]$done) {
   }
 }
 function Copy-ConnectorUrl {
-  try { [System.Windows.Clipboard]::SetText([string]$script:conn.Status['url']); Show-Notice 'Connector URL copied. Paste it into your AI as a custom connector.' }
+  try { [System.Windows.Clipboard]::SetText([string]$script:conn.Status['url']); Show-Notice 'Link copied. Now paste it into your AI app.' }
   catch { Show-Notice 'Could not copy: another program is using the clipboard.' }
 }
 function Get-AiSummary {
-  if (-not (Read-SyncConfigUi)) { return @{ Short = 'Files'; Text = 'the connector needs sync; an assistant can work in the lists folder' } }
+  if (-not (Read-SyncConfigUi)) { return @{ Short = 'Needs sync'; Text = 'connecting an AI app needs sync' } }
   $s = $script:conn.Status
-  if (-not $s -or (Test-ConnectorTooOld)) { return @{ Short = ''; Text = 'connect your AI' } }
-  if ($s['enabled']) { return @{ Short = 'On'; Text = 'your AI connector is on' } }
-  return @{ Short = 'Off'; Text = 'your AI connector is off' }
+  if (-not $s -or (Test-ConnectorTooOld)) { return @{ Short = ''; Text = 'connect Claude, ChatGPT or another AI app' } }
+  if ($s['enabled']) { return @{ Short = 'On'; Text = 'your AI link is on' } }
+  return @{ Short = 'Off'; Text = 'your AI link is off' }
 }
-$script:AiCanDo = 'It can read your lists, add, change, move and delete tasks (deleted ones go to Recently deleted) and make new lists; it cannot delete a list.'
+# the steps, in the same plain words as docs/ai.md and the phone app (worker/public/js/app.js ASSISTANTS)
+$script:AiSteps = [ordered]@{
+  Claude  = @(
+    '1. Click Copy link (above).',
+    '2. Go to claude.ai, open Settings > Connectors and click Add custom connector.',
+    '3. Type Saqme as the name, paste the link into the URL box, and click Add.',
+    '4. Start a new chat, click the + button under the message box and switch Saqme on.',
+    '5. Ask "What''s due this week?" When Claude asks to use Saqme, click Allow.',
+    'Saqme then works in the Claude apps on your phone and computer too.')
+  ChatGPT = @(
+    '1. Click Copy link (above).',
+    '2. Go to chatgpt.com, open Settings > Apps & Connectors > Advanced settings and switch on Developer mode.',
+    '3. Back in Apps & Connectors, click Create. Type Saqme as the name and paste the link into the URL box.',
+    '4. Under Authentication, choose No authentication, tick I trust this application and click Create.',
+    '5. In a new chat, click +, then More > Developer mode, and pick Saqme. Ask "What''s due this week?" and click Confirm when ChatGPT asks.',
+    'Developer mode needs a paid ChatGPT plan and works on chatgpt.com in a browser. In newer versions, Apps & Connectors is called Apps.')
+}
 function Render-AiPage {
   [void]$list.Children.Add((New-SettingsHeader 'Use with AI'))
   if ($script:view -eq 'ai' -and -not $SmokeTest) { Step-ConnectorStatus }
@@ -3183,42 +3199,36 @@ function Render-AiPage {
   if (-not (Read-SyncConfigUi)) {
     Add-CardRow (New-InfoRow 'Connect your AI' 'Needs sync')
     Add-CardRow (New-LinkRow 'Sync & sharing' 'Off' 'sync' -Help 'Set up sync')
-    Add-Footnote "Claude, ChatGPT and other assistants connect to your lists through your sync service: one URL, nothing to type. $($script:AiCanDo) Set up sync first (free, in your own Cloudflare account), or let an assistant on this PC work in the lists folder (below)."
+    Add-Footnote 'To connect Claude, ChatGPT or another AI app, turn on sync first (free): Settings > Sync & sharing > Set up sync. Without sync, an AI app on this PC can still work with your list files (Other ways, below).'
   } elseif (Test-ConnectorTooOld) {
     Add-CardRow (New-InfoRow 'Connect your AI' 'Not yet')
-    Add-Footnote 'Your sync service runs an older version, without the AI connector yet. It gets it with its next update (Settings > Updates); then Claude, ChatGPT and other assistants can connect to your lists with one URL.'
+    Add-Footnote 'Your sync needs an update first. It gets it with the next update (Settings > Updates); then come back here.'
   } elseif (-not $s) {
-    Add-CardRow (New-InfoRow 'Connect your AI' $(if ($c.Error) { 'Not reachable' } else { 'Asking...' }))
-    if ($c.Error) { Add-Footnote "Could not ask your sync service: $($c.Error)" $Red }
+    Add-CardRow (New-InfoRow 'Connect your AI' $(if ($c.Error) { 'Not reachable' } else { 'Checking...' }))
+    if ($c.Error) { Add-Footnote "Could not reach your sync: $($c.Error)" $Red }
   } elseif (-not $s['enabled']) {
-    Add-CardRow (New-ActionRow 'Connect your AI' { Send-Connector 'rotate' 'Connected: copy the connector URL into your assistant.' } -Help 'Makes a connector URL for Claude, ChatGPT or another assistant')
-    Add-Footnote "Off: no assistant can reach your lists. Connect your AI makes a new connector URL. $($script:AiCanDo)"
+    Add-CardRow (New-ActionRow 'Connect your AI' { Send-Connector 'rotate' 'Connected. Now copy the link into your AI app.' } -Help 'Makes a new link for Claude, ChatGPT or another AI app')
+    Add-Footnote 'Off: no AI app can see your lists. Connect your AI makes a new link.'
   } else {
-    Add-CardRow (New-ActionRow 'Copy connector URL' { Copy-ConnectorUrl } -Help 'Paste it into your AI as a custom connector: nothing else to type')
-    Add-Footnote "Add the URL to your assistant as a custom connector (an MCP server, no sign-in); any assistant that takes one works. $($script:AiCanDo)"
-    Add-Heading 'Claude'
-    Add-Footnote ("1. On claude.ai (or in the Claude app): Settings > Connectors > Add custom connector.`n" +
-      "2. Name it Saqme, paste the connector URL as the server URL, click Add. Leave the advanced (OAuth) settings empty.`n" +
-      "3. In a chat, switch Saqme on in the tools menu (the + or the sliders under the box). Then ask: ""What is due this week?""`n" +
-      'A connector added on claude.ai is in the Claude apps on your phone and computers too.')
-    Add-Heading 'ChatGPT'
-    Add-Footnote ("1. On chatgpt.com: Settings > Apps & Connectors > Advanced settings, turn on Developer mode.`n" +
-      "2. Back in Apps & Connectors: Create. Name: Saqme; MCP server URL: paste the connector URL; Authentication: No authentication. Confirm that you trust it, then Create.`n" +
-      "3. In a chat: + > Developer mode, and pick Saqme. ChatGPT asks before each change.`n" +
-      'Developer mode is for paid plans, on the web. The names of these menus change now and then; the steps stay the same.')
-    Add-Heading 'Connector URL'
-    Add-CardRow (New-ActionRow 'New connector URL' {
-        $q = [System.Windows.MessageBox]::Show($w, "Make a new connector URL?`n`nThe URL your assistants have now stops working at once. Paste the new one into each assistant you want to keep connected.", 'Saqme To Do', 'YesNo', 'Question')
-        if ("$q" -eq 'Yes') { Send-Connector 'rotate' 'New connector URL made. The old one no longer works.' } } -Help 'The old URL stops working at once')
+    Add-CardRow (New-ActionRow 'Copy link' { Copy-ConnectorUrl } -Name 'Copy link for your AI app' -Help 'Paste it into Claude, ChatGPT or another AI app')
+    Add-Footnote 'Paste the link into your AI app once (the steps are below). Then ask it things like "What''s due this week?" or "Add milk to Groceries". It can see and change your tasks and make new lists, but it can''t delete a list, and what it deletes waits in Recently deleted for 30 days.'
+    foreach ($app in $script:AiSteps.Keys) {
+      Add-Heading "Connect $app"
+      Add-Footnote ($script:AiSteps[$app] -join "`n")
+    }
+    Add-Heading 'Your link'
+    Add-CardRow (New-ActionRow 'Make a new link' {
+        $q = [System.Windows.MessageBox]::Show($w, "Make a new link?`n`nThe link your AI apps have now stops working. Paste the new link into each AI app you still want to use.", 'Saqme To Do', 'YesNo', 'Question')
+        if ("$q" -eq 'Yes') { Send-Connector 'rotate' 'New link made. The old one no longer works.' } } -Help 'The old link stops working')
     Add-CardRow (New-ActionRow 'Disconnect' {
-        $q = [System.Windows.MessageBox]::Show($w, "Disconnect your AI?`n`nEvery assistant that has the connector URL loses access to your lists at once. Connect your AI makes a new URL whenever you want one again.", 'Saqme To Do', 'YesNo', 'Question')
-        if ("$q" -eq 'Yes') { Send-Connector 'disconnect' 'Disconnected. No assistant can reach your lists now.' } } -Danger -Name 'Disconnect your AI' -Help 'No assistant can reach your lists until you connect again')
-    Add-Footnote 'The URL is the key: whoever has it can read and change your lists, so keep it to your own assistants. It is not your sync key, and a new one (or Disconnect) shuts out the old one at once.'
+        $q = [System.Windows.MessageBox]::Show($w, "Disconnect your AI?`n`nNo AI app can see or change your lists any more. You can connect again any time, with a new link.", 'Saqme To Do', 'YesNo', 'Question')
+        if ("$q" -eq 'Yes') { Send-Connector 'disconnect' 'Disconnected. No AI app can see your lists now.' } } -Danger -Name 'Disconnect your AI' -Help 'No AI app can see your lists until you connect again')
+    Add-Footnote 'Keep the link private, like a password: anyone who has it can see and change your lists. If it got out, make a new link; the old one stops working at once.'
   }
-  Add-Heading 'With the files'
-  Add-CardRow (New-ActionRow 'Copy instructions for your AI' { Copy-AiPrompt } -Help 'Where your lists are and how to edit them, for Claude Code, Codex, Cursor...')
-  Add-CardRow (New-ActionRow 'Save them as a file...' { Save-AiPromptAs } -Name 'Save the instructions for your AI as a file' -Help 'SAQME.md, to add to an assistant''s instructions, a Claude Project or a skill')
-  Add-Footnote 'For an assistant on this PC that opens files (Claude Code, Codex, Cursor), also without sync or offline: your lists are plain markdown files, and these instructions tell it where they are, the format and what it must not do.'
+  Add-Heading 'Other ways'
+  Add-CardRow (New-ActionRow 'Copy instructions for your AI' { Copy-AiPrompt } -Help 'Where your list files are and how to edit them, for Claude Code, Codex, Cursor...')
+  Add-CardRow (New-ActionRow 'Save them as a file...' { Save-AiPromptAs } -Name 'Save the instructions for your AI as a file' -Help 'SAQME.md, to add to an AI app''s instructions or a skill')
+  Add-Footnote 'For AI apps that work with files on this PC (Claude Code, Codex, Cursor), also without sync: your lists are files, and these instructions tell the AI where they are and how to edit them safely.'
 }
 
 # ---------------------------------------------------------------- Settings > Your lists > Backups (sync-core.ps1 New-ListsBackup)
@@ -4725,12 +4735,12 @@ if ($SmokeTest) {
     $connWas = $script:conn.Status
     $script:conn.Status = @{ enabled = $true; url = 'https://saqme.example.workers.dev/api/mcp/abc'; createdAt = 1; lastUsedAt = $null }
     Show-View 'ai'
-    foreach ($k in 'Copy connector URL', 'New connector URL', 'Disconnect your AI', 'Copy instructions for your AI') { if (-not (& $find $list $k)) { throw "Use with AI: '$k' missing" } }
+    foreach ($k in 'Copy link for your AI app', 'Make a new link', 'Disconnect your AI', 'Copy instructions for your AI') { if (-not (& $find $list $k)) { throw "Use with AI: '$k' missing" } }
     $aiText = (@($list.Children | Where-Object { $_ -is [System.Windows.Controls.TextBlock] } | ForEach-Object { $_.Text }) -join "`n")
     if (-not $aiText.Contains('Add custom connector') -or -not $aiText.Contains('No authentication')) { throw 'Use with AI: the steps for Claude and ChatGPT are missing' }
     $script:conn.Status = @{ enabled = $false; url = $null }
     Show-View 'ai'
-    if (-not (& $find $list 'Connect your AI') -or (& $find $list 'Copy connector URL')) { throw 'Use with AI: off, it offers Connect your AI only' }
+    if (-not (& $find $list 'Connect your AI') -or (& $find $list 'Copy link for your AI app')) { throw 'Use with AI: off, it offers Connect your AI only' }
     $script:conn.Status = $connWas
     if (-not $hadCfg) { Remove-Item -LiteralPath $syncCfgFile -Force }
     $keys = @(Read-Lines $cfgFile | Where-Object { $_ -match '^\w+=' } | ForEach-Object { ($_ -split '=', 2)[0] } | Sort-Object)

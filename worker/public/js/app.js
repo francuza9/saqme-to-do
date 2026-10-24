@@ -1826,7 +1826,7 @@ function settingsHome() {
       page('notifications', notificationSummary(), ui.local ? 'Daily summary' : 'Daily summary, notifications on this device', 'bell'),
       page('sync', syncSummary(), `${ui.local ? 'Set up sync or how it stands' : 'Pairing or how sync stands'}, pair a phone, conflicts, shared lists`, 'cloud'),
       page('lists', listsSummary(), `${ui.local ? 'Lists folder, ' : ''}export, import, recently deleted`, 'lists'),
-      page('ai', aiSummary(), `Connect Claude, ChatGPT or another assistant${ui.local ? ', or let one work in the lists folder' : ''}`, 'chat'),
+      page('ai', aiSummary(), 'Connect Claude, ChatGPT or another AI app to your lists', 'chat'),
     ),
     head('App'),
     card(
@@ -2040,22 +2040,28 @@ async function connectorAction(kind, done) {
   render();
 }
 function aiSummary() {
-  if (!hasOwnSync()) return { short: ui.local ? 'Files' : 'Needs sync', text: ui.local ? 'the connector needs sync; an assistant can work in the lists folder' : 'connecting an AI needs sync' };
+  if (!hasOwnSync()) return { short: 'Needs sync', text: 'connecting an AI app needs sync' };
   const c = ui.connector;
-  if (!c || connectorTooOld()) return { short: '', text: 'connect your AI' };
-  return c.enabled ? { short: 'On', text: `your AI connector is on${c.lastUsedAt ? `, used ${ago(c.lastUsedAt)}` : ''}` } : { short: 'Off', text: 'your AI connector is off' };
+  if (!c || connectorTooOld()) return { short: '', text: 'connect Claude, ChatGPT or another AI app' };
+  return c.enabled ? { short: 'On', text: `your AI link is on${c.lastUsedAt ? `, used ${ago(c.lastUsedAt)}` : ''}` } : { short: 'Off', text: 'your AI link is off' };
 }
+// The steps, in the same words as docs/ai.md ("Connect Claude", "Connect ChatGPT"); the first one is the Copy link
+// button of the sheet itself. Plain words only: the people who need them most have never heard of MCP.
 const ASSISTANTS = {
   claude: ['Claude', () => [
-    ['On claude.ai (or in the Claude app on a computer): ', h('b', {}, 'Settings › Connectors › Add custom connector'), '.'],
-    ['Name it Saqme, paste the connector URL as the server URL and click ', h('b', {}, 'Add'), '. Leave the advanced (OAuth) settings empty.'],
-    ['In a chat, switch Saqme on in the tools menu (the + or the sliders under the box). Then ask: “What is due this week?”'],
-  ], 'A connector added on claude.ai is in the Claude apps on your phone and computers too. Claude asks before it changes something, unless you let it always.'],
+    ['Copy the link (the ', h('b', {}, 'Copy link'), ' button below).'],
+    ['Go to claude.ai, open ', h('b', {}, 'Settings › Connectors'), ' and click ', h('b', {}, 'Add custom connector'), '.'],
+    ['Type ', h('b', {}, 'Saqme'), ' as the name, paste the link into the ', h('b', {}, 'URL'), ' box, and click ', h('b', {}, 'Add'), '.'],
+    ['Start a new chat, click the ', h('b', {}, '+'), ' button under the message box and switch ', h('b', {}, 'Saqme'), ' on.'],
+    ['Ask “What’s due this week?” When Claude asks to use Saqme, click ', h('b', {}, 'Allow'), '.'],
+  ], 'Saqme then works in the Claude apps on your phone and computer too.'],
   chatgpt: ['ChatGPT', () => [
-    ['On chatgpt.com: ', h('b', {}, 'Settings › Apps & Connectors › Advanced settings'), ', turn on ', h('b', {}, 'Developer mode'), '.'],
-    ['Back in Apps & Connectors: ', h('b', {}, 'Create'), '. Name: Saqme; MCP server URL: paste the connector URL; Authentication: ', h('b', {}, 'No authentication'), '. Confirm that you trust it, then Create.'],
-    ['In a chat: + › Developer mode, and pick Saqme. ChatGPT asks before each change.'],
-  ], 'Developer mode is for paid plans, on the web. The names of these menus change now and then; the steps stay the same: add a custom connector (MCP server) with this URL and no sign-in.'],
+    ['Copy the link (the ', h('b', {}, 'Copy link'), ' button below).'],
+    ['Go to chatgpt.com, open ', h('b', {}, 'Settings › Apps & Connectors › Advanced settings'), ' and switch on ', h('b', {}, 'Developer mode'), '.'],
+    ['Back in ', h('b', {}, 'Apps & Connectors'), ', click ', h('b', {}, 'Create'), '. Type ', h('b', {}, 'Saqme'), ' as the name and paste the link into the ', h('b', {}, 'URL'), ' box.'],
+    ['Under ', h('b', {}, 'Authentication'), ', choose ', h('b', {}, 'No authentication'), ', tick ', h('b', {}, 'I trust this application'), ' and click ', h('b', {}, 'Create'), '.'],
+    ['In a new chat, click ', h('b', {}, '+'), ', then ', h('b', {}, 'More › Developer mode'), ', and pick ', h('b', {}, 'Saqme'), '. Ask “What’s due this week?” and click ', h('b', {}, 'Confirm'), ' when ChatGPT asks.'],
+  ], 'Developer mode needs a paid ChatGPT plan and works on chatgpt.com in a browser. In newer versions, Apps & Connectors is called Apps.'],
 };
 function assistantSteps(id) {
   const [name, steps, note] = ASSISTANTS[id];
@@ -2064,52 +2070,51 @@ function assistantSteps(id) {
     h('ol', { class: 'steps' }, steps().map((s) => h('li', {}, ...s))),
     h('p', { class: 'sheet-note' }, note),
     h('div', { class: 'btn-row' },
-      url ? h('button', { class: 'btn', onclick: () => copyText(url, 'Connector URL copied') }, 'Copy connector URL') : null,
+      url ? h('button', { class: 'btn', onclick: () => copyText(url, 'Link copied. Now paste it into your AI app.') }, 'Copy link') : null,
       h('button', { class: 'btn primary', onclick: closeSheet }, 'Done')),
   ]);
 }
 function confirmConnector(kind) {
   const rotate = kind === 'rotate';
-  sheet(rotate ? 'Make a new connector URL?' : 'Disconnect your AI?', [
-    h('p', {}, rotate ? 'The URL your assistants have now stops working at once. Paste the new one into each assistant you want to keep connected (it replaces the old connector there).'
-      : 'Every assistant that has the connector URL loses access to your lists at once. Connect your AI makes a new URL whenever you want one again.'),
+  sheet(rotate ? 'Make a new link?' : 'Disconnect your AI?', [
+    h('p', {}, rotate ? 'The link your AI apps have now stops working. Paste the new link into each AI app you still want to use.'
+      : 'No AI app can see or change your lists any more. You can connect again any time, with a new link.'),
     h('div', { class: 'btn-row' }, h('button', { class: 'btn', onclick: closeSheet }, 'Cancel'),
-      h('button', { class: 'btn primary', onclick: () => { closeSheet(); connectorAction(kind, rotate ? 'New connector URL made. The old one no longer works.' : 'Disconnected. No assistant can reach your lists now.'); } }, rotate ? 'Make a new URL' : 'Disconnect')),
+      h('button', { class: 'btn primary', onclick: () => { closeSheet(); connectorAction(kind, rotate ? 'New link made. The old one no longer works.' : 'Disconnected. No AI app can see your lists now.'); } }, rotate ? 'Make a new link' : 'Disconnect')),
   ]);
 }
 function aiPage() {
   const out = [head('Connect your AI')];
-  const what = 'It can read your lists, add, change, move and delete tasks (deleted ones go to Recently deleted) and make new lists; it cannot delete a list.';
   if (!hasOwnSync()) {
     out.push(card(infoRow('Connect your AI', 'Needs sync'), linkRow('Sync & sharing', ui.local ? 'Off' : 'Not paired', 'sync', { help: ui.local ? 'Set up sync' : 'Pair this device' })));
-    out.push(foot(ui.local ? `Claude, ChatGPT and other assistants connect to your lists through your sync service: one URL, nothing to type. ${what} Set up sync first (free, in your own Cloudflare account), or let an assistant on this computer work in the lists folder (below).`
-      : `Claude, ChatGPT and other assistants connect to your lists through your sync service: one URL, nothing to type. ${what} Set up sync on a computer (Settings › Sync & sharing there), then pair this phone.`));
+    out.push(foot(ui.local ? 'To connect Claude, ChatGPT or another AI app, turn on sync first (free): Settings › Sync & sharing › Set up sync. Without sync, an AI app on this computer can still work with your list files (Other ways, below).'
+      : 'To connect Claude, ChatGPT or another AI app, turn on sync on your computer first (free; Settings › Sync & sharing there), then pair this phone.'));
   } else if (connectorTooOld()) {
-    out.push(card(infoRow('Connect your AI', 'Not yet')), foot(`Your sync service runs an older version, without the AI connector yet. It gets it with its next update (Settings › Updates${ui.local ? '' : ' on your computer'}); then Claude, ChatGPT and other assistants can connect to your lists with one URL.`));
+    out.push(card(infoRow('Connect your AI', 'Not yet')), foot(`Your sync needs an update first. It gets it with the next update (Settings › Updates${ui.local ? '' : ' on your computer'}); then come back here.`));
   } else if (!ui.connector) {
-    out.push(card(infoRow('Connect your AI', ui.connectorError ? 'Not reachable' : 'Asking…')), ui.connectorError ? foot(`Could not ask your sync service: ${ui.connectorError}`, { alert: true }) : null);
+    out.push(card(infoRow('Connect your AI', ui.connectorError ? 'Not reachable' : 'Checking…')), ui.connectorError ? foot(`Could not reach your sync: ${ui.connectorError}`, { alert: true }) : null);
   } else if (!ui.connector.enabled) {
-    out.push(card(actionRow('Connect your AI', () => connectorAction('rotate', 'Connected: copy the connector URL into your assistant.'), { help: 'Makes a connector URL for Claude, ChatGPT or another assistant', fk: 'ai-connect' })));
-    out.push(foot(`Off: no assistant can reach your lists. Connect your AI makes a new connector URL. ${what}`));
+    out.push(card(actionRow('Connect your AI', () => connectorAction('rotate', 'Connected. Now copy the link into your AI app.'), { help: 'Makes a new link for Claude, ChatGPT or another AI app', fk: 'ai-connect' })));
+    out.push(foot('Off: no AI app can see your lists. Connect your AI makes a new link.'));
   } else {
     const c = ui.connector;
     out.push(card(
-      actionRow('Copy connector URL', () => copyText(c.url, 'Connector URL copied. Paste it into your AI as a custom connector.'), { help: 'Paste it into your AI as a custom connector: nothing else to type', fk: 'ai-copy' }),
-      actionRow('Connect Claude', () => assistantSteps('claude'), { help: 'The steps on claude.ai (the Claude apps get it from there)', fk: 'ai-claude' }),
-      actionRow('Connect ChatGPT', () => assistantSteps('chatgpt'), { help: 'The steps on chatgpt.com (Developer mode)', fk: 'ai-chatgpt' }),
+      actionRow('Copy link', () => copyText(c.url, 'Link copied. Now paste it into your AI app.'), { name: 'Copy link for your AI app', help: 'Paste it into Claude, ChatGPT or another AI app', fk: 'ai-copy' }),
+      actionRow('Connect Claude', () => assistantSteps('claude'), { help: 'Step by step', fk: 'ai-claude' }),
+      actionRow('Connect ChatGPT', () => assistantSteps('chatgpt'), { help: 'Step by step', fk: 'ai-chatgpt' }),
     ));
-    out.push(foot(`Add the URL to your assistant as a custom connector (an MCP server, no sign-in); any assistant that takes one works. ${what}${c.lastUsedAt ? ` Last used ${ago(c.lastUsedAt)}.` : ''}`));
+    out.push(foot(`Paste the link into your AI app once (Connect Claude and Connect ChatGPT show how). Then ask it things like “What’s due this week?” or “Add milk to Groceries”. It can see and change your tasks and make new lists, but it can’t delete a list, and what it deletes waits in Recently deleted for 30 days.${c.lastUsedAt ? ` Last used ${ago(c.lastUsedAt)}.` : ''}`));
     out.push(card(
-      actionRow('New connector URL', () => confirmConnector('rotate'), { help: 'The old URL stops working at once', fk: 'ai-rotate' }),
-      actionRow('Disconnect', () => confirmConnector('disconnect'), { danger: true, name: 'Disconnect your AI', help: 'No assistant can reach your lists until you connect again', fk: 'ai-disconnect' }),
+      actionRow('Make a new link', () => confirmConnector('rotate'), { help: 'The old link stops working', fk: 'ai-rotate' }),
+      actionRow('Disconnect', () => confirmConnector('disconnect'), { danger: true, name: 'Disconnect your AI', help: 'No AI app can see your lists until you connect again', fk: 'ai-disconnect' }),
     ));
-    out.push(foot('The URL is the key: whoever has it can read and change your lists, so keep it to your own assistants. It is not your sync key, and a new one (or Disconnect) shuts out the old one at once.'));
+    out.push(foot('Keep the link private, like a password: anyone who has it can see and change your lists. If it got out, make a new link; the old one stops working at once.'));
   }
   if (ui.local) {
-    out.push(head('With the files'), card(
-      actionRow('Copy instructions for your AI', () => aiInstructions(false), { help: 'Where your lists are and how to edit them, for Claude Code, Codex, Cursor…' }),
-      actionRow('Save them as a file…', () => aiInstructions(true), { name: 'Save the instructions for your AI as a file', help: 'SAQME.md, to add to an assistant’s instructions, a Claude Project or a skill' }),
-    ), foot('For an assistant on this computer that opens files (Claude Code, Codex, Cursor), also without sync or offline: your lists are plain markdown files, and these instructions tell it where they are, the format and what it must not do.'));
+    out.push(head('Other ways'), card(
+      actionRow('Copy instructions for your AI', () => aiInstructions(false), { help: 'Where your list files are and how to edit them, for Claude Code, Codex, Cursor…' }),
+      actionRow('Save them as a file…', () => aiInstructions(true), { name: 'Save the instructions for your AI as a file', help: 'SAQME.md, to add to an AI app’s instructions or a skill' }),
+    ), foot('For AI apps that work with files on this computer (Claude Code, Codex, Cursor), also without sync: your lists are files, and these instructions tell the AI where they are and how to edit them safely.'));
   }
   return out;
 }

@@ -439,10 +439,13 @@ await page.tap('.view-header .back');
 await page.tap('[data-fk="open:ai"]');
 await page.waitForSelector('[data-fk="ai-copy"]');
 check(await page.isVisible('[data-fk="ai-rotate"]') && await page.isVisible('[data-fk="ai-disconnect"]') && !(await page.isVisible('[data-fk="do:Copy instructions for your AI"]')),
-  'Use with AI: Copy connector URL, New connector URL, Disconnect (no files option on a phone)');
+  'Use with AI: Copy link, Make a new link, Disconnect (no files option on a phone)');
+const aiText = await page.textContent('#list');
+check(!/MCP|endpoint|OAuth|Worker|token|server/i.test(aiText), `Use with AI: plain words, no jargon (${(aiText.match(/MCP|endpoint|OAuth|Worker|token|server/i) ?? [''])[0]})`);
 await page.tap('[data-fk="ai-claude"]');
 await page.waitForSelector('#sheet:has-text("Add custom connector")');
-check(await page.isVisible('#sheet button:has-text("Copy connector URL")'), 'Use with AI: the Claude steps, with the URL to copy');
+check(await page.isVisible('#sheet button:has-text("Copy link")') && await page.$$eval('#sheet ol.steps li', (l) => l.length) <= 5, 'Use with AI: the Claude steps (5 at most), with the link to copy');
+check(!/MCP|endpoint|OAuth|Worker|token|server/i.test(await page.textContent('#sheet')), 'Use with AI: the steps are in plain words');
 await page.keyboard.press('Escape');
 await page.tap('.view-header .back');
 

@@ -515,7 +515,7 @@ export async function startApp({ dataDir = defaultDataDir(), port, interval = 10
     now: () => ownerApi('POST', 'update/now', {}, noSync),
   };
   // the AI connector (worker/src/connector.js), for Settings > Use with AI: the Worker's own routes
-  const noConnector = { need: 'Connecting an AI needs cloud sync (Settings, Sync & sharing). Without it, use the lists folder (Settings, Use with AI).' };
+  const noConnector = { need: 'Connecting an AI app needs sync (Settings, Sync & sharing).' };
   const connector = {
     status: () => ownerApi('GET', 'connector', undefined, noConnector),
     rotate: () => ownerApi('POST', 'connector/rotate', {}, noConnector),

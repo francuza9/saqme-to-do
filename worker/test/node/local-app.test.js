@@ -122,7 +122,7 @@ describe('local app server', () => {
     // without cloud sync: it says what it needs
     const off = await get('local/connector');
     expect(off.status).toBe(409);
-    expect((await off.json()).error).toMatch(/needs cloud sync/);
+    expect((await off.json()).error).toMatch(/needs sync/);
     mkdirSync(join(dir, 'sync'), { recursive: true });
     writeFileSync(join(dir, 'sync', 'config.json'), JSON.stringify({ url: `http://127.0.0.1:${cloud.address().port}`, token: key, deviceId: 'pc-x', enabled: true }));
     try {

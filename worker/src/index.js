@@ -130,7 +130,7 @@ async function handleApi(request, env, url, ctx) {
   const mcp = /^\/api\/mcp\/([^/]*)\/?$/.exec(url.pathname);
   if (mcp || url.pathname === '/api/mcp') {
     if (!mcp || !(await connectorAuthorized(env, mcp[1]))) {
-      return json({ error: 'This Saqme connector address does not work (any more). Copy the current one from Saqme: Settings > Use with AI.' }, 404);
+      return json({ error: 'This Saqme link does not work (any more). Copy the current link in Saqme: Settings > Use with AI.' }, 404);
     }
     if (!(await connectorRateOk(env))) return json({ error: `Too many requests: at most ${RATE_LIMIT} a minute.` }, 429);
     return handleMcp(request, env);
