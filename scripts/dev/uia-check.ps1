@@ -200,7 +200,7 @@ try {
   [void](& $invoke $settings 'the Settings button')
   $acc = Test-View 'settings view' $win
   $pages = @($acc | Where-Object { $_.Type -eq 'Button' -and $_.El.Current.AutomationId -like 'open-*' } | ForEach-Object { ($_.Name -split ', ')[0] })
-  Check (($pages -join ' | ') -eq 'General | Notifications | Sync & sharing | Your lists | Updates | About') "Settings is a list of its pages ($($pages -join ' | '))"
+  Check (($pages -join ' | ') -eq 'General | Notifications | Sync & sharing | Your lists | Use with AI | Updates | About') "Settings is a list of its pages ($($pages -join ' | '))"
   Check (@($acc | Where-Object { $_.Type -eq 'Button' -and $_.El.Current.AutomationId -eq 'open-sync' -and $_.Name -match '^Sync & sharing, .+' }).Count -eq 1) 'each page row says how it stands (Sync & sharing, ...)'
   Check (@($acc | Where-Object { $_.Type -eq 'Text' -and $_.Name -match '^Saqme To Do \d+\.\d+\.\d+$' }).Count -eq 1) 'the version line is read out'
   Check (@($acc | Where-Object { $_.Type -eq 'Text' -and $_.Name -eq 'App' }).Count -eq 1) "the second card's heading (App) is read out"
@@ -221,7 +221,7 @@ try {
   $order = @(Get-Content $orderFile)
   [void]$report.AppendLine('== Tab order (settings view)'); foreach ($o in $order) { [void]$report.AppendLine("  $o") }
   $iBack = [array]::IndexOf($order, 'Settings - back to the list'); $iClose = [array]::IndexOf($order, ($order | Where-Object { $_ -like 'Close*' } | Select-Object -First 1))
-  $rowOrder = @($order | Where-Object { $_ -match '^(General|Notifications|Sync & sharing|Your lists|Updates|About), ' } | ForEach-Object { ($_ -split ', ')[0] })
+  $rowOrder = @($order | Where-Object { $_ -match '^(General|Notifications|Sync & sharing|Your lists|Use with AI|Updates|About), ' } | ForEach-Object { ($_ -split ', ')[0] })
   Check ($iBack -gt $iClose -and ($rowOrder -join ' | ') -eq ($pages -join ' | ') -and [array]::IndexOf($order, ($order | Where-Object { $_ -like 'General, *' } | Select-Object -First 1)) -gt $iBack) "Tab order: window buttons, then the header (Back), then the pages in order"
 
   if (& $invoke (& $byId 'open-general') 'the General row') {
@@ -259,7 +259,12 @@ try {
   if (& $invoke (& $byId 'open-yourlists') 'the Your lists row') {
     $acc = Test-View 'Settings > Your lists' $win
     Check (@($acc | Where-Object { $_.Type -eq 'Button' -and $_.Name -in 'Open the lists folder', 'Recently deleted' }).Count -eq 2) 'the lists folder and Recently deleted'
-    Check (@($acc | Where-Object { $_.Type -eq 'Button' -and $_.Name -in 'Copy instructions for your AI', 'Save the instructions for your AI as a file' -and $_.Patterns -contains 'Invoke' }).Count -eq 2) 'Use with AI: copy and save, both invokable buttons'
+    [void](& $invoke (& $byId 'back') 'Back')
+  }
+  if (& $invoke (& $byId 'open-ai') 'the Use with AI row') {
+    $acc = Test-View 'Settings > Use with AI' $win
+    Check (@($acc | Where-Object { $_.Type -eq 'Text' -and $_.Name -eq 'Connect your AI' }).Count -ge 1) 'Use with AI: Connect your AI comes first (here: it needs sync)'
+    Check (@($acc | Where-Object { $_.Type -eq 'Button' -and $_.Name -in 'Copy instructions for your AI', 'Save the instructions for your AI as a file' -and $_.Patterns -contains 'Invoke' }).Count -eq 2) 'Use with AI, with the files: copy and save, both invokable buttons'
     [void](& $invoke (& $byId 'back') 'Back')
   }
   if (& $invoke (& $byId 'open-about') 'the About row') {

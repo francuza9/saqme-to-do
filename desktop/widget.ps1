@@ -505,6 +505,8 @@ $script:SharingApi = 2
 $script:WorkerTooOld = 'Your sync service runs an older version, without shared lists yet. It is updated together with this app (Settings > Updates); then try again.'
 # from this API on the Worker can update itself, given a token (worker/src/version.js SELF_UPDATE_API; store.js too)
 $script:SelfUpdateApi = 4
+# from this API on the Worker has the AI connector (worker/src/version.js CONNECTOR_API; store.js too)
+$script:ConnectorApi = 5
 function Save-Order($names) { try { Write-Utf8 $orderFile ((@($names) -join "`n") + "`n") } catch {} }
 function Open-Count([string]$name) {
   $n = 0
@@ -2523,7 +2525,7 @@ function Render {
 # an update needs a look (it opens Updates); the tray icon's tooltip says it too.
 $script:view = 'list'
 # (in this order; the last two are a card of their own, "App")
-$script:SettingsPages = [ordered]@{ general = 'General'; notifications = 'Notifications'; sync = 'Sync & sharing'; yourlists = 'Your lists'; updates = 'Updates'; about = 'About' }
+$script:SettingsPages = [ordered]@{ general = 'General'; notifications = 'Notifications'; sync = 'Sync & sharing'; yourlists = 'Your lists'; ai = 'Use with AI'; updates = 'Updates'; about = 'About' }
 # where Back (the header, Esc) goes from each view
 $script:ViewParent = @{ settings = 'list'; share = 'list'; keys = 'general'; pair = 'sync'; conflicts = 'sync'; trash = 'yourlists'; backups = 'yourlists' }
 $script:ViewTitles = @{ list = 'the list'; settings = 'Settings'; keys = 'Keyboard shortcuts'; pair = 'Pair phone'; conflicts = 'Conflicts'; trash = 'Recently deleted'; backups = 'Backups'; share = 'Share' }
@@ -2916,6 +2918,7 @@ function Render-SettingsView {
     'sync' { Render-SyncPage; return }
     'updates' { [void]$list.Children.Add((New-SettingsHeader 'Updates')); Render-UpdateSettings; return }
     'yourlists' { Render-YourListsPage; return }
+    'ai' { Render-AiPage; return }
     'about' { Render-AboutPage; return }
   }
   $script:view = 'settings'
@@ -2954,6 +2957,8 @@ function Render-SettingsHome {
   $n = @(Get-ProjectNames).Count
   $nl = $(if ($n -eq 1) { '1 list' } else { "$n lists" })
   & $page 'yourlists' $nl $nl 'Lists folder, recently deleted' 0xE8FD
+  $ai = Get-AiSummary
+  & $page 'ai' $ai.Short $ai.Text 'Connect Claude, ChatGPT or another assistant, or let one work in the lists folder' 0xE8F2
   Add-Heading 'App'
   $badge = Get-UpdateBadge
   $upd = $(if ($badge) { $badge } else { Get-UpdateSummary })
@@ -3122,15 +3127,98 @@ function Render-YourListsPage {
   [void]$list.Children.Add((New-SettingsHeader 'Your lists'))
   if ($script:view -eq 'yourlists' -and -not $SmokeTest) { Update-CopyFindings }
   if ($script:copyFindings.Count) { Render-CopyFindings }
-  Add-Heading 'Use with AI'
-  Add-CardRow (New-ActionRow 'Copy instructions for your AI' { Copy-AiPrompt } -Help 'Where your lists are and how to edit them, to paste into Claude, ChatGPT, Cursor...')
-  Add-CardRow (New-ActionRow 'Save them as a file...' { Save-AiPromptAs } -Name 'Save the instructions for your AI as a file' -Help 'SAQME.md, to add to an assistant''s instructions, a Claude Project or a skill')
-  Add-Footnote "Your lists are plain markdown files, so an AI assistant that can open files can read and manage them. These instructions tell it where they are, the format and what it must not do."
   Add-Heading 'Lists'
   Add-CardRow (New-ActionRow 'Open the lists folder' { Start-Process explorer.exe -ArgumentList "`"$listsDir`"" } -Help (Format-Path $listsDir))
   Add-CardRow (New-LinkRow 'Recently deleted' '' 'trash' -Help 'Deleted tasks, ready to restore for 30 days')
   Add-CardRow (New-LinkRow 'Backups' '' 'backups' -Help 'Copies of your lists, made by themselves: bring back what is missing')
   Add-Footnote "Plain markdown files, one per list, in $(Format-Path $listsDir). Editors and AI assistants can change them too; the app picks up their changes by itself."
+}
+
+# ---------------------------------------------------------------- Settings > Use with AI
+# The AI connector first (worker/src/connector.js, src/mcp.js): one URL from this PC's sync service, given to an
+# assistant as a custom connector (an MCP server); asked off the UI thread (Start-OwnApi) when the page opens, then
+# every minute. Then the files: the instructions for an assistant that works in the lists folder (no sync needed).
+$script:conn = @{ Status = $null; Error = ''; Asking = $false; At = 0; Busy = $false; Done = '' }
+function Test-ConnectorTooOld { return [bool]($script:sync -and $script:sync.WorkerApi -and $script:sync.WorkerApi -lt $script:ConnectorApi) }
+function Step-ConnectorStatus {
+  $c = $script:conn
+  if ($c.Asking -or -not (Read-SyncConfigUi) -or (Test-ConnectorTooOld)) { return }
+  if ((Get-NowMs) - $c.At -lt 60000) { return }
+  $c.Asking = $true; $c.At = Get-NowMs
+  Start-OwnApi 'GET' 'connector' $null {
+    param($r)
+    $c = $script:conn; $c.Asking = $false
+    if ($r.Status -eq 200 -and $r.Data) { $c.Status = $r.Data; $c.Error = '' } else { $c.Error = Get-ApiError $r }
+    if ($script:view -eq 'ai' -or $script:view -eq 'settings') { Render }
+  }
+}
+# rotate (also how it is switched on again) or disconnect. $done: what to say when it worked
+function Send-Connector([string]$kind, [string]$done) {
+  $c = $script:conn
+  $c.Busy = $true; $c.Done = $done; Render
+  Start-OwnApi 'POST' "connector/$kind" @{} {
+    param($r)
+    $c = $script:conn; $c.Busy = $false; $c.At = Get-NowMs
+    if ($r.Status -eq 200 -and $r.Data) { $c.Status = $r.Data; $c.Error = ''; Show-Notice $c.Done } else { Show-Notice "Not done: $(Get-ApiError $r)" }
+    if ($script:view -eq 'ai') { Render }
+  }
+}
+function Copy-ConnectorUrl {
+  try { [System.Windows.Clipboard]::SetText([string]$script:conn.Status['url']); Show-Notice 'Connector URL copied. Paste it into your AI as a custom connector.' }
+  catch { Show-Notice 'Could not copy: another program is using the clipboard.' }
+}
+function Get-AiSummary {
+  if (-not (Read-SyncConfigUi)) { return @{ Short = 'Files'; Text = 'the connector needs sync; an assistant can work in the lists folder' } }
+  $s = $script:conn.Status
+  if (-not $s -or (Test-ConnectorTooOld)) { return @{ Short = ''; Text = 'connect your AI' } }
+  if ($s['enabled']) { return @{ Short = 'On'; Text = 'your AI connector is on' } }
+  return @{ Short = 'Off'; Text = 'your AI connector is off' }
+}
+$script:AiCanDo = 'It can read your lists, add, change, move and delete tasks (deleted ones go to Recently deleted) and make new lists; it cannot delete a list.'
+function Render-AiPage {
+  [void]$list.Children.Add((New-SettingsHeader 'Use with AI'))
+  if ($script:view -eq 'ai' -and -not $SmokeTest) { Step-ConnectorStatus }
+  Add-Heading 'Connect your AI'
+  $c = $script:conn; $s = $c.Status
+  if (-not (Read-SyncConfigUi)) {
+    Add-CardRow (New-InfoRow 'Connect your AI' 'Needs sync')
+    Add-CardRow (New-LinkRow 'Sync & sharing' 'Off' 'sync' -Help 'Set up sync')
+    Add-Footnote "Claude, ChatGPT and other assistants connect to your lists through your sync service: one URL, nothing to type. $($script:AiCanDo) Set up sync first (free, in your own Cloudflare account), or let an assistant on this PC work in the lists folder (below)."
+  } elseif (Test-ConnectorTooOld) {
+    Add-CardRow (New-InfoRow 'Connect your AI' 'Not yet')
+    Add-Footnote 'Your sync service runs an older version, without the AI connector yet. It gets it with its next update (Settings > Updates); then Claude, ChatGPT and other assistants can connect to your lists with one URL.'
+  } elseif (-not $s) {
+    Add-CardRow (New-InfoRow 'Connect your AI' $(if ($c.Error) { 'Not reachable' } else { 'Asking...' }))
+    if ($c.Error) { Add-Footnote "Could not ask your sync service: $($c.Error)" $Red }
+  } elseif (-not $s['enabled']) {
+    Add-CardRow (New-ActionRow 'Connect your AI' { Send-Connector 'rotate' 'Connected: copy the connector URL into your assistant.' } -Help 'Makes a connector URL for Claude, ChatGPT or another assistant')
+    Add-Footnote "Off: no assistant can reach your lists. Connect your AI makes a new connector URL. $($script:AiCanDo)"
+  } else {
+    Add-CardRow (New-ActionRow 'Copy connector URL' { Copy-ConnectorUrl } -Help 'Paste it into your AI as a custom connector: nothing else to type')
+    Add-Footnote "Add the URL to your assistant as a custom connector (an MCP server, no sign-in); any assistant that takes one works. $($script:AiCanDo)"
+    Add-Heading 'Claude'
+    Add-Footnote ("1. On claude.ai (or in the Claude app): Settings > Connectors > Add custom connector.`n" +
+      "2. Name it Saqme, paste the connector URL as the server URL, click Add. Leave the advanced (OAuth) settings empty.`n" +
+      "3. In a chat, switch Saqme on in the tools menu (the + or the sliders under the box). Then ask: ""What is due this week?""`n" +
+      'A connector added on claude.ai is in the Claude apps on your phone and computers too.')
+    Add-Heading 'ChatGPT'
+    Add-Footnote ("1. On chatgpt.com: Settings > Apps & Connectors > Advanced settings, turn on Developer mode.`n" +
+      "2. Back in Apps & Connectors: Create. Name: Saqme; MCP server URL: paste the connector URL; Authentication: No authentication. Confirm that you trust it, then Create.`n" +
+      "3. In a chat: + > Developer mode, and pick Saqme. ChatGPT asks before each change.`n" +
+      'Developer mode is for paid plans, on the web. The names of these menus change now and then; the steps stay the same.')
+    Add-Heading 'Connector URL'
+    Add-CardRow (New-ActionRow 'New connector URL' {
+        $q = [System.Windows.MessageBox]::Show($w, "Make a new connector URL?`n`nThe URL your assistants have now stops working at once. Paste the new one into each assistant you want to keep connected.", 'Saqme To Do', 'YesNo', 'Question')
+        if ("$q" -eq 'Yes') { Send-Connector 'rotate' 'New connector URL made. The old one no longer works.' } } -Help 'The old URL stops working at once')
+    Add-CardRow (New-ActionRow 'Disconnect' {
+        $q = [System.Windows.MessageBox]::Show($w, "Disconnect your AI?`n`nEvery assistant that has the connector URL loses access to your lists at once. Connect your AI makes a new URL whenever you want one again.", 'Saqme To Do', 'YesNo', 'Question')
+        if ("$q" -eq 'Yes') { Send-Connector 'disconnect' 'Disconnected. No assistant can reach your lists now.' } } -Danger -Name 'Disconnect your AI' -Help 'No assistant can reach your lists until you connect again')
+    Add-Footnote 'The URL is the key: whoever has it can read and change your lists, so keep it to your own assistants. It is not your sync key, and a new one (or Disconnect) shuts out the old one at once.'
+  }
+  Add-Heading 'With the files'
+  Add-CardRow (New-ActionRow 'Copy instructions for your AI' { Copy-AiPrompt } -Help 'Where your lists are and how to edit them, for Claude Code, Codex, Cursor...')
+  Add-CardRow (New-ActionRow 'Save them as a file...' { Save-AiPromptAs } -Name 'Save the instructions for your AI as a file' -Help 'SAQME.md, to add to an assistant''s instructions, a Claude Project or a skill')
+  Add-Footnote 'For an assistant on this PC that opens files (Claude Code, Codex, Cursor), also without sync or offline: your lists are plain markdown files, and these instructions tell it where they are, the format and what it must not do.'
 }
 
 # ---------------------------------------------------------------- Settings > Your lists > Backups (sync-core.ps1 New-ListsBackup)
@@ -4482,6 +4570,7 @@ $timer.Add_Tick({
   elseif ($script:view -eq 'pair' -and $script:pairCode -and $script:pairCode.Until -lt (Get-Date)) { Render }   # a fresh code
   if ($script:apiReqs.Count) { Receive-OwnApi }
   if ($script:view -eq 'updates' -and -not $SmokeTest) { Step-ServiceStatus }
+  if ($script:view -eq 'ai' -and -not $SmokeTest) { Step-ConnectorStatus }
   if ($script:joining) { Receive-JoinResult }
   while ($script:sync -and $script:sync.Rewritten -and $script:sync.Rewritten.Count) {
     # a list's file was gone (not deleted here): the sync wrote it again from the last sync instead of deleting it
@@ -4586,7 +4675,8 @@ if ($SmokeTest) {
       general       = @('Dark', 'Light', 'Auto', 'Start with Windows', 'open-keys')
       notifications = @('Daily summary time', 'Send a test notification')
       sync          = @('Set up sync', 'Pairing link', 'Connect', 'Invite link', 'Join')
-      yourlists     = @('Copy instructions for your AI', 'Save the instructions for your AI as a file', 'Open the lists folder', 'open-trash', 'open-backups')
+      yourlists     = @('Open the lists folder', 'open-trash', 'open-backups')
+      ai            = @('Copy instructions for your AI', 'Save the instructions for your AI as a file')
       updates       = @('back')
       about         = @('Open the data folder')
     }
@@ -4619,7 +4709,7 @@ if ($SmokeTest) {
       Go-Back
       if ($script:view -ne $sub[0]) { throw "Back from $($sub[1]) went to '$($script:view)'" }
     }
-    foreach ($p in @(@('settings', 'list'), @('share', 'list'), @('keys', 'general'), @('pair', 'sync'), @('conflicts', 'sync'), @('trash', 'yourlists'), @('backups', 'yourlists'), @('about', 'settings'))) {
+    foreach ($p in @(@('settings', 'list'), @('share', 'list'), @('keys', 'general'), @('pair', 'sync'), @('conflicts', 'sync'), @('trash', 'yourlists'), @('backups', 'yourlists'), @('ai', 'settings'), @('about', 'settings'))) {
       if ((Get-ViewParent $p[0]) -ne $p[1]) { throw "Back from $($p[0]) goes to $(Get-ViewParent $p[0])" }
     }
     # with sync set up: Sync now, Pair phone, and Advanced, closed at first, with Turn off sync in it
@@ -4631,6 +4721,17 @@ if ($SmokeTest) {
     & $activate (& $find $list 'advanced')
     if (-not (& $find $list 'Turn off sync') -or ($script:HasA11y -and -not (& $find $list 'advanced').IsExpanded)) { throw 'Advanced did not open' }
     $script:advancedOpen = $false
+    # Use with AI with sync: the connector first (a stand-in answer of the Worker's GET /api/connector), the files after
+    $connWas = $script:conn.Status
+    $script:conn.Status = @{ enabled = $true; url = 'https://saqme.example.workers.dev/api/mcp/abc'; createdAt = 1; lastUsedAt = $null }
+    Show-View 'ai'
+    foreach ($k in 'Copy connector URL', 'New connector URL', 'Disconnect your AI', 'Copy instructions for your AI') { if (-not (& $find $list $k)) { throw "Use with AI: '$k' missing" } }
+    $aiText = (@($list.Children | Where-Object { $_ -is [System.Windows.Controls.TextBlock] } | ForEach-Object { $_.Text }) -join "`n")
+    if (-not $aiText.Contains('Add custom connector') -or -not $aiText.Contains('No authentication')) { throw 'Use with AI: the steps for Claude and ChatGPT are missing' }
+    $script:conn.Status = @{ enabled = $false; url = $null }
+    Show-View 'ai'
+    if (-not (& $find $list 'Connect your AI') -or (& $find $list 'Copy connector URL')) { throw 'Use with AI: off, it offers Connect your AI only' }
+    $script:conn.Status = $connWas
     if (-not $hadCfg) { Remove-Item -LiteralPath $syncCfgFile -Force }
     $keys = @(Read-Lines $cfgFile | Where-Object { $_ -match '^\w+=' } | ForEach-Object { ($_ -split '=', 2)[0] } | Sort-Object)
     if (($keys -join ',') -ne 'active,autoUpdate,height,notifyAt,showCompleted,theme,updatedSeen,width') { throw "the settings file's keys changed: $($keys -join ',')" }
@@ -4733,7 +4834,7 @@ if ($SmokeTest) {
     Show-View 'settings'
     $homeCards = & $cardsIn
     $pageCards = @($homeCards | ForEach-Object { (@($_ | ForEach-Object { [System.Windows.Automation.AutomationProperties]::GetAutomationId($_.Row) }) -join ',') })
-    if (($pageCards -join ' | ') -ne 'open-general,open-notifications,open-sync,open-yourlists | open-updates,open-about' -or -not (& $hasText $list 'App')) { throw "Settings is not two cards of pages: $($pageCards -join ' | ')" }
+    if (($pageCards -join ' | ') -ne 'open-general,open-notifications,open-sync,open-yourlists,open-ai | open-updates,open-about' -or -not (& $hasText $list 'App')) { throw "Settings is not two cards of pages: $($pageCards -join ' | ')" }
     $groupedHome = $script:proj
     Write-TextFileAtomic (Proj-Path 'Grouped check') ("- [ ] G one due:$((Get-Date).ToString('yyyy-MM-dd')) ^gggggg01`n  > a note`n  - [ ] G sub ^gggggg02`n  - [x] G sub done ^gggggg03`n" +
       "- [ ] G two ^gggggg04`n- [>] G later ^gggggg05`n- [x] G done ^gggggg06`n")
