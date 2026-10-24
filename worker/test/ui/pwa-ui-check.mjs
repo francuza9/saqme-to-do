@@ -428,11 +428,22 @@ await page.tap('.view-header .back');
 // Settings: a short list of pages, each with how it stands; the version under every view
 const pages = await page.$$eval('#list .group .g-row.link .g-label', (els) => els.map((e) => e.textContent));
 // (a paired phone has Updates too: its sync service's version, and its updating itself)
-check(pages.join() === 'General,Notifications,Sync & sharing,Your lists,Updates,About', `Settings: the pages, in two cards (${pages.join()})`);
+check(pages.join() === 'General,Notifications,Sync & sharing,Your lists,Use with AI,Updates,About', `Settings: the pages, in two cards (${pages.join()})`);
 check(/Saqme To Do \d+\.\d+\.\d+/.test(await page.textContent('#list .version-line')), `the version under Settings (${await page.textContent('#list .version-line')})`);
 await page.tap('[data-fk="open:updates"]');
 await page.waitForSelector('.view-header h1:has-text("Updates")');
 check(await page.isVisible('#list .g-head:has-text("Sync service")') && await page.isVisible('#list .g-row:has-text("Version")'), 'Settings > Updates on a paired phone: the sync service and its version');
+await page.tap('.view-header .back');
+
+// Use with AI on a paired phone: the connector's URL (made by the Worker when its database was set up) and the steps
+await page.tap('[data-fk="open:ai"]');
+await page.waitForSelector('[data-fk="ai-copy"]');
+check(await page.isVisible('[data-fk="ai-rotate"]') && await page.isVisible('[data-fk="ai-disconnect"]') && !(await page.isVisible('[data-fk="do:Copy instructions for your AI"]')),
+  'Use with AI: Copy connector URL, New connector URL, Disconnect (no files option on a phone)');
+await page.tap('[data-fk="ai-claude"]');
+await page.waitForSelector('#sheet:has-text("Add custom connector")');
+check(await page.isVisible('#sheet button:has-text("Copy connector URL")'), 'Use with AI: the Claude steps, with the URL to copy');
+await page.keyboard.press('Escape');
 await page.tap('.view-header .back');
 
 // trash view (Settings > Your lists > Recently deleted), and back one level at a time

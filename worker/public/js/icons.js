@@ -39,10 +39,11 @@ const ICONS = {
   share: S('<circle cx="11.8" cy="3.8" r="1.8"/><circle cx="4.2" cy="8" r="1.8"/><circle cx="11.8" cy="12.2" r="1.8"/><path d="m5.8 7.1 4.4-2.4M5.8 8.9l4.4 2.4"/>'),
   leave: S('<path d="M6.5 2.5H3.5a1 1 0 0 0-1 1v9a1 1 0 0 0 1 1h3"/><path d="M10 5l3 3-3 3M13 8H6"/>'),
   eye: S('<path d="M1.8 8s2.3-4.3 6.2-4.3S14.2 8 14.2 8s-2.3 4.3-6.2 4.3S1.8 8 1.8 8z"/><circle cx="8" cy="8" r="1.8"/>'),
-  // the pages of Settings (General, Your lists, Updates, About)
+  // the pages of Settings (General, Your lists, Use with AI, Updates, About)
   gear: S('<circle cx="8" cy="8" r="5.6" stroke-width="2.2" stroke-dasharray="2.2 2.2" stroke-linecap="butt"/><circle cx="8" cy="8" r="4.2"/><circle cx="8" cy="8" r="1.6"/>'),
   lists: S('<path d="M6 4h7.5M6 8h7.5M6 12h7.5"/><circle cx="2.9" cy="4" r=".9" fill="currentColor"/><circle cx="2.9" cy="8" r=".9" fill="currentColor"/><circle cx="2.9" cy="12" r=".9" fill="currentColor"/>'),
   update: S('<path d="M8 2.5v7.5M4.8 7 8 10.2 11.2 7"/><path d="M2.5 11v1.5a1 1 0 0 0 1 1h9a1 1 0 0 0 1-1V11"/>'),
+  chat: S('<path d="M3.5 3h9a1 1 0 0 1 1 1v6a1 1 0 0 1-1 1H8l-3 2.5V11H3.5a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1z"/><path d="M5.5 6.2h5M5.5 8.2h3"/>'),
   info: S('<circle cx="8" cy="8" r="5.9"/><path d="M8 7.3v4"/><circle cx="8" cy="4.9" r=".6" fill="currentColor"/>'),
 };
 

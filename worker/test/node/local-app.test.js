@@ -108,6 +108,39 @@ describe('local app server', () => {
     expect(existsSync(odd)).toBe(false);   // (printing it creates nothing)
   });
 
+  it('Use with AI: the connector is the cloud sync service\'s, passed on with this computer\'s key; none is served here', async () => {
+    const auth = { authorization: `Bearer ${app.token}` };
+    const key = 'k'.repeat(43);
+    const seen = [];
+    const cloud = createServer((req, res) => {   // a stand-in for the Worker's /api/connector routes
+      seen.push(`${req.method} ${req.url} ${req.headers.authorization === `Bearer ${key}`}`);
+      res.writeHead(200, { 'content-type': 'application/json' });
+      res.end(JSON.stringify({ enabled: !req.url.endsWith('/disconnect'), url: req.url.endsWith('/disconnect') ? null : 'https://cloud.test/api/mcp/x' }));
+    });
+    await new Promise((r) => cloud.listen(0, '127.0.0.1', r));
+    const get = (p, method = 'GET') => fetch(`${app.url}/api/${p}`, { method, headers: { ...auth, 'content-type': 'application/json' }, body: method === 'POST' ? '{}' : undefined });
+    // without cloud sync: it says what it needs
+    const off = await get('local/connector');
+    expect(off.status).toBe(409);
+    expect((await off.json()).error).toMatch(/needs cloud sync/);
+    mkdirSync(join(dir, 'sync'), { recursive: true });
+    writeFileSync(join(dir, 'sync', 'config.json'), JSON.stringify({ url: `http://127.0.0.1:${cloud.address().port}`, token: key, deviceId: 'pc-x', enabled: true }));
+    try {
+      expect(await (await get('local/connector')).json()).toEqual({ enabled: true, url: 'https://cloud.test/api/mcp/x' });
+      expect((await (await get('local/connector/rotate', 'POST')).json()).enabled).toBe(true);
+      expect((await (await get('local/connector/disconnect', 'POST')).json()).enabled).toBe(false);
+      expect(seen).toEqual(['GET /api/connector true', 'POST /api/connector/rotate true', 'POST /api/connector/disconnect true']);
+    } finally {
+      cloud.close(); cloud.closeAllConnections();
+      rmSync(join(dir, 'sync', 'config.json'), { force: true });
+    }
+    // the local store's own connector routes and MCP endpoint are not served (its key is not the cloud's)
+    expect((await get('connector')).status).toBe(404);
+    const ping = '{"jsonrpc":"2.0","id":1,"method":"ping"}';
+    expect((await fetch(`${app.url}/api/mcp/${'a'.repeat(43)}`, { method: 'POST', body: ping })).status).toBe(401);
+    expect((await fetch(`${app.url}/api/mcp/${'a'.repeat(43)}`, { method: 'POST', headers: auth, body: ping })).status).toBe(404);
+  });
+
   it('connects cloud sync from a pairing link pasted in the window', async () => {
     const post = (link) => fetch(`${app.url}/api/local/connect`, { method: 'POST', headers: { authorization: `Bearer ${app.token}`, 'content-type': 'application/json' }, body: JSON.stringify({ link }) });
     expect((await post('not a link')).status).toBe(400);

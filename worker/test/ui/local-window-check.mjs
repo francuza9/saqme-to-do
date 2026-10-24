@@ -49,7 +49,12 @@ try {
   check(await page.isVisible('[data-fk="open:updates"]') && /Saqme To Do \d+\.\d+\.\d+/.test(await page.textContent('#list .version-line')), 'Settings has Updates (the window updates itself) and the version line');
   await page.click('[data-fk="open:lists"]');
   check((await page.textContent('#list')).includes(join(dir, 'lists')), 'Your lists says where the lists folder is');
-  // Use with AI: the instructions with this lists folder in them, on the clipboard and as SAQME.md
+  await page.keyboard.press('Escape');
+  // Use with AI: without cloud sync the connector says what it needs; the files option works anyway
+  await page.click('[data-fk="open:ai"]');
+  await page.waitForSelector('.view-header h1:has-text("Use with AI")');
+  check(await page.isVisible('.g-row:has-text("Connect your AI") .g-value:has-text("Needs sync")') && /Set up sync first/.test(await page.textContent('#list')), 'Use with AI: the connector needs sync, and says so');
+  // the instructions with this lists folder in them, on the clipboard and as SAQME.md
   const wanted = aiPrompt(join(dir, 'lists'));
   await page.click('[data-fk="do:Copy instructions for your AI"]');
   await page.waitForSelector('#toast:has-text("Instructions copied")');

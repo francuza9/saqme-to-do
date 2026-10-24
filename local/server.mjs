@@ -25,6 +25,8 @@
 //   POST /api/local/update/login  sign in to Cloudflare (to finish updating the Worker); /update/worker tries that again
 //   GET  /api/local/worker-update, POST .../token | auto | now: the sync service updating itself, passed on to the
 //                                  Worker's own /api/update routes with this computer's key (worker/src/selfupdate.js)
+//   GET  /api/local/connector, POST .../rotate | disconnect: the AI connector of the cloud sync service (Settings >
+//                                  Use with AI), its /api/connector routes with this computer's key (worker/src/connector.js)
 // Shared lists (local/shares.mjs, docs/sync.md "Shared lists"):
 //   POST /api/local/join          { link }: join a list from its invite link -> { id, name }
 //   POST /api/local/leave         { id }: leave one (its file goes to lists/.trash)
@@ -33,6 +35,8 @@
 //   POST /api/local/invite/decline
 //   GET  /api/local/shares?project=<id>, POST /api/local/shares/invite | update | revoke: sharing one of this
 //                                  computer's lists, through its cloud sync (the window's project ids)
+// /api/connector and /api/mcp are not served here either: the AI connector is the cloud sync service's (this local
+// store's key is not the one its address is made from, and this server is for its own window only).
 // /api/shares* and /api/remotes* of the Worker code are not served here: lists are shared from one's cloud sync
 // service only, and lists shared with this computer are synced by the app itself.
 // Requests for any other host name are refused (DNS rebinding), and nothing sends CORS headers, so other
@@ -191,6 +195,17 @@ export function startServer(opts) {
         try { return json(res, 200, await run()); } catch (e) { return json(res, e.status ?? 500, { error: e.message }); }
       }
     }
+    if (opts.connector && (route === 'GET /api/local/connector' || route.startsWith('POST /api/local/connector/'))) {
+      const c = opts.connector;
+      const run = {
+        'GET /api/local/connector': () => c.status(),
+        'POST /api/local/connector/rotate': () => c.rotate(),
+        'POST /api/local/connector/disconnect': () => c.disconnect(),
+      }[route];
+      if (run) {
+        try { return json(res, 200, await run()); } catch (e) { return json(res, e.status ?? 500, { error: e.message }); }
+      }
+    }
     if (opts.sharing && (route.startsWith('POST /api/local/') || route === 'GET /api/local/shares')) {
       let b = {};
       try { b = body?.length ? JSON.parse(body.toString('utf8')) : {}; } catch { /* bad JSON: empty */ }
@@ -213,6 +228,7 @@ export function startServer(opts) {
     if (url.pathname.startsWith('/api/shares')) return json(res, 404, { error: 'lists are shared through your cloud sync (Settings, Sync & sharing)' });
     // (lists others share with this computer are synced by the app itself, local/shares.mjs, not relayed)
     if (url.pathname.startsWith('/api/remotes')) return json(res, 404, { error: 'shared lists are joined in the window\'s Settings, Sync & sharing (or saqme join)' });
+    if (url.pathname.startsWith('/api/mcp') || url.pathname.startsWith('/api/connector')) return json(res, 404, { error: 'the AI connector is your cloud sync service\'s (Settings > Use with AI)' });
     if (url.pathname.startsWith('/api/push/')) return json(res, 404, { error: 'push is not used by the desktop app; reminders show as desktop notifications' });
     if (url.pathname.startsWith('/api/pair/')) return json(res, 404, { error: 'pairing codes come from the cloud sync service (Settings > Sync & sharing > Pair a phone)' });
     if (req.method === 'OPTIONS') { res.writeHead(405); res.end(); return undefined; }   // no CORS: this server is for its own window only

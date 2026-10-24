@@ -514,6 +514,13 @@ export async function startApp({ dataDir = defaultDataDir(), port, interval = 10
     auto: (on) => ownerApi('POST', 'update/auto', { on }, noSync),
     now: () => ownerApi('POST', 'update/now', {}, noSync),
   };
+  // the AI connector (worker/src/connector.js), for Settings > Use with AI: the Worker's own routes
+  const noConnector = { need: 'Connecting an AI needs cloud sync (Settings, Sync & sharing). Without it, use the lists folder (Settings, Use with AI).' };
+  const connector = {
+    status: () => ownerApi('GET', 'connector', undefined, noConnector),
+    rotate: () => ownerApi('POST', 'connector/rotate', {}, noConnector),
+    disconnect: () => ownerApi('POST', 'connector/disconnect', {}, noConnector),
+  };
 
   let updater = null;   // (created once the port is known)
   const info = () => ({
@@ -543,7 +550,7 @@ export async function startApp({ dataDir = defaultDataDir(), port, interval = 10
     worker: () => { if (!updater) return { supported: false }; updater.retryWorker().catch((e) => log(`update: ${e?.message ?? e}`)); return updater.status(); },
   };
   const srv = await startServer({
-    port: port ?? portSetting(p), token, d1, publicDir: appPaths.public, version: VERSION, info, updates: updateRoutes, workerUpdate,
+    port: port ?? portSetting(p), token, d1, publicDir: appPaths.public, version: VERSION, info, updates: updateRoutes, workerUpdate, connector,
     onSync: () => { files.wake(); updater?.touch(); },
     aiPrompt: () => aiPrompt(resolve(p.lists)),
     onAllowDeletes: () => {
