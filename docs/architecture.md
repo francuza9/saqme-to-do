@@ -29,7 +29,7 @@
 | `worker/src/schema.js`, `migrations.js` | The Worker updates its own database on the first request after a deploy (the migrations of `worker/migrations/`, recorded in wrangler's `d1_migrations`). |
 | `worker/src/pairing.js` | One-time pairing codes for phones (the app on an iPhone's Home Screen). |
 | `worker/src/shares.js` | Shared lists: invites, claims, the people a list is shared with, share keys, move codes, a share's browser reminders ([sync.md](sync.md#shared-lists)). The scope a share key gets is in `sync.js`. |
-| `worker/src/connector.js`, `mcp.js` | The AI connector: its address and key (an HMAC of the sync key and a nonce in D1), and the MCP server at `/api/mcp/<key>` whose tools read D1 and write through the sync path ([ai.md](ai.md#connect-your-ai)). |
+| `worker/src/connector.js`, `mcp.js` | The AI connector: its address and key (an HMAC of the sync key and a nonce in D1), and the MCP server at `/api/mcp/<key>` whose tools read D1 and write through the sync path ([ai.md](ai.md#advanced)). |
 | `worker/src/remotes.js` | Lists others share with you, kept by your own Worker for your phone apps: the relay to their owners' Workers and the reading of their deadlines for your reminders ([sync.md](sync.md#the-relay-lists-shared-with-a-phone-that-has-its-own-sync)). |
 | `worker/src/merge.js` | Pure merge rules (per field, conflicts, edit vs delete, cycle checks). |
 | `worker/src/sync.js` | D1 access for `/api/sync`: optimistic batches, paging. |

@@ -14,37 +14,34 @@
 
 ## Use Saqme with your AI
 
-Connect Claude, ChatGPT or any assistant that takes an MCP connector to your lists with **one URL**, or let an
-assistant on your computer edit the markdown files themselves. No plugin, no API key, no export. Ask it:
+Connect Claude, ChatGPT or another AI app to your lists, then just ask it:
 
-- **"What's due this week?"** It reads every list and answers by deadline, overdue first.
-- **"Move everything about the Berlin trip to Travel."** Tasks, subtasks and notes move with their ids, so sync
-  moves them instead of deleting and re-creating.
-- **"Add these meeting notes as tasks."** Paste the notes; they become tasks with deadlines, in the right list.
-- **"Tell me what I've been postponing."** It collects the postponed (`[>]`) and overdue tasks across all lists.
+- **"What's due this week?"** It looks through all your lists and answers, overdue first.
+- **"Add these meeting notes as tasks."** Paste the notes; they become tasks, with dates, in the right list.
+- **"Move everything about the Berlin trip to Travel."** Tasks move with their steps and notes.
+- **"What have I been putting off?"** It finds what you postponed or let slip.
 
-What it changes shows in the app within seconds and syncs to your phone.
+What it changes shows up in Saqme within seconds, on all your devices.
 
-**Connect your AI (with sync):** open **Settings > Use with AI**, choose **Copy connector URL** and add it to your
-assistant as a custom connector: on claude.ai *Settings > Connectors > Add custom connector* (it is then in the
-Claude apps on your phone and computers too), in ChatGPT *Settings > Apps & Connectors > Create* in Developer mode.
-That is all: no sign-in, no key to type. Your sync service is the connector (an MCP server on your own Worker): the
-assistant can read your lists, add, change, move and delete tasks (into *Recently deleted*) and make lists, but not
-delete one. The URL is a key of its own, separate from your sync key; **New connector URL** or **Disconnect**
-shuts the old one out at once.
+**Connect it in a minute** (you need Saqme sync turned on; it is free):
 
-**With the files (no sync, offline, local agents):** **Settings > Use with AI > Copy instructions for your AI** (on
-Linux and macOS also `saqme ai-prompt`) gives Claude Code, Codex, Cursor or an MCP filesystem server what it needs:
-this computer's real lists folder, the file format, and the rules (never delete a list file, never rewrite a whole
-file from memory, keep every id). **Save them as a file…** writes the same text as `SAQME.md` for a skill or
-`AGENTS.md`. Both ways per assistant, and what an AI can't or shouldn't do: [docs/ai.md](docs/ai.md).
+1. In Saqme, open **Settings › Use with AI** and click **Copy link**.
+2. Paste the link into your AI app. In Claude: **Settings › Connectors › Add custom connector**. In ChatGPT:
+   **Settings › Apps & Connectors › Create** (with **Developer mode** on).
+3. Start a new chat, switch Saqme on, and ask.
+
+Every click, for each app: [docs/ai.md](docs/ai.md). Keep the link private, like a password. Your AI can't delete a
+list, and anything it deletes waits in **Recently deleted** for 30 days.
+
+**No sync?** An AI app on your computer (Claude Code, Codex, Cursor) can edit your list files instead:
+[Other ways](docs/ai.md#other-ways).
 
 ## Features
 
 - **Your lists are files.** One markdown file per project (`lists/Work.md`). Edit them in any editor, script
-  them, or [let an AI assistant manage them](docs/ai.md#with-the-files); the app picks the changes up. [Format](docs/file-format.md).
-- **Connect your AI.** With sync, Claude, ChatGPT and other assistants manage your lists through one connector URL,
-  from the web and their phone apps too. [How](docs/ai.md#connect-your-ai).
+  them, or [let an AI app on your computer manage them](docs/ai.md#other-ways); the app picks the changes up. [Format](docs/file-format.md).
+- **Connect your AI.** With sync, Claude, ChatGPT and other AI apps see and change your lists from one link,
+  on the web and in their phone apps. [How](docs/ai.md).
 - **Every platform, one look.** A small widget on Windows, an app window on macOS and Linux, and the phone
   app on iPhone and Android. All work offline and share one design, down to the typeface.
 - **No account needed.** Everything works on a single device. Sync is optional: it runs on the free plan of
@@ -173,11 +170,11 @@ and import its lists as markdown files.
 **What happens offline?** Everything keeps working. Changes queue up and are sent when the connection is
 back.
 
-**Can my AI assistant edit the lists?** Yes, that is the point. With sync, add the connector URL from **Settings >
-Use with AI** to Claude or ChatGPT and it works through your sync service, ids and all. On your computer, an
-assistant can also edit the files: each line carries a short id like `^k3j9x2ab` so sync can follow a task through
-edits; leave it in place (the app usually re-attaches a lost one). **Copy instructions for your AI** on the same
-page says so. See [docs/ai.md](docs/ai.md) and [docs/file-format.md](docs/file-format.md).
+**Can my AI assistant edit the lists?** Yes, that is the point. With sync, copy the link in **Settings › Use with
+AI** and paste it into Claude or ChatGPT ([steps](docs/ai.md)). Without sync, an AI app on your computer can edit the
+list files: each line carries a short id like `^k3j9x2ab` so sync can follow a task through edits; leave it in place.
+**Copy instructions for your AI** on the same page tells the AI so. See [docs/ai.md](docs/ai.md#other-ways) and
+[docs/file-format.md](docs/file-format.md).
 
 **Can I share a list with someone?** Yes. They need the app, not a Cloudflare account; you need sync (the list
 stays on your sync service). Each invite works once, for 24 hours; you pick *can edit* or *can view* and can
@@ -205,7 +202,7 @@ notification settings. More in [docs/setup.md](docs/setup.md#windows-notificatio
 - [docs/setup.md](docs/setup.md): every setup step, updating, troubleshooting, removing everything
 - [docs/local-only.md](docs/local-only.md): using Saqme without any account, per platform, and what needs sync
 - [docs/sync.md](docs/sync.md): the sync protocol and conflict rules
-- [docs/ai.md](docs/ai.md): using Saqme with an AI assistant: the connector (Claude, ChatGPT), the files, what it can and can't do
+- [docs/ai.md](docs/ai.md): connecting Claude, ChatGPT or another AI app, step by step; how it works; other ways
 - [docs/file-format.md](docs/file-format.md): the markdown format and the data folder
 - [docs/architecture.md](docs/architecture.md): how the pieces fit together
 - [docs/design.md](docs/design.md): colours, type and layout shared by all the apps

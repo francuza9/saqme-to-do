@@ -2,27 +2,28 @@
 
 ## Unreleased
 
-**Connect your AI** (docs/ai.md). With sync, Claude, ChatGPT and any assistant that takes an MCP connector manage your
-lists from one URL: Settings > Use with AI > **Copy connector URL**, then add it to the assistant as a custom
-connector (claude.ai: Settings > Connectors > Add custom connector, and it is in the Claude apps on your phone and
-computers too; ChatGPT: Developer mode, Create). No sign-in, no key to type. This is now the recommended way;
-letting an assistant on your computer edit the markdown files stays, under *With the files*.
+**Connect your AI** ([docs/ai.md](docs/ai.md)). With sync on, Claude, ChatGPT and other AI apps can see and change
+your lists: in Saqme, **Settings › Use with AI › Copy link**, then paste the link into the AI app (Claude: Settings ›
+Connectors › Add custom connector, and it is then in the Claude apps on your phone and computer too; ChatGPT:
+Developer mode, then Create). No sign-in, nothing to type. This is now the recommended way; letting an AI app on
+your computer edit the list files stays, under *Other ways*.
 
-- **Your sync service is the connector:** an MCP server on your own Worker (`/api/mcp/<key>`). The assistant can see
-  your lists and today's date in your time zone, list tasks by list, status, deadline or text, add tasks (with
-  subtasks), change, move (with their subtasks) and delete them (into *Recently deleted*, restorable), and make
-  lists. It cannot delete a list. Its changes reach every device with the next sync, as one more device's would.
-- **Its own key:** the URL is not your sync key (and does not reveal it). **New connector URL** replaces it,
-  **Disconnect** turns it off; either shuts the old URL out at once. It is ready for everyone with sync, nothing to
-  set up: a sync service set up before gets it with its next update (the Worker updates its own database).
-- **Careful with deletes:** at most 25 deleted tasks an hour through the connector, as the apps hold back mass deletes;
-  more is left to you, in the app. At most 120 calls a minute.
-- **Settings > Use with AI** is a page of its own on Windows, Linux/macOS and the phone: *Connect your AI* first, then
-  (on computers) the instructions for an assistant in the lists folder, which moved there from *Your lists*.
-- Lists others share with you are on their owners' sync services, so the connector cannot reach them; lists you share
-  work as usual.
-- Sync service API 5. Tests: `connector.test.js` (the key, each tool, ids, deletes into Recently deleted, no list
-  delete, sync round trip, shared lists), `connector-engine.test.js` (the AI's edits in a lists folder's files).
+- **What it can do:** see your lists and today's date in your time zone, find tasks by list, status, date or text, add
+  tasks (with steps under them), change, move and delete them (into *Recently deleted*, restorable), and make lists.
+  It cannot delete a list. What it changes reaches every device with the next sync.
+- **A link of its own:** it is not your sync key (and does not give it away). **Make a new link** replaces it,
+  **Disconnect** turns it off; either stops the old link at once. Everyone with sync has one, nothing to set up: a sync
+  service set up before gets it with its next update.
+- **Careful with deletes:** at most 25 deleted tasks an hour through the link, as the apps hold back mass deletes;
+  more is left to you, in the app. At most 120 requests a minute.
+- **Settings › Use with AI** is a page of its own on Windows, Linux/macOS and the phone, in plain words: *Connect your
+  AI* first (Copy link, step-by-step for Claude and ChatGPT), then (on computers) *Other ways*: the instructions for
+  an AI app that edits the list files, which moved there from *Your lists*. docs/ai.md is now a short, plain guide
+  first, with the technical part under *Advanced*.
+- Lists others share with you live on their owners' sync, so the link cannot reach them; lists you share work as usual.
+- For developers: the sync service is an MCP server at `/api/mcp/<key>` (Streamable HTTP, stateless), API 5. Tests:
+  `connector.test.js` (the key, each tool, ids, deletes into Recently deleted, no list delete, sync round trip, shared
+  lists), `connector-engine.test.js` (the AI's edits in a lists folder's files).
 
 ## 1.2.5
 

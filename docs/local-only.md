@@ -17,7 +17,7 @@ This page lists what you get on each platform, how to start, and what only works
 
 - **Windows, Linux, macOS:** the full app. Your lists are markdown files in a folder (`%APPDATA%\SaqmeToDo\lists`,
   `~/.local/share/saqme/lists`, `~/Library/Application Support/Saqme To Do/lists`). An AI assistant on the computer
-  can edit them ([ai.md, With the files](ai.md#with-the-files)); connecting Claude or ChatGPT by URL needs sync. Reminders come from the computer itself (Windows notifications, `notify-send`, Notification
+  can edit them ([ai.md, Other ways](ai.md#other-ways)); connecting Claude or ChatGPT by URL needs sync. Reminders come from the computer itself (Windows notifications, `notify-send`, Notification
   Center), and the app updates itself from GitHub releases. **Settings > Sync & sharing** shows *Set up sync*,
   and nothing happens there until you choose it.
 - **Linux and macOS: what has to match the system.** The app is JavaScript run by Node.js (it uses the built-in
