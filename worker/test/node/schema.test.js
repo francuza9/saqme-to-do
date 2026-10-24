@@ -72,16 +72,21 @@ describe('migrate', () => {
       db.db.prepare('INSERT INTO d1_migrations (name) VALUES (?)').run(f);
     }
     db.db.prepare(`INSERT INTO shares (id, project_id, alias, access, created_at) VALUES ('s1', 'p1', 'Nuca', 'edit', 1)`).run();
-    expect(await migrate(db)).toEqual([files[2]]);
+    expect(await migrate(db)).toEqual(files.slice(2));
     expect(names(db)).toEqual(files);
     expect(db.db.prepare('SELECT alias, relayed_at FROM shares').get()).toEqual({ alias: 'Nuca', relayed_at: null });
+    // sync set up before the AI connector: its address is there after the update (0004_connector.sql), on
+    const c = db.db.prepare(`SELECT nonce, enabled, created_at FROM connector WHERE id = 'main'`).get();
+    expect(c.nonce).toMatch(/^[0-9a-f]{32}$/);
+    expect(c.enabled).toBe(1);
+    expect(Math.abs(c.created_at - Date.now())).toBeLessThan(5 * 60_000);
     db.close();
   });
 
   it('a database made by hand from the .sql files (no records): what is there is recognized, the rest applied', async () => {
     const db = open();
     for (const f of files.slice(0, 2)) db.db.exec(readFileSync(join(DIR, f), 'utf8'));
-    expect(await migrate(db)).toEqual([files[2]]);
+    expect(await migrate(db)).toEqual(files.slice(2));
     expect(names(db)).toEqual(files);
     db.close();
   });

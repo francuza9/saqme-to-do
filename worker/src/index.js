@@ -17,7 +17,10 @@
 //   POST /api/remotes/join | adopt, GET /api/remotes, POST /api/remotes/<id>/sync | leave: lists others share
 //     with you, which this Worker syncs for your phone app (src/remotes.js)
 //   GET  /api/update, POST /api/update/token | auto | now: the Worker updating itself (src/selfupdate.js)
-// Every /api call except health and the two claims needs `Authorization: Bearer <AUTH_TOKEN>`. A shared
+//   GET  /api/connector, POST /api/connector/rotate | disconnect: the AI connector's address (src/connector.js)
+//   POST /api/mcp/<key>           the AI connector itself, an MCP server (src/mcp.js): the key in the address is
+//                                 its only credential (no Authorization header counts there, a shared list's key least of all)
+// Every /api call except health, the two claims and /api/mcp needs `Authorization: Bearer <AUTH_TOKEN>`. A shared
 // list's key works for the routes above only, and only for its one project; once revoked it gets 401 like a
 // wrong key, and one replaced by a move gets 401 'transferred'.
 // The API answers cross-origin requests too (CORS), so a copy of the app served from elsewhere (a static
@@ -37,6 +40,8 @@ import {
 } from './shares.js';
 import { adoptRemote, joinRemote, leaveRemote, relaySync, remotesQuery, remoteView } from './remotes.js';
 import { afterSchemaFailure, confirmUpdate, saveToken, scheduledUpdate, setAuto, startNow, updateStatus, UpdateError } from './selfupdate.js';
+import { connectorAuthorized, connectorRateOk, connectorStatus, disconnectConnector, rotateConnector, RATE_LIMIT } from './connector.js';
+import { handleMcp } from './mcp.js';
 
 // The push services browsers use (Chrome and other Chromium browsers, Firefox, Safari, legacy Edge): the
 // cron sends requests to subscription endpoints, so a subscription may only point at one of these.
@@ -61,7 +66,7 @@ const JSON_HEADERS = {
 const PREFLIGHT_HEADERS = {
   'access-control-allow-origin': '*',
   'access-control-allow-methods': 'GET, POST, OPTIONS',
-  'access-control-allow-headers': 'authorization, content-type',
+  'access-control-allow-headers': 'authorization, content-type, mcp-protocol-version',
   'access-control-max-age': '86400',
 };
 
@@ -121,6 +126,15 @@ async function handleApi(request, env, url, ctx) {
     return json({ token: env.AUTH_TOKEN });
   }
   if (route === 'POST /api/shares/claim') return json(await claimInvite(env, await readJson(request), url.origin));
+  // the AI connector: the key in the address is its credential; no Authorization header (owner's or a shared list's) counts
+  const mcp = /^\/api\/mcp\/([^/]*)\/?$/.exec(url.pathname);
+  if (mcp || url.pathname === '/api/mcp') {
+    if (!mcp || !(await connectorAuthorized(env, mcp[1]))) {
+      return json({ error: 'This Saqme connector address does not work (any more). Copy the current one from Saqme: Settings > Use with AI.' }, 404);
+    }
+    if (!(await connectorRateOk(env))) return json({ error: `Too many requests: at most ${RATE_LIMIT} a minute.` }, 429);
+    return handleMcp(request, env);
+  }
   const auth = await authenticate(request, env);
   if (!auth) return json({ error: 'unauthorized' }, 401);
   if (auth.revoked) return json({ error: 'revoked', message: 'The owner stopped sharing this list with you.' }, 401);
@@ -169,6 +183,13 @@ async function handleApi(request, env, url, ctx) {
 
     case 'POST /api/pair/code':
       return json(await createPairingCode(env));
+
+    case 'GET /api/connector':
+      return json(await connectorStatus(env, url.origin));
+    case 'POST /api/connector/rotate':
+      return json(await rotateConnector(env, url.origin));
+    case 'POST /api/connector/disconnect':
+      return json(await disconnectConnector(env, url.origin));
 
     case 'GET /api/update':
       await confirmUpdate(env);

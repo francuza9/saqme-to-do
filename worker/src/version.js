@@ -16,8 +16,9 @@ export const REPOSITORY = /github\.com\/([^/]+\/[^/.]+)/.exec(pkg.repository?.ur
  *   2  shared lists: invites, share keys, the relay for phones (/api/shares, /api/remotes)
  *   3  the database updates itself; `api` and `version` in /api/health, /api/config and every /api/sync answer
  *   4  the Worker updates itself: /api/update (src/selfupdate.js)
+ *   5  the AI connector: /api/connector and the MCP endpoint /api/mcp/<key> (src/connector.js, src/mcp.js)
  */
-export const API_VERSION = 4;
+export const API_VERSION = 5;
 
 /** The oldest Worker API the apps of this release work with (their sync); below it, the update waits for it. */
 export const MIN_WORKER_API = 1;
@@ -27,3 +28,6 @@ export const SHARING_API = 2;
 
 /** What Settings > Updates needs for "Your sync service updates itself"; an older Worker gets it with its next update. */
 export const SELF_UPDATE_API = 4;
+
+/** What Settings > Use with AI needs for "Connect your AI"; an older Worker gets it with its next update. */
+export const CONNECTOR_API = 5;

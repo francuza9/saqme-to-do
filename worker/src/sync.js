@@ -236,6 +236,44 @@ export function scopeChanges(state, changes, scope) {
 }
 
 /**
+ * Merges changes into D1 and writes them (optimistic, retried; see the top of this file): the one write path of
+ * /api/sync, also used by the AI connector (src/mcp.js) for its edits. -> { rejected, canonical, seqBefore, seq }
+ * (seq: the seq written, or null when nothing changed).
+ */
+export async function applyAndWrite(env, changes, { now = Date.now(), deviceId = '', scope = null } = {}) {
+  let rejected = [];
+  let seqBefore = null;
+  let canonical = new Map();
+  let seq = null;
+  if (!changes.length) return { rejected, canonical, seqBefore, seq };
+  const extraIds = scope ? await scopeExtraIds(env.DB, changes) : [];
+  for (let attempt = 0; ; attempt++) {
+    const st = await loadState(env.DB, changes, extraIds);
+    seqBefore ??= Number(st.seq);
+    let todo = changes;
+    let refused = [];
+    if (scope) ({ allowed: todo, rejected: refused, canonical } = scopeChanges(st.state, changes, scope));
+    const res = todo.length ? applyChanges(st.state, todo, { now, deviceId }) : { touched: new Map(), conflicts: [], rejected: [], movedOut: [] };
+    rejected = [...refused, ...res.rejected];
+    if (scope) {
+      // the scope check above makes this impossible; never write outside the list even if it were not
+      for (const [key, row] of res.touched) {
+        if (row.kind !== 'conflict' && !(row.kind === 'task' && row.fields.place.v?.project === scope.projectId)) res.touched.delete(key);
+      }
+    }
+    if (!res.touched.size && !res.conflicts.length) break;
+    try {
+      seq = await writeState(env.DB, st.seq, res, now);
+      break;
+    } catch (e) {
+      if (!isStale(e) || attempt + 1 >= MAX_ATTEMPTS) throw e;
+      await new Promise((r) => setTimeout(r, 5 + Math.random() * 20 * (attempt + 1)));
+    }
+  }
+  return { rejected, canonical, seqBefore, seq };
+}
+
+/**
  * scope: { projectId, access } when the request was made with a shared list's key (src/shares.js).
  * extra: statements read in the same batch as the changes; annotate(results) -> fields to add to the response.
  */
@@ -248,35 +286,7 @@ export async function handleSync(env, body, { now = Date.now(), scope = null, ex
   if (!Array.isArray(changes)) throw new HttpError(400, 'changes must be an array');
   if (changes.length > MAX_CHANGES) throw new HttpError(413, `at most ${MAX_CHANGES} changes per request`);
 
-  let rejected = [];
-  let seqBefore = null;
-  let canonical = new Map();
-  if (changes.length) {
-    const extraIds = scope ? await scopeExtraIds(env.DB, changes) : [];
-    for (let attempt = 0; ; attempt++) {
-      const st = await loadState(env.DB, changes, extraIds);
-      seqBefore ??= Number(st.seq);
-      let todo = changes;
-      let refused = [];
-      if (scope) ({ allowed: todo, rejected: refused, canonical } = scopeChanges(st.state, changes, scope));
-      const res = todo.length ? applyChanges(st.state, todo, { now, deviceId }) : { touched: new Map(), conflicts: [], rejected: [], movedOut: [] };
-      rejected = [...refused, ...res.rejected];
-      if (scope) {
-        // the scope check above makes this impossible; never write outside the list even if it were not
-        for (const [key, row] of res.touched) {
-          if (row.kind !== 'conflict' && !(row.kind === 'task' && row.fields.place.v?.project === scope.projectId)) res.touched.delete(key);
-        }
-      }
-      if (!res.touched.size && !res.conflicts.length) break;
-      try {
-        await writeState(env.DB, st.seq, res, now);
-        break;
-      } catch (e) {
-        if (!isStale(e) || attempt + 1 >= MAX_ATTEMPTS) throw e;
-        await new Promise((r) => setTimeout(r, 5 + Math.random() * 20 * (attempt + 1)));
-      }
-    }
-  }
+  const { rejected, canonical, seqBefore } = await applyAndWrite(env, changes, { now, deviceId, scope });
   const { extra: extraResults, ...out } = await loadChangesSince(env.DB, cursor, { scope, extra });
   // refused rows of the list come back as they are, so the device drops what it could not save
   const sent = new Set(out.changes.map((r) => `${r.kind}:${r.id}`));
