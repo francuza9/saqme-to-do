@@ -102,6 +102,7 @@ On Windows (or from WSL):
 
 ```powershell
 powershell -NoProfile -ExecutionPolicy Bypass -File desktop\tests\sync-core.tests.ps1        # sync engine unit tests
+powershell -NoProfile -ExecutionPolicy Bypass -File desktop\tests\mcp-local.tests.ps1        # Connect Claude Desktop: the local tools, Claude's settings file
 powershell -NoProfile -ExecutionPolicy Bypass -File desktop\tests\shared-fixtures.tests.ps1  # shared/fixtures (Vitest runs them too)
 powershell -NoProfile -ExecutionPolicy Bypass -File scripts\dev\test-setup.ps1          # installer, in a sandbox
 powershell -NoProfile -ExecutionPolicy Bypass -STA -File desktop\widget.ps1 -DataDir C:\temp\saqme-dev            # run the app on scratch data

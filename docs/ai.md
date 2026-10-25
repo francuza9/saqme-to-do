@@ -1,26 +1,24 @@
 # Use Saqme with your AI
 
 Connect Claude, ChatGPT or another AI app to your Saqme lists. Then just ask it things like "What's due this
-week?" or "Add milk to Groceries", and the changes show up in Saqme on all your devices.
+week?" or "Add milk to Groceries", and the changes show up in Saqme.
 
-It takes a minute: you copy one link from Saqme and paste it into your AI app. Nothing to install, no password
-to type.
+Open **Settings › Use with AI** in Saqme. The best way for you comes first:
 
-## What you need
+- **Sync on:** *Connect Claude* or *Connect ChatGPT*. Works on the web, on your phone and on your computer.
+- **Sync off:** *Connect Claude Desktop*. One click, for Claude's app on this computer. No sync needed.
 
-- **Saqme sync turned on.** If **Settings › Use with AI** in Saqme says *Needs sync*, open **Settings › Sync &
-  sharing** and click **Set up sync** first. It is free; [the setup guide](setup.md) shows every step.
-- **Claude** (claude.ai or the Claude app) or **ChatGPT** (a paid plan, on chatgpt.com).
-
-<!-- SCREENSHOT: Saqme, Settings › Use with AI, with the Copy link row -->
+<!-- SCREENSHOT: Saqme, Settings › Use with AI, with Connect Claude and Connect ChatGPT -->
 
 ## Connect Claude
 
-1. In Saqme, open **Settings › Use with AI** and click **Copy link**.
-2. Go to [claude.ai](https://claude.ai), open **Settings › Connectors** and click **Add custom connector**.
-3. Type **Saqme** as the name, paste the link into the **URL** box, and click **Add**.
-4. Start a new chat, click the **+** button under the message box and switch **Saqme** on.
-5. Ask "What's due this week?" When Claude asks to use Saqme, click **Allow**.
+You need Saqme sync turned on (free; [the setup guide](setup.md) shows every step) and a Claude account.
+
+1. In Saqme, open **Settings › Use with AI** and click **Connect Claude**. Saqme copies your link and opens
+   Claude's **Connectors** page.
+2. Click **Add custom connector**, type **Saqme** as the name, paste the link into the **URL** box and click **Add**.
+3. In a new chat, click **+** under the message box, switch **Saqme** on and ask "What's due this week?" Click
+   **Allow** when Claude asks to use Saqme.
 
 Saqme then works in the Claude apps on your phone and computer too.
 
@@ -28,22 +26,38 @@ Saqme then works in the Claude apps on your phone and computer too.
 
 ## Connect ChatGPT
 
-1. In Saqme, open **Settings › Use with AI** and click **Copy link**.
-2. Go to [chatgpt.com](https://chatgpt.com), open **Settings › Apps & Connectors › Advanced settings** and switch on
-   **Developer mode**.
-3. Back in **Apps & Connectors**, click **Create**. Type **Saqme** as the name and paste the link into the **URL** box.
-4. Under **Authentication**, choose **No authentication**, tick **I trust this application** and click **Create**.
-5. In a new chat, click **+**, then **More › Developer mode**, and pick **Saqme**. Ask "What's due this week?" and
-   click **Confirm** when ChatGPT asks.
+You need Saqme sync turned on and a paid ChatGPT plan (Developer mode, on chatgpt.com in a browser).
 
-Developer mode needs a paid ChatGPT plan and works on chatgpt.com in a browser. In newer versions, *Apps &
-Connectors* is called *Apps*.
+1. In Saqme, open **Settings › Use with AI** and click **Connect ChatGPT**. Saqme copies your link and opens
+   ChatGPT's settings at **Apps & Connectors**.
+2. Open **Advanced settings** and switch on **Developer mode**. Back in **Apps & Connectors**, click **Create**.
+3. Type **Saqme** as the name and paste the link into the **URL** box. Choose **No authentication**, tick **I trust
+   this application** and click **Create**.
+4. In a new chat, click **+**, then **More › Developer mode**, pick **Saqme** and ask "What's due this week?"
+
+If the settings don't open by themselves, open them yourself: **Settings › Apps & Connectors** (in newer versions
+just **Apps**).
 
 <!-- SCREENSHOT: chatgpt.com, the Create window, filled in -->
 
+## Connect Claude Desktop
+
+For Claude's app on your computer (Windows or Mac). No sync needed: it works with the lists on this computer.
+
+1. Install [Claude Desktop](https://claude.ai/download) if you don't have it yet, and sign in. (Saqme shows
+   **Install Claude Desktop** until it is there.)
+2. In Saqme, open **Settings › Use with AI** and click **Connect Claude Desktop**.
+3. Quit Claude Desktop completely and open it again. On Windows: its menu **File › Exit**, or right-click its icon
+   next to the clock and choose **Quit**. On a Mac: **Claude › Quit Claude**. Closing the window is not enough.
+4. In any chat, ask "What's due this week?" Click **Allow** when Claude asks to use Saqme.
+
+**Disconnect Claude Desktop**, on the same page, takes Saqme out again.
+
+<!-- SCREENSHOT: Saqme, Settings › Use with AI without sync, Connect Claude Desktop first -->
+
 ## Other AI apps
 
-If your AI app lets you add a *custom connector* with a link, it works the same way: copy the link from Saqme,
+If your AI app lets you add a *custom connector* with a link, it works the same way: click **Copy link** in Saqme,
 paste it there, and choose no sign-in if it asks.
 
 ## What to ask
@@ -63,7 +77,8 @@ paste it there, and choose no sign-in if it asks.
   bring it back (or ask the AI to).
 - **It only does what you ask,** and Claude and ChatGPT ask you before they change anything (unless you tell them
   not to).
-- **Lists someone else shares with you** can't be reached this way: change those in Saqme.
+- **Lists someone else shares with you** can't be reached through the link: change those in Saqme. Claude Desktop
+  can change them if you may edit them, and leaves the view-only ones alone.
 
 ---
 
@@ -206,9 +221,11 @@ folder>`, in Cursor *File > Add Folder to Workspace*.
 Don't open the whole data folder (`%APPDATA%\SaqmeToDo`, `~/.local/share/saqme`): next to `lists` it holds your sync
 key (`sync/config.json`), and an assistant should not see that.
 
-**Claude Desktop without sync, and any MCP filesystem server.** Claude Desktop can reach your files through a local
-MCP server. The filesystem server limited to the lists folder is enough: in **Settings > Developer > Edit Config** add
-it to `claude_desktop_config.json` (the path is the one the app showed you; on Windows double the backslashes):
+**Claude Desktop:** use [Connect Claude Desktop](#connect-claude-desktop): one click, no Node.js, Saqme's rules built
+in. What follows is for **any other MCP filesystem server**, or for doing it by hand. The filesystem server limited
+to the lists folder is enough: in **Settings > Developer > Edit Config** add it to `claude_desktop_config.json` (the
+path is the one the app showed you; on Windows double the backslashes; Connect Claude Desktop later replaces an entry
+named `saqme`):
 
 ```json
 {
@@ -221,7 +238,9 @@ it to `claude_desktop_config.json` (the path is the one the app showed you; on W
 }
 ```
 
-Restart Claude Desktop (it needs Node.js for `npx`). Then put the instructions where Claude always sees them: a
+Restart Claude Desktop (it needs Node.js for `npx`). On Windows, if Claude Desktop is the Microsoft Store version, a
+server it starts this way sees its private copy of AppData (see the last point below): Connect Claude Desktop is the
+safe way there. Then put the instructions where Claude always sees them: a
 **Project**'s instructions (paste) or its knowledge (add `SAQME.md`). Any other MCP filesystem server works the same
 way: point it at the lists folder only, and give the model the instructions as a system prompt.
 
@@ -256,5 +275,6 @@ the better fit.
   the last sync, and Settings › Your lists offers to bring back what such a copy has and your folder lacks. The
   instructions above tell the assistant to edit files in place and never to start Saqme, its updater or its setup. If its
   edits never show up in Saqme, ask it to list the lists folder and compare with **Open the lists folder**; an assistant
-  that runs as a normal program, or an MCP server started by one, is not affected. (Connecting by link has none of
-  this: it never touches files.)
+  that runs as a normal program, or an MCP server started by one, is not affected (an MCP server started by the Store
+  version of Claude Desktop is). Connecting by link has none of this (it never touches files), and **Connect Claude
+  Desktop** does its work outside the copy ([how](#connect-claude-desktop-how-it-works)).

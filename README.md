@@ -21,27 +21,26 @@ Connect Claude, ChatGPT or another AI app to your lists, then just ask it:
 - **"Move everything about the Berlin trip to Travel."** Tasks move with their steps and notes.
 - **"What have I been putting off?"** It finds what you postponed or let slip.
 
-What it changes shows up in Saqme within seconds, on all your devices.
+What it changes shows up in Saqme within seconds.
 
-**Connect it in a minute** (you need Saqme sync turned on; it is free):
+**Connect it in a minute.** In Saqme, open **Settings › Use with AI**. The best way for you comes first:
 
-1. In Saqme, open **Settings › Use with AI** and click **Copy link**.
-2. Paste the link into your AI app. In Claude: **Settings › Connectors › Add custom connector**. In ChatGPT:
-   **Settings › Apps & Connectors › Create** (with **Developer mode** on).
-3. Start a new chat, switch Saqme on, and ask.
+- **With sync** (free): click **Connect Claude** or **Connect ChatGPT**. Saqme copies your link and opens the page
+  where you paste it; then switch Saqme on in a chat and ask. Works on the web and your phone too.
+- **Without sync:** click **Connect Claude Desktop**, then quit Claude Desktop and open it again. Ask in any chat.
+  Nothing to paste, nothing to install besides Claude Desktop.
 
 Every click, for each app: [docs/ai.md](docs/ai.md). Keep the link private, like a password. Your AI can't delete a
 list, and anything it deletes waits in **Recently deleted** for 30 days.
 
-**No sync?** An AI app on your computer (Claude Code, Codex, Cursor) can edit your list files instead:
-[Other ways](docs/ai.md#other-ways).
+**Other AI apps on your computer** (Claude Code, Codex, Cursor) can edit your list files: [Other ways](docs/ai.md#other-ways).
 
 ## Features
 
 - **Your lists are files.** One markdown file per project (`lists/Work.md`). Edit them in any editor, script
   them, or [let an AI app on your computer manage them](docs/ai.md#other-ways); the app picks the changes up. [Format](docs/file-format.md).
 - **Connect your AI.** With sync, Claude, ChatGPT and other AI apps see and change your lists from one link,
-  on the web and in their phone apps. [How](docs/ai.md).
+  on the web and in their phone apps. Without sync, Claude Desktop gets them in one click. [How](docs/ai.md).
 - **Every platform, one look.** A small widget on Windows, an app window on macOS and Linux, and the phone
   app on iPhone and Android. All work offline and share one design, down to the typeface.
 - **No account needed.** Everything works on a single device. Sync is optional: it runs on the free plan of
@@ -170,9 +169,10 @@ and import its lists as markdown files.
 **What happens offline?** Everything keeps working. Changes queue up and are sent when the connection is
 back.
 
-**Can my AI assistant edit the lists?** Yes, that is the point. With sync, copy the link in **Settings › Use with
-AI** and paste it into Claude or ChatGPT ([steps](docs/ai.md)). Without sync, an AI app on your computer can edit the
-list files: each line carries a short id like `^k3j9x2ab` so sync can follow a task through edits; leave it in place.
+**Can my AI assistant edit the lists?** Yes, that is the point. With sync, **Settings › Use with AI › Connect
+Claude** (or ChatGPT) copies your link and opens the page to paste it in ([steps](docs/ai.md)). Without sync,
+**Connect Claude Desktop** on the same page does it for Claude's app on your computer. Other AI apps on your computer
+can edit the list files: each line carries a short id like `^k3j9x2ab` so sync can follow a task through edits; leave it in place.
 **Copy instructions for your AI** on the same page tells the AI so. See [docs/ai.md](docs/ai.md#other-ways) and
 [docs/file-format.md](docs/file-format.md).
 

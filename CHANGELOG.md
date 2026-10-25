@@ -2,6 +2,30 @@
 
 ## Unreleased
 
+**Connecting an AI takes fewer steps** ([docs/ai.md](docs/ai.md)). **Settings › Use with AI** now shows the best way
+for you first: with sync, *Connect Claude* and *Connect ChatGPT*; without sync, *Connect Claude Desktop*.
+
+- **Connect Claude / Connect ChatGPT** copy your link and open the page where you paste it (Claude's Connectors
+  settings, ChatGPT's Apps & Connectors), with "Link copied. Paste it in the page that opened." and the few clicks
+  left there (3 for Claude, 4 for ChatGPT). *Copy link* stays, for other AI apps.
+- **Connect Claude Desktop: no sync needed.** One click adds Saqme to Claude Desktop's settings; quit Claude Desktop,
+  open it again, and ask "What's due this week?" in any chat. Nothing to paste and nothing to install (no Node.js): on
+  Windows it runs on Windows PowerShell, on macOS and Linux on the Node.js Saqme already uses. Claude gets the same
+  tools and instructions as through the link. Without Claude Desktop the row says **Install Claude Desktop**.
+  **Disconnect Claude Desktop** takes Saqme out again (so does uninstalling Saqme on Windows).
+- **Safe with your files and Claude's settings:** only Saqme's own entry in Claude Desktop's settings is added or
+  removed, after a backup (`claude_desktop_config.json.saqme-backup`); a settings file that is not plain JSON is left
+  alone. On the lists: ids kept, no list file ever deleted, deletes into *Recently deleted* (25 an hour), view-only
+  shared lists left alone, and a list changed in the app at the same moment is never overwritten. With the Microsoft
+  Store version of Claude Desktop, Saqme does its work outside that app's private copy of AppData (the cause of the
+  2026-10-22 incident), or not at all.
+- For developers: `saqme mcp` (Linux/macOS, stdio, relays to the app's new `POST /api/local/mcp`), and
+  `desktop/mcp-server.ps1` + `mcp-core.ps1` (Windows); `desktop/mcp-tools.json` is made from `worker/src/mcp.js`
+  (`LOCAL_TOOLS`) by `scripts/build-mcp-tools.mjs`. Tests: `desktop/tests/mcp-local.tests.ps1` (new),
+  `worker/test/node/claude-desktop.test.js` (new), `shared/fixtures/claude-config.json` (both sides), the widget's
+  self-check, `container-check.ps1` (step 3: from inside Claude Desktop's container), uia-check and the browser checks
+  (the buttons open the right pages; plain words; 5 steps at most).
+
 **Connect your AI** ([docs/ai.md](docs/ai.md)). With sync on, Claude, ChatGPT and other AI apps can see and change
 your lists: in Saqme, **Settings › Use with AI › Copy link**, then paste the link into the AI app (Claude: Settings ›
 Connectors › Add custom connector, and it is then in the Claude apps on your phone and computer too; ChatGPT:
