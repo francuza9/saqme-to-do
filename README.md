@@ -68,10 +68,10 @@ Nothing is sent anywhere until you choose to turn on sync. On a phone, open
 <https://francuza9.github.io/saqme-to-do/> and tap **Use it on this device**. What works where without an
 account: [docs/local-only.md](docs/local-only.md).
 
-**Windows:** paste this into PowerShell (or a Command Prompt).
+**Windows:** open **PowerShell** (Start menu, type *PowerShell*, press Enter) and paste this:
 
 ```powershell
-powershell -NoProfile -ExecutionPolicy Bypass -Command "irm https://raw.githubusercontent.com/francuza9/saqme-to-do/main/scripts/setup.ps1 | iex"
+irm https://raw.githubusercontent.com/francuza9/saqme-to-do/main/scripts/setup.ps1 | iex
 ```
 
 **macOS and Linux:** paste this into a terminal.

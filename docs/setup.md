@@ -50,17 +50,21 @@ anywhere (e.g. *Downloads*), open the extracted folder and double-click **`setup
 If Windows shows "Windows protected your PC" (SmartScreen), click **More info**, then **Run anyway**: the file
 is a plain text script you can read first.
 
-**Option B — one line in PowerShell:**
+**Option B — one line in PowerShell** (Start menu, type *PowerShell*, press Enter; paste it there, not in a Command Prompt):
 
 ```powershell
-powershell -NoProfile -ExecutionPolicy Bypass -Command "irm https://raw.githubusercontent.com/francuza9/saqme-to-do/main/scripts/setup.ps1 | iex"
+irm https://raw.githubusercontent.com/francuza9/saqme-to-do/main/scripts/setup.ps1 | iex
 ```
 
 With options, for example the app and cloud sync:
 
 ```powershell
-powershell -NoProfile -ExecutionPolicy Bypass -Command "& ([scriptblock]::Create((irm https://raw.githubusercontent.com/francuza9/saqme-to-do/main/scripts/setup.ps1))) -Cloud"
+& ([scriptblock]::Create((irm https://raw.githubusercontent.com/francuza9/saqme-to-do/main/scripts/setup.ps1))) -Cloud
 ```
+
+Do not wrap these in `powershell -ExecutionPolicy Bypass -Command "..."`: some antivirus programs (and Windows
+security rules on managed PCs) block that pattern as a download-and-run trick, and it fails with
+*Program 'powershell.exe' failed to run: Access is denied*. Setup sets what it needs for its own run.
 
 **Option C — from a clone:** `git clone https://github.com/francuza9/saqme-to-do.git`, then `setup.cmd` in the
 repository folder.
@@ -454,7 +458,8 @@ run from it) does not update itself: `git pull` and run setup.
 | Sync icon shows a red warning | Hover it for the reason. *Token rejected*: run setup's cloud part again (or pair again). *Server error*: wait a minute; it retries on its own. |
 | "N tasks vanished from the lists folder … deletions paused" | A list file was emptied or replaced in one go. **Settings > Sync & sharing > Deletions paused > Restore them** puts the tasks back into their lists as they last synced (tasks added since stay); if it was on purpose, **Delete them** confirms it (Linux/macOS: or `saqme restore-deletes` / `saqme allow-deletes`). |
 | Phone shows the welcome screen after installing | Expected on iPhone: type the pairing code (**Pair phone** on the computer, or the one Safari showed) into the field on that screen. *Wrong or expired*: show a new one; a code works once, for 10 minutes. Pasting the pairing link works too. |
-| Setup stops: "running inside another app's package" | It was started from a shell that belongs to a Store app (for example an AI assistant in a desktop app); Windows would keep what it installs in that app's private copy of `AppData`. Run the command it prints from File Explorer (double-click `setup.cmd`) or Win+R. In the app: quit Saqme from the tray icon, start it from the Start menu, then **Set up sync**. |
+| Setup stops: "running inside another app's package" | It was started from a shell that belongs to a Store app (for example an AI assistant in a desktop app); Windows would keep what it installs in that app's private copy of `AppData`. Run the command it prints in a PowerShell window opened from the Start menu, or double-click `setup.cmd` in File Explorer. In the app: quit Saqme from the tray icon, start it from the Start menu, then **Set up sync**. |
+| *Program 'powershell.exe' failed to run: Access is denied* | The command started a second PowerShell with `-ExecutionPolicy Bypass -Command`, which antivirus or Windows security rules can block. Paste the short line from [section 1](#1-install-on-windows) (`irm … \| iex`) into PowerShell instead. |
 | Saqme says "started from inside another app" and does not start | The same, for the app: it was started from such a shell (an AI assistant ran it or its updater) and could not start again outside it. Start it from the Start menu. |
 | *Lists written again* in Settings > Sync & sharing | A list's file vanished from the lists folder without being deleted in the app (another program, a sync client, another app's private copy of `AppData`); Saqme wrote it again from the last sync instead of deleting anything. To delete a list, use *Delete list* in its menu. |
 | Settings > Your lists offers *Bring back from Claude* (or another app) | That app has a private copy of your data folder with lists or tasks your real one lacks (Saqme ran inside it before 1.2.3). Bringing them back only adds what is missing. The copy itself is never changed; once nothing is missing you can delete it (keep its `cloud.json`, if any). |

@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+**Windows install line that antivirus does not block.** The one-liner is now just `irm …/setup.ps1 | iex`, pasted
+into PowerShell (README, docs/setup.md, the invite page, setup's own hints). The old form started a second
+PowerShell with `-ExecutionPolicy Bypass -Command "irm … | iex"`, a pattern antivirus and Windows security rules
+block as a download-and-run trick (*Program 'powershell.exe' failed to run: Access is denied*). Setup now allows
+scripts for its own process only, and when pasted into a window it stops with an error instead of closing that
+window, so the reason stays readable. The one-liner also installs the newest release with that release's own setup:
+`main`'s setup could be ahead of the release (it expected `claude-desktop.ps1`, which 1.2.5 does not have) and
+stopped every new install with *Cannot find path … claude-desktop.ps1*.
+
 **Connecting an AI takes fewer steps** ([docs/ai.md](docs/ai.md)). **Settings › Use with AI** now shows the best way
 for you first: with sync, *Connect Claude* and *Connect ChatGPT*; without sync, *Connect Claude Desktop*.
 

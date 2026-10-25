@@ -55,6 +55,17 @@ $SetupOptions = @($PSBoundParameters.GetEnumerator() | Where-Object { $_.Key -no
 $ErrorActionPreference = 'Stop'
 $ProgressPreference = 'SilentlyContinue'   # (PowerShell 5.1 downloads crawl while drawing a progress bar)
 Set-StrictMode -Off
+# Run as `irm ... | iex` the script itself needs no policy, but it dot-sources the release's .ps1 files: allow
+# scripts for this process only (nothing persists; a policy set by Group Policy still wins).
+try { Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass -Force -ErrorAction Stop } catch { }
+# Pasted into PowerShell (irm ... | iex, or & ([scriptblock]::Create(...))) the script runs in the user's own window:
+# `exit` would close it before they can read why setup stopped, so it stops with an error instead.
+$script:FromWeb = -not $PSCommandPath
+$script:StopMark = 'Saqme setup stopped (see the reason above).'
+function Exit-Setup([int]$code) {
+  if ($script:FromWeb) { $global:LASTEXITCODE = $code; if ($code -ne 0) { throw $script:StopMark }; return }
+  exit $code
+}
 
 # GitHub repository used when this script runs on its own (irm ... | iex): change it in a fork.
 $Repo = 'francuza9/saqme-to-do'
@@ -118,13 +129,17 @@ function Stop-Setup([string]$what, [string]$next) {
   Write-ResultJson $r
   Restore-App
   Wait-Close $false
-  exit 1
+  Exit-Setup 1
 }
-# this setup with other options: setup.cmd where there is one, else the one-liner from the web
+# this setup with other options: setup.cmd where there is one, else the one-liner from the web, to paste into
+# PowerShell (not wrapped in `powershell -ExecutionPolicy Bypass -Command`: antivirus blocks that pattern)
 function Get-SetupCommand([string]$options) {
-  if ($PSScriptRoot -and (Test-Path -LiteralPath (Join-Path $PSScriptRoot '..\setup.cmd'))) { return "setup.cmd $options" }
+  # (not a release unpacked to TEMP for a web install: that folder is gone afterwards)
+  $inTemp = $PSScriptRoot -and ([IO.Path]::GetFullPath($PSScriptRoot)).StartsWith([IO.Path]::GetFullPath($env:TEMP), [StringComparison]::OrdinalIgnoreCase)
+  if ($PSScriptRoot -and -not $inTemp -and (Test-Path -LiteralPath (Join-Path $PSScriptRoot '..\setup.cmd'))) { return "setup.cmd $options".Trim() }
   $u = "https://raw.githubusercontent.com/$Repo/$Branch/scripts/setup.ps1"
-  return "powershell -NoProfile -ExecutionPolicy Bypass -Command `"& ([scriptblock]::Create((irm $u))) $options`""
+  if (-not $options) { return "irm $u | iex" }
+  return "& ([scriptblock]::Create((irm $u))) $options"
 }
 # Inside an MSIX-packaged app (a Store app's terminal, an AI assistant's shell in a desktop app) Windows gives
 # AppData and HKCU a private copy per package: what setup wrote there (the data folder, registry entries) would
@@ -159,7 +174,7 @@ function Assert-NotPackaged {
   $what = "Setup is running inside another app's package ($pkg), for example a terminal or an AI assistant started from that app. Windows keeps what such a program writes to AppData and the registry in that app's private copy, so Saqme started from the Start menu would not find it."
   if ($FromApp) { Stop-Setup $what 'Quit Saqme (tray icon > Quit), start it from the Start menu, then choose Set up sync again.' }
   $cmd = $(if ($PSScriptRoot -and (Test-Path -LiteralPath (Join-Path $PSScriptRoot '..\setup.cmd'))) { "`"$([IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..\setup.cmd')))`" $SetupOptions" } else { Get-SetupCommand $SetupOptions })
-  Stop-Setup $what "Run it from a normal window instead: double-click setup.cmd in File Explorer, or press Win+R and run: $($cmd.Trim())"
+  Stop-Setup $what "Run it from a normal window instead: double-click setup.cmd in File Explorer, or open PowerShell from the Start menu and run: $($cmd.Trim())"
 }
 function Confirm-Step([string]$question) {
   if ($Yes) { return $true }
@@ -535,7 +550,7 @@ function Install-Cloud([string]$src) {
     if ($ResultFile -and -not (Test-Path -LiteralPath $ResultFile)) { Write-Result $false 'The cloud setup did not finish.' 'Run it again; the window shows where it stopped.' }
     Restore-App
     Wait-Close $false
-    exit $code
+    Exit-Setup $code
   }
 }
 
@@ -685,6 +700,15 @@ if ($WorkerUpdate -or $CloudLogin) {
 
 $withCloud = $Cloud -or $CloudOnly -or $RotateToken -or $DeviceLogin   # those two only make sense with it
 $src = Get-SourceDir
+# Run from the web, this script is main's, which can be ahead of the newest release (files it expects that the
+# release does not have yet): the release's own setup installs it, so the two always match.
+if ($script:FromWeb -and -not $Source -and $src -and (Test-Path -LiteralPath (Join-Path $src 'scripts\setup.ps1'))) {
+  $handOff = @{} + $PSBoundParameters; $handOff['Source'] = $src
+  $global:LASTEXITCODE = 0
+  & (Join-Path $src 'scripts\setup.ps1') @handOff
+  if ($LASTEXITCODE) { Exit-Setup $LASTEXITCODE }
+  return
+}
 # the release's own rules (versions, the update decision, its pointer files)
 $core = $(if ($src) { Join-Path $src 'desktop' } else { $PSScriptRoot })
 . (Join-Path $core 'sync-core.ps1')
@@ -705,13 +729,14 @@ try {
     if (Test-Path -LiteralPath (Join-Path $DataDir 'sync\config.json')) { Write-Info 'Cloud sync stays on (set up earlier); the app keeps it updated by itself.' }
     else {
       Write-Info 'Your lists stay on this PC. To have them on your phone too: in the app, Settings > Sync & sharing > Set up sync.'
-      Write-Info "(or run: $(Get-SetupCommand '-Cloud'); a device that already syncs: paste its pairing link there)"
+      Write-Info "(or run in PowerShell: $(Get-SetupCommand '-Cloud'); a device that already syncs: paste its pairing link there)"
     }
   }
   if (-not $CloudOnly -and (-not $NoStart -or $wasRunning)) { Write-Step 'Starting'; Start-App }
   elseif ($CloudOnly -and (Test-AppRunning)) { Write-Info 'The running app picks up the sync settings by itself within a few seconds.' }
   elseif ($CloudOnly) { Start-App }
 } catch {
+  if ($_.Exception.Message -eq $script:StopMark) { throw }
   Stop-Setup "$($_.Exception.Message)" 'Please open an issue on GitHub with this message if it keeps happening.'
 } finally {
   Restore-App

@@ -107,7 +107,7 @@ if [ "$wsl" = 1 ] && [ "$mode" = app ] && [ "$force_app" = 0 ]; then
   # WSL is Windows: the Windows app is the one to install, and without --cloud nothing goes to Cloudflare
   if [ "$cloud" = 0 ]; then
     printf '\n%sThis is WSL, on Windows.%s Install the Windows app instead: paste this into PowerShell (no account needed):\n\n' "$B" "$N"
-    printf '  %s\n\n' 'powershell -NoProfile -ExecutionPolicy Bypass -Command "irm https://raw.githubusercontent.com/francuza9/saqme-to-do/main/scripts/setup.ps1 | iex"'
+    printf '  %s\n\n' 'irm https://raw.githubusercontent.com/francuza9/saqme-to-do/main/scripts/setup.ps1 | iex'
     info "Or, here in WSL:  --app         install the Linux app inside WSL (its own lists, not the Windows app's)"
     info "                  --cloud-only  set up sync in your Cloudflare account for the Windows app"
     exit 0
