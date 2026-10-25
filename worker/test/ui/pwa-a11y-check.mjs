@@ -80,7 +80,11 @@ for (const scheme of ['dark', 'light']) {
     // (the sheet that takes the token for the sync service's own updates: with a dev Worker that knows its account,
     // npm run dev -- --var SAQME_ACCOUNT_ID:x --var SAQME_WORKER_NAME:y)
     if (p === 'updates' && await page.$('[data-fk="svc-token"]')) { await page.click('[data-fk="svc-token"]'); await page.waitForTimeout(200); await axe(page, `${scheme} token sheet`); await page.keyboard.press('Escape'); }
-    if (p === 'ai' && await page.$('[data-fk="ai-chatgpt"]')) { await page.click('[data-fk="ai-chatgpt"]'); await page.waitForTimeout(200); await axe(page, `${scheme} connect ChatGPT sheet`); await page.keyboard.press('Escape'); }
+    if (p === 'ai' && await page.$('[data-fk="ai-chatgpt"]')) {
+      // (Connect ChatGPT also opens ChatGPT's settings: a stand-in page here, closed again)
+      await page.context().route(/^https:\/\/chatgpt\.com\//, (r) => r.fulfill({ contentType: 'text/html', body: '<title>stand-in</title>' }));
+      page.context().once('page', (popup) => popup.close().catch(() => {}));
+      await page.click('[data-fk="ai-chatgpt"]'); await page.waitForTimeout(200); await axe(page, `${scheme} connect ChatGPT sheet`); await page.keyboard.press('Escape'); }
     if (p === 'sync') { await page.click('[data-fk="advanced"]'); await page.waitForTimeout(150); await axe(page, `${scheme} settings sync, advanced`); }
     if (p === 'lists') { await page.click('[data-fk="open:trash"]'); await page.waitForTimeout(150); await axe(page, `${scheme} recently deleted`); await page.click('.view-header .back'); }
     await page.click('.view-header .back');

@@ -25,6 +25,9 @@ writeFileSync(fake, `
 `);
 process.env.SAQME_CLOUD_SETUP_JS = fake;
 process.env.SAQME_CLOUD_STATE = join(dir, 'setup', 'cloud.json');
+// Claude Desktop's settings folder: a scratch one (not there at first: Install; then made: Connect, Disconnect)
+const claudeDir = join(dir, 'Claude');
+process.env.SAQME_CLAUDE_CONFIG_DIR = claudeDir;
 const { startApp } = await import('../../../local/saqme.mjs');
 const { aiPrompt } = await import('../../../local/ai-prompt.mjs');
 const app = await startApp({ dataDir: dir, port: 0, interval: 500, cloudInterval: 60_000, settleMs: 0, reminders: false });
@@ -54,6 +57,27 @@ try {
   await page.click('[data-fk="open:ai"]');
   await page.waitForSelector('.view-header h1:has-text("Use with AI")');
   check(await page.isVisible('.g-row:has-text("Connect your AI") .g-value:has-text("Needs sync")') && /turn on sync first/.test(await page.textContent('#list')), 'Use with AI: connecting an AI app needs sync, and it says so');
+  // without sync, Claude Desktop comes first: Install when it is not there, then Connect (no sync needed) and Disconnect
+  await page.waitForSelector('[data-fk="ai-desktop-install"]');
+  const heads = await page.$$eval('#list .g-head', (e) => e.map((x) => x.textContent));
+  check(heads.indexOf('Claude Desktop on this computer') === 0 && heads.indexOf('Connect your AI') > 0, `Use with AI without sync: Claude Desktop first (${heads.join(', ')})`);
+  check(!/MCP|endpoint|OAuth|Worker|token|server/i.test(await page.textContent('#list')), 'Use with AI: plain words, no jargon');
+  mkdirSync(claudeDir);
+  writeFileSync(join(claudeDir, 'claude_desktop_config.json'), '{"mcpServers":{"other":{"command":"x"}}}\n');
+  await page.keyboard.press('Escape');
+  await page.click('[data-fk="open:ai"]');
+  await page.waitForSelector('[data-fk="ai-desktop"]');
+  await page.click('[data-fk="ai-desktop"]');
+  await page.waitForSelector('#sheet:has-text("Claude Desktop is connected")');
+  const deskSteps = await page.$$eval('#sheet ol.steps li', (l) => l.length);
+  check(deskSteps <= 5 && /Quit Claude Desktop completely/.test(await page.textContent('#sheet')) && !/MCP|endpoint|OAuth|Worker|token|server/i.test(await page.textContent('#sheet')), `Connect Claude Desktop: then quit and open it again (${deskSteps} plain steps)`);
+  const claudeCfg = JSON.parse(readFileSync(join(claudeDir, 'claude_desktop_config.json'), 'utf8'));
+  check(Object.keys(claudeCfg.mcpServers).join() === 'other,saqme' && claudeCfg.mcpServers.saqme.args.join(' ').endsWith(`mcp --data ${dir}`), `Connect Claude Desktop: Saqme added next to the rest (${JSON.stringify(claudeCfg.mcpServers.saqme)})`);
+  await page.keyboard.press('Escape');
+  await page.waitForSelector('[data-fk="ai-desktop-disconnect"]');
+  await page.click('[data-fk="ai-desktop-disconnect"]');
+  await page.waitForSelector('[data-fk="ai-desktop"]');
+  check(Object.keys(JSON.parse(readFileSync(join(claudeDir, 'claude_desktop_config.json'), 'utf8')).mcpServers).join() === 'other', 'Disconnect Claude Desktop takes out Saqme only');
   // the instructions with this lists folder in them, on the clipboard and as SAQME.md
   const wanted = aiPrompt(join(dir, 'lists'));
   await page.click('[data-fk="do:Copy instructions for your AI"]');

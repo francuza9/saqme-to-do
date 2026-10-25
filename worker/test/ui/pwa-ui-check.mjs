@@ -442,11 +442,21 @@ check(await page.isVisible('[data-fk="ai-rotate"]') && await page.isVisible('[da
   'Use with AI: Copy link, Make a new link, Disconnect (no files option on a phone)');
 const aiText = await page.textContent('#list');
 check(!/MCP|endpoint|OAuth|Worker|token|server/i.test(aiText), `Use with AI: plain words, no jargon (${(aiText.match(/MCP|endpoint|OAuth|Worker|token|server/i) ?? [''])[0]})`);
-await page.tap('[data-fk="ai-claude"]');
-await page.waitForSelector('#sheet:has-text("Add custom connector")');
-check(await page.isVisible('#sheet button:has-text("Copy link")') && await page.$$eval('#sheet ol.steps li', (l) => l.length) <= 5, 'Use with AI: the Claude steps (5 at most), with the link to copy');
-check(!/MCP|endpoint|OAuth|Worker|token|server/i.test(await page.textContent('#sheet')), 'Use with AI: the steps are in plain words');
-await page.keyboard.press('Escape');
+// Connect Claude / Connect ChatGPT: the link copied, the page to paste it in opened (stood in for here), the steps
+await ctx.route(/^https:\/\/(claude\.ai|chatgpt\.com)\//, (r) => r.fulfill({ contentType: 'text/html', body: '<title>stand-in</title>' }));
+await page.evaluate(() => { window.copied = null; navigator.clipboard.writeText = async (t) => { window.copied = t; }; });
+for (const [fk, name, opens] of [['ai-claude', 'Claude', 'https://claude.ai/settings/connectors'], ['ai-chatgpt', 'ChatGPT', 'https://chatgpt.com/#settings/Connectors']]) {
+  const [popup] = await Promise.all([ctx.waitForEvent('page'), page.tap(`[data-fk="${fk}"]`)]);
+  await page.waitForSelector('#sheet:has-text("Link copied. Paste it in the page that opened.")');
+  check(popup.url() === opens, `Use with AI: Connect ${name} opens ${opens} (${popup.url()})`);
+  const copied = await page.evaluate(() => window.copied);
+  check(/^https?:\/\/[^/]+\/api\/mcp\/[A-Za-z0-9_-]{43}$/.test(copied ?? ''), `Use with AI: Connect ${name} copies the link (${copied})`);
+  const steps = await page.$$eval('#sheet ol.steps li', (l) => l.length);
+  check(steps >= 2 && steps <= 5 && await page.isVisible('#sheet button:has-text("Copy link")'), `Use with AI: the ${name} steps, ${steps} (5 at most), with the link to copy again`);
+  check(!/MCP|endpoint|OAuth|Worker|token|server/i.test(await page.textContent('#sheet')), `Use with AI: the ${name} steps are in plain words`);
+  await popup.close();
+  await page.keyboard.press('Escape');
+}
 await page.tap('.view-header .back');
 
 // trash view (Settings > Your lists > Recently deleted), and back one level at a time

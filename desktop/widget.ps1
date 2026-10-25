@@ -156,6 +156,7 @@ function Save-State {
 # $Tokens and $Themes come from tokens.ps1, generated from design/tokens.json (docs/design.md)
 . (Join-Path $dir 'tokens.ps1')
 . (Join-Path $dir 'rules.ps1')
+. (Join-Path $dir 'claude-desktop.ps1')
 $TypeSize = @{}; foreach ($k in $Tokens.Type.Keys) { $TypeSize[$k] = [double]$Tokens.Type[$k].Size }
 function Resolve-Theme([string]$pref) {
   if ($pref -eq 'light' -or $pref -eq 'dark') { return $pref }
@@ -3135,10 +3136,16 @@ function Render-YourListsPage {
 }
 
 # ---------------------------------------------------------------- Settings > Use with AI
-# The AI connector first (worker/src/connector.js, src/mcp.js): one URL from this PC's sync service, given to an
-# assistant as a custom connector (an MCP server); asked off the UI thread (Start-OwnApi) when the page opens, then
-# every minute. Then the files: the instructions for an assistant that works in the lists folder (no sync needed).
+# The ways to connect an AI app, best first (claude-desktop.ps1 Get-AiOptions): with sync, the link from this PC's sync
+# service (worker/src/connector.js, src/mcp.js: Claude and ChatGPT on the web and the phone), asked off the UI thread
+# (Start-OwnApi) when the page opens, then every minute; Claude Desktop on this PC (claude-desktop.ps1: Saqme in its
+# settings, mcp-server.ps1 on the list files, no sync needed); the instructions for an AI app that edits the files.
+# Plain words only, the same as docs/ai.md and the phone app (worker/public/js/app.js).
 $script:conn = @{ Status = $null; Error = ''; Asking = $false; At = 0; Busy = $false; Done = '' }
+$script:AiLinks = @{ Claude = 'https://claude.ai/settings/connectors'; ChatGPT = 'https://chatgpt.com/#settings/Connectors'; Download = $script:ClaudeDownload }   # (worker/public/js/ai.js)
+# where Claude Desktop is looked for: this user's AppData (the self-check gets a scratch one in its temp data folder)
+$script:claudeRoots = $(if ($SmokeTest) { @{ AppData = (Join-Path $DataDir 'claude-roaming'); Local = (Join-Path $DataDir 'claude-local') } } else { @{ AppData = $env:APPDATA; Local = $env:LOCALAPPDATA } })
+$script:desk = @{ Status = $null; At = 0 }
 function Test-ConnectorTooOld { return [bool]($script:sync -and $script:sync.WorkerApi -and $script:sync.WorkerApi -lt $script:ConnectorApi) }
 function Step-ConnectorStatus {
   $c = $script:conn
@@ -3163,43 +3170,83 @@ function Send-Connector([string]$kind, [string]$done) {
     if ($script:view -eq 'ai') { Render }
   }
 }
-function Copy-ConnectorUrl {
-  try { [System.Windows.Clipboard]::SetText([string]$script:conn.Status['url']); Show-Notice 'Link copied. Now paste it into your AI app.' }
-  catch { Show-Notice 'Could not copy: another program is using the clipboard.' }
+function Copy-ConnectorUrl([string]$done = 'Link copied. Now paste it into your AI app.') {
+  try { [System.Windows.Clipboard]::SetText([string]$script:conn.Status['url']); Show-Notice $done; return $true }
+  catch { Show-Notice 'Could not copy: another program is using the clipboard.'; return $false }
+}
+# Connect Claude / Connect ChatGPT: the link on the clipboard, and the place to paste it open in the browser
+function Connect-Assistant([string]$app) {
+  if (-not (Copy-ConnectorUrl "Link copied. Paste it in the page that opened ($app's steps are below).")) { return }
+  if (-not $SmokeTest) { try { Start-Process $script:AiLinks[$app] } catch { Show-Notice "Link copied. Open $($script:AiLinks[$app]) and paste it there." } }
 }
 function Get-AiSummary {
-  if (-not (Read-SyncConfigUi)) { return @{ Short = 'Needs sync'; Text = 'connecting an AI app needs sync' } }
+  $desk = ($script:desk.Status -and $script:desk.Status.State -eq 'connected')
+  if (-not (Read-SyncConfigUi)) {
+    if ($desk) { return @{ Short = 'On'; Text = 'Claude Desktop has your lists' } }
+    return @{ Short = ''; Text = 'connect Claude Desktop, no sync needed' }
+  }
   $s = $script:conn.Status
   if (-not $s -or (Test-ConnectorTooOld)) { return @{ Short = ''; Text = 'connect Claude, ChatGPT or another AI app' } }
   if ($s['enabled']) { return @{ Short = 'On'; Text = 'your AI link is on' } }
+  if ($desk) { return @{ Short = 'On'; Text = 'Claude Desktop has your lists' } }
   return @{ Short = 'Off'; Text = 'your AI link is off' }
 }
-# the steps, in the same plain words as docs/ai.md and the phone app (worker/public/js/app.js ASSISTANTS)
+# what to do in the page the Connect button opened, in the same plain words as docs/ai.md and the phone app
 $script:AiSteps = [ordered]@{
   Claude  = @(
-    '1. Click Copy link (above).',
-    '2. Go to claude.ai, open Settings > Connectors and click Add custom connector.',
-    '3. Type Saqme as the name, paste the link into the URL box, and click Add.',
-    '4. Start a new chat, click the + button under the message box and switch Saqme on.',
-    '5. Ask "What''s due this week?" When Claude asks to use Saqme, click Allow.',
-    'Saqme then works in the Claude apps on your phone and computer too.')
+    'In the page Connect Claude opened:',
+    '1. Click Add custom connector (sign in first if Claude asks).',
+    '2. Type Saqme as the name, paste the link into the URL box, and click Add.',
+    '3. In a new chat, click + under the message box, switch Saqme on and ask "What''s due this week?"',
+    'Click Allow when Claude asks to use Saqme. It then works in the Claude apps on your phone and computer too. If no page opened: claude.ai > Settings > Connectors.')
   ChatGPT = @(
-    '1. Click Copy link (above).',
-    '2. Go to chatgpt.com, open Settings > Apps & Connectors > Advanced settings and switch on Developer mode.',
-    '3. Back in Apps & Connectors, click Create. Type Saqme as the name and paste the link into the URL box.',
-    '4. Under Authentication, choose No authentication, tick I trust this application and click Create.',
-    '5. In a new chat, click +, then More > Developer mode, and pick Saqme. Ask "What''s due this week?" and click Confirm when ChatGPT asks.',
-    'Developer mode needs a paid ChatGPT plan and works on chatgpt.com in a browser. In newer versions, Apps & Connectors is called Apps.')
+    'In the page Connect ChatGPT opened (ChatGPT''s settings, Apps & Connectors):',
+    '1. Open Advanced settings and switch on Developer mode.',
+    '2. Back in Apps & Connectors, click Create. Type Saqme as the name and paste the link into the URL box.',
+    '3. Choose No authentication, tick I trust this application and click Create.',
+    '4. In a new chat, click +, then More > Developer mode, pick Saqme and ask "What''s due this week?"',
+    'Developer mode needs a paid ChatGPT plan, on chatgpt.com in a browser. If the settings did not open: Settings > Apps & Connectors (called Apps in newer versions).')
 }
+$script:DeskSteps = @(
+  '1. Quit Claude Desktop completely: in its menu, File > Exit, or right-click its icon next to the clock and choose Quit. Closing its window is not enough.',
+  '2. Open Claude Desktop again.',
+  '3. In any chat, ask "What''s due this week?" When Claude asks to use Saqme, click Allow.')
+
+# Claude Desktop on this PC: what its settings run for Saqme (the launcher next to versions\ when installed, which
+# follows updates), whether it is there and has it
+function Get-ThisClaudeEntry {
+  $s = $(if ($InstallRoot -and (Test-Path -LiteralPath (Join-Path $InstallRoot 'saqme-mcp.ps1'))) { Join-Path $InstallRoot 'saqme-mcp.ps1' } else { Join-Path $dir 'mcp-server.ps1' })
+  return (Get-ClaudeEntry $s ([IO.Path]::GetFullPath($DataDir)))
+}
+function Update-ClaudeDesktopStatus {
+  $script:desk.Status = Get-ClaudeDesktopStatus (Get-ThisClaudeEntry) $script:claudeRoots.AppData $script:claudeRoots.Local
+  $script:desk.At = Get-NowMs
+}
+function Connect-ClaudeDesktopUi([switch]$Off) {
+  $r = $(if ($Off) { Disconnect-ClaudeDesktop $script:claudeRoots.AppData $script:claudeRoots.Local } else { Connect-ClaudeDesktop (Get-ThisClaudeEntry) $script:claudeRoots.AppData $script:claudeRoots.Local })
+  Update-ClaudeDesktopStatus
+  if (-not $r.Ok) { Show-Notice "Not done: $($r.Error)" }
+  elseif ($Off) { Show-Notice $(if ($r.Changed) { 'Saqme is out of Claude Desktop. Quit it and open it again to finish.' } else { 'Claude Desktop did not have Saqme.' }) }
+  else { Show-Notice 'Claude Desktop is connected. Now quit it completely and open it again (the steps are below).' }
+  Render
+}
+
 function Render-AiPage {
   [void]$list.Children.Add((New-SettingsHeader 'Use with AI'))
   if ($script:view -eq 'ai' -and -not $SmokeTest) { Step-ConnectorStatus }
+  if ($script:view -eq 'ai' -and ((Get-NowMs) - $script:desk.At -gt 5000 -or -not $script:desk.Status)) { Update-ClaudeDesktopStatus }
+  $order = @(Get-AiOptions ([bool](Read-SyncConfigUi)))
+  for ($i = 0; $i -lt $order.Count; $i++) {
+    switch ($order[$i]) { 'link' { Render-AiLink } 'desktop' { Render-AiDesktop ($i -eq 0) } 'files' { Render-AiFiles } }
+  }
+}
+function Render-AiLink {
   Add-Heading 'Connect your AI'
   $c = $script:conn; $s = $c.Status
   if (-not (Read-SyncConfigUi)) {
     Add-CardRow (New-InfoRow 'Connect your AI' 'Needs sync')
     Add-CardRow (New-LinkRow 'Sync & sharing' 'Off' 'sync' -Help 'Set up sync')
-    Add-Footnote 'To connect Claude, ChatGPT or another AI app, turn on sync first (free): Settings > Sync & sharing > Set up sync. Without sync, an AI app on this PC can still work with your list files (Other ways, below).'
+    Add-Footnote 'For Claude and ChatGPT on the web and your phone, turn on sync first (free): Settings > Sync & sharing > Set up sync.'
   } elseif (Test-ConnectorTooOld) {
     Add-CardRow (New-InfoRow 'Connect your AI' 'Not yet')
     Add-Footnote 'Your sync needs an update first. It gets it with the next update (Settings > Updates); then come back here.'
@@ -3207,11 +3254,13 @@ function Render-AiPage {
     Add-CardRow (New-InfoRow 'Connect your AI' $(if ($c.Error) { 'Not reachable' } else { 'Checking...' }))
     if ($c.Error) { Add-Footnote "Could not reach your sync: $($c.Error)" $Red }
   } elseif (-not $s['enabled']) {
-    Add-CardRow (New-ActionRow 'Connect your AI' { Send-Connector 'rotate' 'Connected. Now copy the link into your AI app.' } -Help 'Makes a new link for Claude, ChatGPT or another AI app')
+    Add-CardRow (New-ActionRow 'Connect your AI' { Send-Connector 'rotate' 'Connected. Now click Connect Claude or Connect ChatGPT.' } -Help 'Makes a new link for Claude, ChatGPT or another AI app')
     Add-Footnote 'Off: no AI app can see your lists. Connect your AI makes a new link.'
   } else {
-    Add-CardRow (New-ActionRow 'Copy link' { Copy-ConnectorUrl } -Name 'Copy link for your AI app' -Help 'Paste it into Claude, ChatGPT or another AI app')
-    Add-Footnote 'Paste the link into your AI app once (the steps are below). Then ask it things like "What''s due this week?" or "Add milk to Groceries". It can see and change your tasks and make new lists, but it can''t delete a list, and what it deletes waits in Recently deleted for 30 days.'
+    Add-CardRow (New-ActionRow 'Connect Claude' { Connect-Assistant 'Claude' } -Help 'Copies your link and opens Claude, where you paste it')
+    Add-CardRow (New-ActionRow 'Connect ChatGPT' { Connect-Assistant 'ChatGPT' } -Help 'Copies your link and opens ChatGPT, where you paste it')
+    Add-CardRow (New-ActionRow 'Copy link' { [void](Copy-ConnectorUrl) } -Name 'Copy link for your AI app' -Help 'For another AI app: paste it where it adds a connector')
+    Add-Footnote 'Click Connect Claude or Connect ChatGPT: Saqme copies your link and opens the page to paste it in. Then ask things like "What''s due this week?" or "Add milk to Groceries", on the web and your phone. Your AI can''t delete a list, and what it deletes waits in Recently deleted for 30 days.'
     foreach ($app in $script:AiSteps.Keys) {
       Add-Heading "Connect $app"
       Add-Footnote ($script:AiSteps[$app] -join "`n")
@@ -3225,6 +3274,26 @@ function Render-AiPage {
         if ("$q" -eq 'Yes') { Send-Connector 'disconnect' 'Disconnected. No AI app can see your lists now.' } } -Danger -Name 'Disconnect your AI' -Help 'No AI app can see your lists until you connect again')
     Add-Footnote 'Keep the link private, like a password: anyone who has it can see and change your lists. If it got out, make a new link; the old one stops working at once.'
   }
+}
+function Render-AiDesktop([bool]$first) {
+  Add-Heading 'Claude Desktop on this PC'
+  $d = $script:desk.Status
+  if (-not $d.Installed) {
+    Add-CardRow (New-ActionRow 'Install Claude Desktop' { Start-Process $script:AiLinks.Download } -Help 'Claude''s free app for your computer, from claude.ai')
+    Add-Footnote "Install Claude Desktop and sign in, then come back here and click Connect Claude Desktop.$(if ($first) { ' It works with your lists without sync.' })"
+  } elseif ($d.State -eq 'connected') {
+    Add-CardRow (New-InfoRow 'Claude Desktop' 'Connected')
+    Add-CardRow (New-ActionRow 'Disconnect Claude Desktop' { Connect-ClaudeDesktopUi -Off } -Danger -Help 'Takes Saqme out of Claude Desktop')
+    Add-Footnote ((@('Just connected? Then:') + $script:DeskSteps) -join "`n")
+  } elseif ($d.State -eq 'unreadable') {
+    Add-CardRow (New-InfoRow 'Claude Desktop' 'Not connected')
+    Add-Footnote $d.Error $Red
+  } else {
+    Add-CardRow (New-ActionRow 'Connect Claude Desktop' { Connect-ClaudeDesktopUi } -Help 'Claude Desktop gets your lists in every chat, no sync needed')
+    Add-Footnote 'One click: Claude Desktop on this PC then sees your lists in every chat and can change them, without sync and with nothing to paste. It can''t delete a list, and what it deletes waits in Recently deleted.'
+  }
+}
+function Render-AiFiles {
   Add-Heading 'Other ways'
   Add-CardRow (New-ActionRow 'Copy instructions for your AI' { Copy-AiPrompt } -Help 'Where your list files are and how to edit them, for Claude Code, Codex, Cursor...')
   Add-CardRow (New-ActionRow 'Save them as a file...' { Save-AiPromptAs } -Name 'Save the instructions for your AI as a file' -Help 'SAQME.md, to add to an AI app''s instructions or a skill')
@@ -4735,14 +4804,36 @@ if ($SmokeTest) {
     $connWas = $script:conn.Status
     $script:conn.Status = @{ enabled = $true; url = 'https://saqme.example.workers.dev/api/mcp/abc'; createdAt = 1; lastUsedAt = $null }
     Show-View 'ai'
-    foreach ($k in 'Copy link for your AI app', 'Make a new link', 'Disconnect your AI', 'Copy instructions for your AI') { if (-not (& $find $list $k)) { throw "Use with AI: '$k' missing" } }
-    $aiText = (@($list.Children | Where-Object { $_ -is [System.Windows.Controls.TextBlock] } | ForEach-Object { $_.Text }) -join "`n")
+    foreach ($k in 'Connect Claude', 'Connect ChatGPT', 'Copy link for your AI app', 'Make a new link', 'Disconnect your AI', 'Copy instructions for your AI') { if (-not (& $find $list $k)) { throw "Use with AI: '$k' missing" } }
+    $aiTexts = @($list.Children | Where-Object { $_ -is [System.Windows.Controls.TextBlock] } | ForEach-Object { $_.Text })
+    $aiText = $aiTexts -join "`n"
     if (-not $aiText.Contains('Add custom connector') -or -not $aiText.Contains('No authentication')) { throw 'Use with AI: the steps for Claude and ChatGPT are missing' }
+    if ([array]::IndexOf($aiTexts, 'Connect your AI') -lt 0 -or [array]::IndexOf($aiTexts, 'Connect your AI') -gt [array]::IndexOf($aiTexts, 'Claude Desktop on this PC')) { throw 'Use with AI with sync: the link comes first, Claude Desktop after it' }
+    & $activate (& $find $list 'Connect Claude')
+    if ([System.Windows.Clipboard]::GetText() -ne 'https://saqme.example.workers.dev/api/mcp/abc') { throw 'Connect Claude did not copy the link' }
     $script:conn.Status = @{ enabled = $false; url = $null }
     Show-View 'ai'
     if (-not (& $find $list 'Connect your AI') -or (& $find $list 'Copy link for your AI app')) { throw 'Use with AI: off, it offers Connect your AI only' }
     $script:conn.Status = $connWas
     if (-not $hadCfg) { Remove-Item -LiteralPath $syncCfgFile -Force }
+    # Use with AI without sync: Claude Desktop first. Not there: Install. There (a scratch profile in the temp data folder,
+    # never the real one): Connect adds Saqme next to what its settings have, Disconnect takes out only Saqme
+    if (-not $script:claudeRoots.AppData.StartsWith($DataDir)) { throw 'the self-check would look at the real Claude Desktop' }
+    $script:desk.At = 0; Show-View 'ai'
+    $aiTexts = @($list.Children | Where-Object { $_ -is [System.Windows.Controls.TextBlock] } | ForEach-Object { $_.Text })
+    if ([array]::IndexOf($aiTexts, 'Claude Desktop on this PC') -lt 0 -or [array]::IndexOf($aiTexts, 'Claude Desktop on this PC') -gt [array]::IndexOf($aiTexts, 'Connect your AI')) { throw 'Use with AI without sync: Claude Desktop comes first' }
+    if (-not (& $find $list 'Install Claude Desktop') -or (& $find $list 'Connect Claude Desktop')) { throw 'Use with AI: Install Claude Desktop when it is not there' }
+    [void](New-Item -ItemType Directory -Force -Path (Join-Path $script:claudeRoots.Local 'Packages\Claude_pzs8sxrjxfjjc'), (Join-Path $script:claudeRoots.AppData 'Claude'))
+    $deskCfg = Join-Path $script:claudeRoots.AppData 'Claude\claude_desktop_config.json'
+    [IO.File]::WriteAllText($deskCfg, '{"mcpServers":{"other":{"command":"x"}},"preferences":{"a":1}}')
+    $script:desk.At = 0; Show-View 'ai'
+    & $activate (& $find $list 'Connect Claude Desktop')
+    $o = ConvertFrom-JsonText ([IO.File]::ReadAllText($deskCfg))
+    if ((@($o['mcpServers'].Keys) -join ',') -ne 'other,saqme' -or -not $o['preferences'] -or -not (Test-Path -LiteralPath "$deskCfg.saqme-backup")) { throw 'Connect Claude Desktop: Saqme added next to the rest, with a backup' }
+    if (@($o['mcpServers']['saqme']['args'])[-1] -ne [IO.Path]::GetFullPath($DataDir).TrimEnd('\')) { throw 'Connect Claude Desktop: the data folder' }
+    if (-not (& $find $list 'Disconnect Claude Desktop')) { throw 'Use with AI: connected, it offers Disconnect Claude Desktop' }
+    & $activate (& $find $list 'Disconnect Claude Desktop')
+    if ((@((ConvertFrom-JsonText ([IO.File]::ReadAllText($deskCfg)))['mcpServers'].Keys) -join ',') -ne 'other') { throw 'Disconnect Claude Desktop takes out Saqme only' }
     $keys = @(Read-Lines $cfgFile | Where-Object { $_ -match '^\w+=' } | ForEach-Object { ($_ -split '=', 2)[0] } | Sort-Object)
     if (($keys -join ',') -ne 'active,autoUpdate,height,notifyAt,showCompleted,theme,updatedSeen,width') { throw "the settings file's keys changed: $($keys -join ',')" }
     # the version: the line under every Settings view (plain while no update needs a look), About, the tray icon's tooltip

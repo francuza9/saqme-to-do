@@ -263,7 +263,10 @@ try {
   }
   if (& $invoke (& $byId 'open-ai') 'the Use with AI row') {
     $acc = Test-View 'Settings > Use with AI' $win
-    Check (@($acc | Where-Object { $_.Type -eq 'Text' -and $_.Name -eq 'Connect your AI' }).Count -ge 1) 'Use with AI: Connect your AI comes first (here: it needs sync)'
+    $texts = @($acc | Where-Object { $_.Type -eq 'Text' } | ForEach-Object { $_.Name })
+    $deskAt = [array]::IndexOf($texts, 'Claude Desktop on this PC'); $linkAt = [array]::IndexOf($texts, 'Connect your AI')
+    Check ($deskAt -ge 0 -and $linkAt -gt $deskAt) "Use with AI without sync: Claude Desktop comes first, then Connect your AI ($deskAt, $linkAt)"
+    Check (@($acc | Where-Object { $_.Type -eq 'Button' -and $_.Name -in 'Connect Claude Desktop', 'Install Claude Desktop', 'Disconnect Claude Desktop' -and $_.Patterns -contains 'Invoke' }).Count -eq 1) 'Use with AI: Claude Desktop has one invokable button (Connect, Install or Disconnect)'
     Check (@($acc | Where-Object { $_.Type -eq 'Button' -and $_.Name -in 'Copy instructions for your AI', 'Save the instructions for your AI as a file' -and $_.Patterns -contains 'Invoke' }).Count -eq 2) 'Use with AI, with the files: copy and save, both invokable buttons'
     [void](& $invoke (& $byId 'back') 'Back')
   }

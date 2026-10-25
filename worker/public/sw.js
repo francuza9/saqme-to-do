@@ -7,7 +7,7 @@ const CACHE = 'saqme-shell-v5';
 const SHELL = [
   './', 'css/tokens.css', 'css/app.css', 'fonts/FiraGO-Regular.ttf', 'fonts/FiraGO-Italic.ttf', 'fonts/FiraGO-Medium.ttf',
   'fonts/FiraGO-SemiBold.ttf', 'js/app.js', 'js/store.js', 'js/model.js', 'js/keys.js', 'js/dates.js', 'js/icons.js',
-  'js/markdown.js', 'js/pairing.js', 'js/zip.js', 'js/qr.js', 'js/theme.js', 'js/join.js', 'manifest.webmanifest', 'icons/glyph.png', 'icons/apple-touch-icon.png',
+  'js/markdown.js', 'js/pairing.js', 'js/zip.js', 'js/qr.js', 'js/theme.js', 'js/join.js', 'js/ai.js', 'manifest.webmanifest', 'icons/glyph.png', 'icons/apple-touch-icon.png',
   'icons/icon-192.png', 'icons/favicon-64.png',
 ];
 const SCOPE = new URL('./', self.location).pathname;
