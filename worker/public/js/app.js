@@ -2058,9 +2058,9 @@ function aiSummary() {
 const ASSISTANTS = {
   claude: ['Claude', () => [
     ['In the page that opened, click ', h('b', {}, 'Add custom connector'), ' (sign in first if Claude asks).'],
-    ['Type ', h('b', {}, 'Saqme'), ' as the name, paste the link into the ', h('b', {}, 'URL'), ' box, and click ', h('b', {}, 'Add'), '.'],
-    ['In a new chat, click ', h('b', {}, '+'), ' under the message box, switch ', h('b', {}, 'Saqme'), ' on and ask “What’s due this week?”'],
-  ], 'Click Allow when Claude asks to use Saqme. It then works in the Claude apps on your phone and computer too. If no page opened: claude.ai › Settings › Connectors.'],
+    ['Type ', h('b', {}, 'Saqme'), ' as the name, paste the link into the ', h('b', {}, 'URL'), ' box, and click ', h('b', {}, 'Add'), '. If Claude asks how to sign in, choose ', h('b', {}, 'No sign-in'), '.'],
+    ['In a new chat, click ', h('b', {}, '+'), ' under the message box, open ', h('b', {}, 'Connectors'), ', switch ', h('b', {}, 'Saqme'), ' on and ask “What’s due this week?”'],
+  ], 'Click Allow when Claude asks to use Saqme. It then works in the Claude apps on your phone and computer too. If no page opened: claude.ai › Customize › Connectors.'],
   chatgpt: ['ChatGPT', () => [
     ['In the page that opened (ChatGPT’s settings, ', h('b', {}, 'Apps & Connectors'), '), open ', h('b', {}, 'Advanced settings'), ' and switch on ', h('b', {}, 'Developer mode'), '.'],
     ['Back in ', h('b', {}, 'Apps & Connectors'), ', click ', h('b', {}, 'Create'), '. Type ', h('b', {}, 'Saqme'), ' as the name and paste the link into the ', h('b', {}, 'URL'), ' box.'],

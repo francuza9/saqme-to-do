@@ -15,14 +15,16 @@ Open **Settings › Use with AI** in Saqme. The best way for you comes first:
 You need Saqme sync turned on (free; [the setup guide](setup.md) shows every step) and a Claude account.
 
 1. In Saqme, open **Settings › Use with AI** and click **Connect Claude**. Saqme copies your link and opens
-   Claude's **Connectors** page.
+   Claude's **Customize › Connectors** page.
 2. Click **Add custom connector**, type **Saqme** as the name, paste the link into the **URL** box and click **Add**.
-3. In a new chat, click **+** under the message box, switch **Saqme** on and ask "What's due this week?" Click
-   **Allow** when Claude asks to use Saqme.
+   If Claude asks how to sign in, choose **No sign-in**.
+3. In a new chat, click **+** under the message box, open **Connectors**, switch **Saqme** on and ask "What's due
+   this week?" Click **Allow** when Claude asks to use Saqme.
 
-Saqme then works in the Claude apps on your phone and computer too.
+Saqme then works in the Claude apps on your phone and computer too. On Claude's free plan you can add one custom
+connector.
 
-<!-- SCREENSHOT: claude.ai, Settings › Connectors › Add custom connector, filled in -->
+<!-- SCREENSHOT: claude.ai, Customize › Connectors › Add custom connector, filled in -->
 
 ## Connect ChatGPT
 

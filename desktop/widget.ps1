@@ -3142,7 +3142,7 @@ function Render-YourListsPage {
 # settings, mcp-server.ps1 on the list files, no sync needed); the instructions for an AI app that edits the files.
 # Plain words only, the same as docs/ai.md and the phone app (worker/public/js/app.js).
 $script:conn = @{ Status = $null; Error = ''; Asking = $false; At = 0; Busy = $false; Done = '' }
-$script:AiLinks = @{ Claude = 'https://claude.ai/settings/connectors'; ChatGPT = 'https://chatgpt.com/#settings/Connectors'; Download = $script:ClaudeDownload }   # (worker/public/js/ai.js)
+$script:AiLinks = @{ Claude = 'https://claude.ai/customize/connectors'; ChatGPT = 'https://chatgpt.com/#settings/Connectors'; Download = $script:ClaudeDownload }   # (worker/public/js/ai.js)
 # where Claude Desktop is looked for: this user's AppData (the self-check gets a scratch one in its temp data folder)
 $script:claudeRoots = $(if ($SmokeTest) { @{ AppData = (Join-Path $DataDir 'claude-roaming'); Local = (Join-Path $DataDir 'claude-local') } } else { @{ AppData = $env:APPDATA; Local = $env:LOCALAPPDATA } })
 $script:desk = @{ Status = $null; At = 0 }
@@ -3196,9 +3196,9 @@ $script:AiSteps = [ordered]@{
   Claude  = @(
     'In the page Connect Claude opened:',
     '1. Click Add custom connector (sign in first if Claude asks).',
-    '2. Type Saqme as the name, paste the link into the URL box, and click Add.',
-    '3. In a new chat, click + under the message box, switch Saqme on and ask "What''s due this week?"',
-    'Click Allow when Claude asks to use Saqme. It then works in the Claude apps on your phone and computer too. If no page opened: claude.ai > Settings > Connectors.')
+    '2. Type Saqme as the name, paste the link into the URL box, and click Add. If Claude asks how to sign in, choose No sign-in.',
+    '3. In a new chat, click + under the message box, open Connectors, switch Saqme on and ask "What''s due this week?"',
+    'Click Allow when Claude asks to use Saqme. It then works in the Claude apps on your phone and computer too. If no page opened: claude.ai > Customize > Connectors.')
   ChatGPT = @(
     'In the page Connect ChatGPT opened (ChatGPT''s settings, Apps & Connectors):',
     '1. Open Advanced settings and switch on Developer mode.',

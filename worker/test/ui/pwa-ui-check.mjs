@@ -445,7 +445,7 @@ check(!/MCP|endpoint|OAuth|Worker|token|server/i.test(aiText), `Use with AI: pla
 // Connect Claude / Connect ChatGPT: the link copied, the page to paste it in opened (stood in for here), the steps
 await ctx.route(/^https:\/\/(claude\.ai|chatgpt\.com)\//, (r) => r.fulfill({ contentType: 'text/html', body: '<title>stand-in</title>' }));
 await page.evaluate(() => { window.copied = null; navigator.clipboard.writeText = async (t) => { window.copied = t; }; });
-for (const [fk, name, opens] of [['ai-claude', 'Claude', 'https://claude.ai/settings/connectors'], ['ai-chatgpt', 'ChatGPT', 'https://chatgpt.com/#settings/Connectors']]) {
+for (const [fk, name, opens] of [['ai-claude', 'Claude', 'https://claude.ai/customize/connectors'], ['ai-chatgpt', 'ChatGPT', 'https://chatgpt.com/#settings/Connectors']]) {
   const [popup] = await Promise.all([ctx.waitForEvent('page'), page.tap(`[data-fk="${fk}"]`)]);
   await page.waitForSelector('#sheet:has-text("Link copied. Paste it in the page that opened.")');
   check(popup.url() === opens, `Use with AI: Connect ${name} opens ${opens} (${popup.url()})`);
