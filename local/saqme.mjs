@@ -8,6 +8,7 @@
 //   saqme allow-deletes    confirm a paused mass delete in the lists folder
 //   saqme restore-deletes  undo it instead: the vanished tasks go back into their lists
 //   saqme ai-prompt        print the instructions that let an AI assistant manage your lists (Settings > Your lists)
+//   saqme mcp              what Claude Desktop runs (Settings > Use with AI > Connect Claude Desktop): your lists, over stdio
 //   saqme pair-phone       the QR code and link that connect your phone (once cloud sync is set up)
 //   saqme connect LINK     sync with the cloud using a pairing link from a device that already syncs
 //   saqme join LINK        join a list someone shares with you, from their invite link (.../join#code=...)
@@ -37,6 +38,9 @@ import {
 } from './engine.mjs';
 import { Shares } from './shares.mjs';
 import { aiPrompt } from './ai-prompt.mjs';
+import { ClaudeDesktop, claudeEntry } from './claude-desktop.mjs';
+import { createInterface } from 'node:readline';
+import { LOCAL_INSTRUCTIONS, LOCAL_TOOLS, PROTOCOL_VERSIONS } from '../worker/src/mcp.js';
 import { handleSync, HttpError } from '../worker/src/sync.js';
 import { computeReminders, localClock } from '../worker/src/reminders.js';
 import { parseInviteLink, parsePairingLink, serverLabel } from '../worker/public/js/pairing.js';
@@ -522,6 +526,19 @@ export async function startApp({ dataDir = defaultDataDir(), port, interval = 10
     disconnect: () => ownerApi('POST', 'connector/disconnect', {}, noConnector),
   };
 
+  // Claude Desktop on this computer (Settings > Use with AI > Connect Claude Desktop): `saqme mcp`, which it starts,
+  // passes its messages to POST /api/local/mcp: the Worker's tools on this store, written to the files by the files engine
+  // (SAQME_CLAUDE_CONFIG_DIR: tests, a scratch folder that stands for Claude Desktop's own; there when it exists)
+  const claudeDir = process.env.SAQME_CLAUDE_CONFIG_DIR;
+  const claudeDesktop = new ClaudeDesktop({
+    entry: claudeEntry({ dataDir: resolve(p.data) }),
+    ...(claudeDir ? { configDir: claudeDir, installed: () => existsSync(claudeDir) } : {}),
+  });
+  const mcp = {
+    shares: () => new Map(shares.all().filter((b) => !b.left).map((b) => [b.file, { from: serverLabel(b.server), canEdit: b.access === 'edit' }])),
+    after: () => files.wake(),
+  };
+
   let updater = null;   // (created once the port is known)
   const info = () => ({
     lists: p.lists,
@@ -550,7 +567,7 @@ export async function startApp({ dataDir = defaultDataDir(), port, interval = 10
     worker: () => { if (!updater) return { supported: false }; updater.retryWorker().catch((e) => log(`update: ${e?.message ?? e}`)); return updater.status(); },
   };
   const srv = await startServer({
-    port: port ?? portSetting(p), token, d1, publicDir: appPaths.public, version: VERSION, info, updates: updateRoutes, workerUpdate, connector,
+    port: port ?? portSetting(p), token, d1, publicDir: appPaths.public, version: VERSION, info, updates: updateRoutes, workerUpdate, connector, mcp, claudeDesktop,
     onSync: () => { files.wake(); updater?.touch(); },
     aiPrompt: () => aiPrompt(resolve(p.lists)),
     onAllowDeletes: () => {
@@ -678,18 +695,23 @@ async function cmdServe(opts) {
   process.on('SIGINT', quit);
 }
 
+/** The running app's port, after starting it (in the background) if it is not running; null when it did not start. */
+async function ensureRunning(p, opts) {
+  let port = runningPort(p, opts.port);
+  if (await ping(port)) return port;
+  port = portSetting(p, opts.port);
+  const child = spawn(process.execPath, [...process.execArgv, fileURLToPath(import.meta.url), 'serve', '--data', p.data, '--port', String(port)],
+    { detached: true, stdio: 'ignore' });
+  child.unref();
+  for (let i = 0; i < 40 && !(await ping(port)); i++) await sleep(250);
+  return (await ping(port)) ? port : null;
+}
+
 async function cmdOpen(opts) {
   refuseSandbox(opts);
   const p = dataPaths(opts.data);
-  let port = runningPort(p, opts.port);
-  if (!(await ping(port))) {
-    port = portSetting(p, opts.port);
-    const child = spawn(process.execPath, [...process.execArgv, fileURLToPath(import.meta.url), 'serve', '--data', p.data, '--port', String(port)],
-      { detached: true, stdio: 'ignore' });
-    child.unref();
-    for (let i = 0; i < 40 && !(await ping(port)); i++) await sleep(250);
-    if (!(await ping(port))) { console.error(`Saqme To Do did not start. See ${p.log}`); process.exit(1); }
-  }
+  const port = await ensureRunning(p, opts);
+  if (!port) { console.error(`Saqme To Do did not start. See ${p.log}`); process.exit(1); }
   const { code } = await api(p, port, '/api/local/code', 'POST');
   const used = openWindow(launchPage(p, `http://127.0.0.1:${port}/#claim=${code}`));
   if (!used) console.log(`Open http://127.0.0.1:${port} in a browser.`);
@@ -722,6 +744,59 @@ async function cmdStatus(opts) {
   }
   if (i.guarded) console.log(`${i.guarded} tasks vanished from the lists folder at once; deleting them is paused. Put them back with: saqme restore-deletes, or delete them everywhere with: saqme allow-deletes`);
   for (const x of i.rewritten ?? []) console.log(`${new Date(x.at).toLocaleTimeString()}: the file of ${x.name} was gone (not deleted in the app), so it was written again from the last sync (${x.count} tasks). Nothing was deleted.`);
+}
+
+/**
+ * saqme mcp: the program Claude Desktop starts for Saqme (Settings > Use with AI > Connect Claude Desktop writes it into
+ * claude_desktop_config.json). MCP over stdio: one JSON-RPC message per line in, one answer per line out. Each message
+ * goes to the running app (POST /api/local/mcp: the Worker's own tools on the app's store, which the files engine
+ * writes to the lists folder, ids and all), started first if it is not running. Nothing but answers goes to stdout.
+ */
+export async function cmdMcp(opts, { input = process.stdin, output = process.stdout, start = true } = {}) {
+  refuseSandbox(opts);
+  const p = dataPaths(opts.data);
+  let port = null;
+  let down = '';
+  async function relay(line) {
+    if (!port || !(await ping(port))) {
+      const at = runningPort(p, opts.port);
+      port = start ? await ensureRunning(p, opts) : (await ping(at)) ? at : null;
+    }
+    if (!port) throw new Error('not running');
+    const token = readFileSync(p.token, 'utf8').trim();
+    const r = await fetch(`http://127.0.0.1:${port}/api/local/mcp`, {
+      method: 'POST', headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json', accept: 'application/json' }, body: line, signal: AbortSignal.timeout(60_000),
+    });
+    if (r.status === 202) return null;
+    if (r.status === 401) { port = null; throw new Error('not running'); }
+    return (await r.text()).replace(/\r?\n/g, ' ');
+  }
+  // the app could not be reached: Claude still gets the tools, and each call says what to do
+  function offline(line) {
+    let m;
+    try { m = JSON.parse(line); } catch { return JSON.stringify({ jsonrpc: '2.0', id: null, error: { code: -32700, message: 'parse error' } }); }
+    if (!m || typeof m !== 'object' || !('id' in m) || typeof m.method !== 'string') return null;
+    const ok = (result) => JSON.stringify({ jsonrpc: '2.0', id: m.id, result });
+    if (m.method === 'initialize') {
+      const v = m.params?.protocolVersion;
+      return ok({ protocolVersion: PROTOCOL_VERSIONS.includes(v) ? v : PROTOCOL_VERSIONS[0], capabilities: { tools: { listChanged: false } }, serverInfo: { name: 'saqme', title: 'Saqme To Do', version: VERSION }, instructions: LOCAL_INSTRUCTIONS });
+    }
+    if (m.method === 'tools/list') return ok({ tools: LOCAL_TOOLS });
+    if (m.method === 'ping') return ok({});
+    if (m.method === 'tools/call') return ok({ content: [{ type: 'text', text: 'Saqme To Do is not running on this computer and did not start. Ask the user to open Saqme To Do, then try again.' }], isError: true });
+    return JSON.stringify({ jsonrpc: '2.0', id: m.id, error: { code: -32601, message: `method not found: ${m.method.slice(0, 60)}` } });
+  }
+  const rl = createInterface({ input, crlfDelay: Infinity });
+  for await (const line of rl) {
+    if (!line.trim()) continue;
+    let answer;
+    try { answer = await relay(line); down = ''; } catch (e) {
+      if (!down) process.stderr.write(`saqme mcp: the app is not reachable (${e?.message ?? e}); see ${p.log}\n`);
+      down = String(e?.message ?? e);
+      answer = offline(line);
+    }
+    if (answer) output.write(`${answer}\n`);
+  }
 }
 
 async function cmdPairPhone(opts) {
@@ -866,6 +941,7 @@ if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
     'allow-deletes': () => cmdSimple(opts, '/api/local/allow-deletes', 'Confirmed: the vanished tasks will be deleted everywhere.'),
     'restore-deletes': () => cmdSimple(opts, '/api/local/restore-deletes', 'The vanished tasks will be put back into their lists.'),
     'ai-prompt': async () => { process.stdout.write(aiPrompt(resolve(dataPaths(opts.data).lists))); },
+    mcp: () => cmdMcp(opts),
     'pair-phone': () => cmdPairPhone(opts),
     connect: () => cmdConnect(opts),
     join: () => cmdJoin(opts),
@@ -876,7 +952,7 @@ if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
   };
   const run = commands[opts.cmd];
   if (!run) {
-    console.log(readFileSync(fileURLToPath(import.meta.url), 'utf8').split('\n').slice(1, 17).map((l) => l.replace(/^\/\/ ?/, '')).join('\n'));
+    console.log(readFileSync(fileURLToPath(import.meta.url), 'utf8').split('\n').slice(1, 18).map((l) => l.replace(/^\/\/ ?/, '')).join('\n'));
     process.exit(opts.cmd === 'help' || opts.cmd === '--help' ? 0 : 2);
   }
   run().catch((e) => { console.error(e?.message ?? e); process.exit(1); });

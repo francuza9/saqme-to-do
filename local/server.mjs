@@ -35,6 +35,11 @@
 //   POST /api/local/invite/decline
 //   GET  /api/local/shares?project=<id>, POST /api/local/shares/invite | update | revoke: sharing one of this
 //                                  computer's lists, through its cloud sync (the window's project ids)
+// Claude Desktop on this computer (Settings > Use with AI > Connect Claude Desktop; local/claude-desktop.mjs):
+//   POST /api/local/mcp           one MCP message (JSON-RPC), the Worker's own tools (worker/src/mcp.js, local mode) on this
+//                                  local store: what `saqme mcp`, the program Claude Desktop starts, passes on (with the token)
+//   GET  /api/local/claude-desktop, POST .../connect | disconnect: whether Claude Desktop is there and has Saqme, and
+//                                  adding or removing Saqme in its settings file
 // /api/connector and /api/mcp are not served here either: the AI connector is the cloud sync service's (this local
 // store's key is not the one its address is made from, and this server is for its own window only).
 // /api/shares* and /api/remotes* of the Worker code are not served here: lists are shared from one's cloud sync
@@ -47,6 +52,7 @@ import { extname, join, normalize, sep } from 'node:path';
 import { randomBytes } from 'node:crypto';
 import worker, { authorized } from '../worker/src/index.js';
 import { API_VERSION } from '../worker/src/version.js';
+import { handleMcp } from '../worker/src/mcp.js';
 
 const TYPES = {
   '.html': 'text/html; charset=utf-8', '.css': 'text/css; charset=utf-8', '.js': 'text/javascript; charset=utf-8',
@@ -201,6 +207,24 @@ export function startServer(opts) {
         'GET /api/local/connector': () => c.status(),
         'POST /api/local/connector/rotate': () => c.rotate(),
         'POST /api/local/connector/disconnect': () => c.disconnect(),
+      }[route];
+      if (run) {
+        try { return json(res, 200, await run()); } catch (e) { return json(res, e.status ?? 500, { error: e.message }); }
+      }
+    }
+    if (route === 'POST /api/local/mcp' && opts.mcp) {
+      const response = await handleMcp(request, { ...env, localShares: opts.mcp.shares }, { local: true });
+      opts.mcp.after?.();
+      res.writeHead(response.status, Object.fromEntries([...response.headers].filter(([k]) => !k.startsWith('access-control-'))));
+      res.end(Buffer.from(await response.arrayBuffer()));
+      return undefined;
+    }
+    if (opts.claudeDesktop && (route === 'GET /api/local/claude-desktop' || route.startsWith('POST /api/local/claude-desktop/'))) {
+      const c = opts.claudeDesktop;
+      const run = {
+        'GET /api/local/claude-desktop': () => c.status(),
+        'POST /api/local/claude-desktop/connect': () => c.connect(),
+        'POST /api/local/claude-desktop/disconnect': () => c.disconnect(),
       }[route];
       if (run) {
         try { return json(res, 200, await run()); } catch (e) { return json(res, e.status ?? 500, { error: e.message }); }
