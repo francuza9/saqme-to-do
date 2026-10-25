@@ -83,7 +83,8 @@ $CloudDir = Join-Path $AppDir 'cloud'     # where the user's Worker is deployed 
 $NodeDir = Join-Path $AppDir 'node'       # Node.js, when this setup downloaded it
 $UpdateDir = Join-Path $AppDir 'update'
 # a version's folder: these from desktop\, plus assets\, fonts\, setup.ps1 and release.json
-$AppFiles = @('widget.ps1', 'tokens.ps1', 'rules.ps1', 'a11y.cs', 'sync-core.ps1', 'sync-worker.ps1', 'qr.ps1', 'start-widget.vbs', 'update.ps1', 'update-core.ps1')
+$AppFiles = @('widget.ps1', 'tokens.ps1', 'rules.ps1', 'a11y.cs', 'sync-core.ps1', 'sync-worker.ps1', 'qr.ps1', 'start-widget.vbs', 'update.ps1', 'update-core.ps1',
+               'claude-desktop.ps1', 'mcp-core.ps1', 'mcp-server.ps1', 'mcp-tools.json', 'saqme-mcp.ps1')
 # the app's files as installs before 1.1.0 kept them, all in one folder (removed once a version folder runs)
 $FlatFiles = @('widget.ps1', 'tokens.ps1', 'rules.ps1', 'a11y.cs', 'sync-core.ps1', 'sync-worker.ps1', 'qr.ps1')
 
@@ -384,6 +385,8 @@ function Switch-AppVersion($inst) {
   Write-VersionPointer $AppDir $inst.Version
   # what shortcuts, the saqme: link and Settings > Apps point at: next to the version folders, always the newest
   Copy-Item -LiteralPath (Join-Path $inst.Src 'desktop\start-widget.vbs') -Destination (Join-Path $AppDir 'start-widget.vbs') -Force
+  # and what Claude Desktop runs for Saqme (Settings > Use with AI > Connect Claude Desktop), so its settings stay right
+  Copy-Item -LiteralPath (Join-Path $inst.Src 'desktop\saqme-mcp.ps1') -Destination (Join-Path $AppDir 'saqme-mcp.ps1') -Force
   Copy-Item -Path (Join-Path $inst.Src 'desktop\assets\*') -Destination (Join-Path $AppDir 'assets') -Force
   Copy-Item -LiteralPath (Join-Path $inst.Src 'scripts\setup.ps1') -Destination (Join-Path $AppDir 'setup.ps1') -Force
   # an install before 1.1.0 had its files in the app folder itself: the version folder replaces them
@@ -613,6 +616,22 @@ function Invoke-AppUpdate([string]$src) {
 }
 
 # ---------------------------------------------------------------- uninstall
+# Claude Desktop: the Saqme entry that Connect Claude Desktop added runs a script from AppDir; it goes with the app
+# (desktop\claude-desktop.ps1 takes out that entry and nothing else, after a backup of the file)
+function Remove-ClaudeDesktopEntry {
+  try {
+    $cur = Read-Pointer 'current.txt'
+    $core = $(if ($cur) { Join-Path $VersionsDir $cur } else { '' })
+    if (-not $core -or -not (Test-Path -LiteralPath (Join-Path $core 'claude-desktop.ps1'))) { return }
+    . (Join-Path $core 'sync-core.ps1')
+    . (Join-Path $core 'claude-desktop.ps1')
+    $o = ConvertFrom-ClaudeConfig (Read-ClaudeConfigText (Get-ClaudeConfigPath))
+    $e = $(if ($o.ContainsKey('mcpServers')) { $o['mcpServers'][$script:ClaudeServerName] } else { $null })
+    if (-not $e -or -not (@($e['args']) | Where-Object { "$_".StartsWith($AppDir, [StringComparison]::OrdinalIgnoreCase) })) { return }
+    $r = Disconnect-ClaudeDesktop
+    if ($r.Ok -and $r.Changed) { Write-Ok 'Saqme taken out of Claude Desktop''s settings (restart Claude Desktop)' }
+  } catch {}
+}
 function Uninstall-App {
   Write-Step "Removing $AppName"
   Stop-App
@@ -621,6 +640,7 @@ function Uninstall-App {
   foreach ($k in @("$Reg\Classes\AppUserModelId\$AppId", "$Reg\Microsoft\Windows\CurrentVersion\Notifications\Settings\$AppId", "$Reg\Classes\saqme", $UninstallKey)) {
     if (Test-Path $k) { Remove-Item -Path $k -Recurse -Force }
   }
+  Remove-ClaudeDesktopEntry
   if (Test-Path -LiteralPath $AppDir) {
     # this script may be running from inside AppDir: remove the rest now, the folder itself right after we exit
     Get-ChildItem -LiteralPath $AppDir -Force | Where-Object { $_.FullName -ne $PSCommandPath } | Remove-Item -Recurse -Force -ErrorAction SilentlyContinue

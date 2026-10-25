@@ -5,6 +5,7 @@ $ErrorActionPreference = 'Stop'
 . (Join-Path $PSScriptRoot '..\sync-core.ps1')
 . (Join-Path $PSScriptRoot '..\rules.ps1')
 . (Join-Path $PSScriptRoot '..\update-core.ps1')
+. (Join-Path $PSScriptRoot '..\claude-desktop.ps1')
 
 $Fixtures = Join-Path $PSScriptRoot '..\..\shared\fixtures'
 $CI = [Globalization.CultureInfo]::InvariantCulture
@@ -360,6 +361,34 @@ foreach ($c in $aiFx['same']) {
   Test-Case "ai-prompt: the same text for $($c['dir'])" {
     $base = $aiFx['cases'] | Where-Object { $_['file'] -eq $c['as'] }
     Assert-Eq (Get-AiPrompt $c['dir']) ((Read-AiExpected $c['as']).Replace($base['dir'], $c['dir'])) 'text'
+  }
+}
+
+# ---------------------------------------------------------------- Connect Claude Desktop
+Write-Host 'claude-config.json: Add-ClaudeServer, Remove-ClaudeServer, Get-ClaudeServerState (claude-desktop.ps1)'
+$ccFx = Read-Fixture 'claude-config.json'
+foreach ($c in $ccFx['cases']) {
+  Test-Case "claude-config: $($c['name'])" {
+    $run = {
+      switch ($c['op']) {
+        'add' { Add-ClaudeServer $c['before'] $ccFx['entry'] }
+        'remove' { Remove-ClaudeServer $c['before'] }
+        'state' { Get-ClaudeServerState $c['before'] $ccFx['entry'] }
+      }
+    }
+    if ($c['error']) {
+      $threw = $false
+      try { [void](& $run) } catch { $threw = $_.Exception.Data['saqme'] -eq 'claude-config' }
+      Assert-True $threw 'left alone (a settings-file error)'
+      return
+    }
+    $r = & $run
+    if ($c['op'] -eq 'state') { Assert-Eq $r $c['state'] 'state'; return }
+    Assert-Eq $r.Changed $c['changed'] 'changed'
+    if (-not $c['changed']) { Assert-True ([object]::Equals($r.Text, $c['before'])) 'the text as it was'; return }
+    $o = ConvertFrom-JsonText $r.Text
+    Assert-Eq (ConvertTo-Canon $o) (ConvertTo-Canon $c['after']) 'after'
+    Assert-Eq (@($o['mcpServers'].Keys) -join '|') (@($c['mcpServers']) -join '|') 'the servers, in order'
   }
 }
 

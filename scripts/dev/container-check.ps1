@@ -11,6 +11,9 @@
   2. Checks the fix: the engine refuses that save (and a whole plan); the widget and the updater refuse to run on a
      data folder in AppData (with -Relaunched, so they do not actually start again); a program started through WMI
      (how they start again) is outside the container.
+  3. Claude Desktop's local server (desktop/mcp-server.ps1, Connect Claude Desktop), started from in here as Claude
+     Desktop starts it: it does its work outside, on the real folder (a list only the app's copy has is not seen, a
+     new task lands in the real file, nothing in the copy).
   Never touches %APPDATA%\SaqmeToDo; the scratch folder goes from both copies at the end.
 #>
 $ErrorActionPreference = 'Stop'
@@ -28,9 +31,9 @@ $name = 'SaqmeContainerCheck-' + [guid]::NewGuid().ToString('N').Substring(0, 8)
 $here = Join-Path $env:APPDATA $name                                                  # what this shell sees (merged)
 $private = Join-Path $env:LOCALAPPDATA "Packages\$app\LocalCache\Roaming\$name"       # the app's copy, seen directly
 $q = [char]39
-function Get-RealFiles {   # the real folder, through the WMI service (outside the container)
-  $p = ($here.Substring(2) -replace '\\', '\\') + '\\'
-  return @(Get-CimInstance -ClassName CIM_DataFile -Filter ("Drive=$q$($here.Substring(0, 2))$q AND Path=$q$p$q") | ForEach-Object { [IO.Path]::GetFileName($_.Name) } | Sort-Object)
+function Get-RealFiles([string]$dir = $here) {   # the real folder, through the WMI service (outside the container)
+  $p = ($dir.Substring(2) -replace '\\', '\\') + '\\'
+  return @(Get-CimInstance -ClassName CIM_DataFile -Filter ("Drive=$q$($dir.Substring(0, 2))$q AND Path=$q$p$q") | ForEach-Object { [IO.Path]::GetFileName($_.Name) } | Sort-Object)
 }
 function Invoke-Outside([string]$cmd) {   # a cmd.exe line, run outside the container; waits for it
   if (-not (Start-OutsideContainer "cmd.exe /c $cmd")) { throw 'WMI could not start a process' }
@@ -75,6 +78,46 @@ try {
   $seen = $(if (Test-Path -LiteralPath $res) { [IO.File]::ReadAllText($res) } else { '(no answer)' })
   Check ($seen -eq 'seen:') "... sees the real AppData ($seen)"
   Remove-Item -LiteralPath $res -Force -ErrorAction SilentlyContinue
+
+  Write-Host '3. Claude Desktop''s local server'
+  $mcpData = Join-Path $here 'mcp'
+  function Invoke-OutsidePs([string]$code, [string]$wait) {   # PowerShell code, run outside the container; waits for $wait
+    [void](Start-OutsideContainer "`"$ps`" -NoProfile -ExecutionPolicy Bypass -EncodedCommand $([Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($code)))")
+    for ($i = 0; $i -lt 60 -and -not (Test-Path -LiteralPath $wait); $i++) { Start-Sleep -Milliseconds 250 }
+  }
+  $done = Join-Path ([IO.Path]::GetTempPath()) "$name-mcp.txt"
+  Invoke-OutsidePs ("[void](New-Item -ItemType Directory -Force -Path '$mcpData\lists'); " +
+    "[IO.File]::WriteAllText('$mcpData\lists\Work.md', '# Work' + [char]10 + '- [ ] Real task ^rrrrrrrr' + [char]10); [IO.File]::WriteAllText('$done', 'ok')") $done
+  Remove-Item -LiteralPath $done -Force -ErrorAction SilentlyContinue
+  Check ((Get-RealFiles (Join-Path $mcpData 'lists')) -contains 'Work.md') 'a real lists folder in AppData (made outside)'
+  [void](New-Item -ItemType Directory -Force -Path (Join-Path $private 'mcp\lists'))   # a list in the app's copy only (as an earlier run left them)
+  [IO.File]::WriteAllText((Join-Path $private 'mcp\lists\Stale.md'), "# Stale`n- [ ] Only in the copy ^ssssssss`n")
+  Check ((Test-Path -LiteralPath (Join-Path $private 'mcp\lists\Stale.md')) -and -not ((Get-RealFiles (Join-Path $mcpData 'lists')) -contains 'Stale.md')) 'a list only the app''s copy has'
+  $psi = New-Object System.Diagnostics.ProcessStartInfo
+  $psi.FileName = $ps
+  $psi.Arguments = "-NoProfile -NonInteractive -ExecutionPolicy Bypass -File `"$(Join-Path $repo 'desktop\mcp-server.ps1')`" -DataDir `"$mcpData`""
+  $psi.UseShellExecute = $false; $psi.RedirectStandardInput = $true; $psi.RedirectStandardOutput = $true; $psi.RedirectStandardError = $true
+  $psi.StandardOutputEncoding = [Text.Encoding]::UTF8
+  $proc = [Diagnostics.Process]::Start($psi)
+  $in = New-Object IO.StreamWriter($proc.StandardInput.BaseStream, (New-Object System.Text.UTF8Encoding($false))); $in.NewLine = "`n"; $in.AutoFlush = $true
+  $in.WriteLine('{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18"}}')
+  $in.WriteLine('{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"get_lists","arguments":{}}}')
+  $in.WriteLine('{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"add_tasks","arguments":{"list":"Work","tasks":[{"text":"Added from Claude"}]}}}')
+  $in.Close()
+  $out = $proc.StandardOutput.ReadToEnd(); $err = $proc.StandardError.ReadToEnd()
+  [void]$proc.WaitForExit(60000)
+  $answers = @($out -split "`n" | Where-Object { $_ } | ForEach-Object { ConvertFrom-JsonText $_ })
+  Check ($answers.Count -eq 3) "three answers through the pipe ($($answers.Count) $err)"
+  $names = ''
+  if ($answers.Count -ge 2 -and $answers[1]['result']['structuredContent']) { $names = @($answers[1]['result']['structuredContent']['lists'] | ForEach-Object { $_['name'] }) -join ',' }
+  elseif ($answers.Count -ge 2) { $names = [string]$answers[1]['result']['content'][0]['text'] }
+  Check ($names -eq 'Work') "it sees the real folder, not the app's copy (lists: $names)"
+  $copy = Join-Path ([IO.Path]::GetTempPath()) "$name-work.txt"
+  Invoke-OutsidePs "Copy-Item -LiteralPath '$mcpData\lists\Work.md' -Destination '$copy'" $copy
+  $real = $(if (Test-Path -LiteralPath $copy) { [IO.File]::ReadAllText($copy) } else { '' })
+  Remove-Item -LiteralPath $copy -Force -ErrorAction SilentlyContinue
+  Check ($real -match '- \[ \] Real task \^rrrrrrrr\n- \[ \] Added from Claude \^[0-9a-z]{8}\n$') "the new task is in the real Work.md ($($real.Replace("`n", ' | ')))"
+  Check (-not (Test-Path -LiteralPath (Join-Path $private 'mcp\lists\Work.md'))) 'and nothing landed in the app''s copy'
 } finally {
   Remove-Item -LiteralPath $private -Recurse -Force -ErrorAction SilentlyContinue
   try { Invoke-Outside "rmdir /s /q `"$here`"" } catch {}
