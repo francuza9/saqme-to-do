@@ -82,4 +82,10 @@ describe('edge cases: late summaries, payload size', () => {
     const body = pushPayload({ title: huge, body: huge, tag: 'x', sub: huge });
     expect(new TextEncoder().encode(body).length).toBeLessThan(3000);
   });
+  it('a deadline reminder\'s payload names its task (a tap opens it); the daily summary\'s does not', () => {
+    expect(JSON.parse(pushPayload({ title: 'In 15 min', body: 'x', tag: 'due-aaaaaaaa', sub: 'Work', task: 'aaaaaaaa' })).task).toBe('aaaaaaaa');
+    expect('task' in JSON.parse(pushPayload({ title: 'Due today', body: 'x', tag: 'digest', sub: 'Work' }))).toBe(false);
+    const due = computeReminders([t('bbbbbbbb', '2026-10-25', '16:00')], { tz: TZ, notifyAt: '10:00', nowMs: at('15:50'), notified: new Set() });
+    expect(due.map((r) => r.task)).toEqual(['bbbbbbbb']);
+  });
 });

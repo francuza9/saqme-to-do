@@ -123,7 +123,8 @@ function Get-RuleMinutes([string]$hm) {
 #   anything overdue   -> (date before today, timed or not) the same daily summary
 # Only open tasks count (to do, in progress, blocked). Times are wall-clock times, like the deadlines.
 #   $tasks: @{ Id; Text; Status; Due = 'YYYY-MM-DD'; DueTime = 'H:MM' or ''; Project }
-#   $notified: hashtable of keys already shown. Returns @{ Keys = @(...); Title; Body; Sub } for each one due now.
+#   $notified: hashtable of keys already shown. Returns @{ Keys = @(...); Title; Body; Sub; Task } for each one due now (Task: the id of the task a
+#   deadline reminder is about, so that a click on it can open it; not on the daily summary).
 function Get-Reminders($tasks, [datetime]$Now, [string]$notifyAt, $notified) {
   $out = New-Object System.Collections.ArrayList
   $digest = New-Object System.Collections.ArrayList
@@ -140,10 +141,10 @@ function Get-Reminders($tasks, [datetime]$Now, [string]$notifyAt, $notified) {
     $kSoon = "$($t.Due)|soon|$($t.Id)|$($t.DueTime)"
     $kNow = "$($t.Due)|now|$($t.Id)|$($t.DueTime)"
     if ($left -le 15 -and $left -gt 0 -and -not $notified.ContainsKey($kSoon)) {
-      [void]$out.Add(@{ Keys = @($kSoon); Title = "In $left min"; Body = $t.Text; Sub = "$($t.Project) $([char]0x00B7) $($t.DueTime)" })
+      [void]$out.Add(@{ Keys = @($kSoon); Title = "In $left min"; Body = $t.Text; Sub = "$($t.Project) $([char]0x00B7) $($t.DueTime)"; Task = [string]$t.Id })
     } elseif ($left -le 0 -and $left -gt -720 -and -not $notified.ContainsKey($kNow)) {
       $title = $(if (-$left -lt 5) { 'Due now' } else { "Overdue since $($t.DueTime)" })
-      [void]$out.Add(@{ Keys = @($kNow, $kSoon); Title = $title; Body = $t.Text; Sub = $t.Project })
+      [void]$out.Add(@{ Keys = @($kNow, $kSoon); Title = $title; Body = $t.Text; Sub = $t.Project; Task = [string]$t.Id })
     }
   }
   $kDig = "$todayS|digest"

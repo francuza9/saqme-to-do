@@ -18,7 +18,7 @@
         { "id": "aaaaaaaa", "text": "Call the bank", "status": " ", "due": "2026-10-21", "dueTime": "16:00", "project": "Work" }
       ],
       "expect": [
-        { "keys": ["2026-10-21|soon|aaaaaaaa|16:00"], "title": "In 15 min", "body": "Call the bank", "sub": "Work · 16:00" }
+        { "keys": ["2026-10-21|soon|aaaaaaaa|16:00"], "title": "In 15 min", "body": "Call the bank", "sub": "Work · 16:00", "task": "aaaaaaaa" }
       ]
     },
     {
@@ -60,7 +60,8 @@
           "keys": ["2026-10-21|now|aaaaaaaa|16:00", "2026-10-21|soon|aaaaaaaa|16:00"],
           "title": "Due now",
           "body": "Call the bank",
-          "sub": "Work"
+          "sub": "Work",
+          "task": "aaaaaaaa"
         }
       ]
     },
@@ -79,7 +80,8 @@
           "keys": ["2026-10-21|now|aaaaaaaa|16:00", "2026-10-21|soon|aaaaaaaa|16:00"],
           "title": "Overdue since 16:00",
           "body": "Call the bank",
-          "sub": "Work"
+          "sub": "Work",
+          "task": "aaaaaaaa"
         }
       ]
     },
@@ -98,7 +100,8 @@
           "keys": ["2026-10-21|now|aaaaaaaa|16:00", "2026-10-21|soon|aaaaaaaa|16:00"],
           "title": "Overdue since 16:00",
           "body": "Call the bank",
-          "sub": "Work"
+          "sub": "Work",
+          "task": "aaaaaaaa"
         }
       ]
     },
@@ -240,7 +243,7 @@
         { "id": "ffffffff", "text": "Night train", "status": " ", "due": "2026-10-22", "dueTime": "0:05", "project": "Travel" }
       ],
       "expect": [
-        { "keys": ["2026-10-22|soon|ffffffff|0:05"], "title": "In 15 min", "body": "Night train", "sub": "Travel · 0:05" }
+        { "keys": ["2026-10-22|soon|ffffffff|0:05"], "title": "In 15 min", "body": "Night train", "sub": "Travel · 0:05", "task": "ffffffff" }
       ]
     },
     {
@@ -254,7 +257,7 @@
         { "id": "gggggggg", "text": "Feed the cat", "status": " ", "due": "2026-03-29", "dueTime": "3:15", "project": "Home" }
       ],
       "expect": [
-        { "keys": ["2026-03-29|soon|gggggggg|3:15"], "title": "In 10 min", "body": "Feed the cat", "sub": "Home · 3:15" }
+        { "keys": ["2026-03-29|soon|gggggggg|3:15"], "title": "In 10 min", "body": "Feed the cat", "sub": "Home · 3:15", "task": "gggggggg" }
       ]
     },
     {
@@ -268,7 +271,7 @@
         { "id": "hhhhhhhh", "text": "Check the boiler", "status": " ", "due": "2026-10-25", "dueTime": "3:00", "project": "Home" }
       ],
       "expect": [
-        { "keys": ["2026-10-25|soon|hhhhhhhh|3:00"], "title": "In 10 min", "body": "Check the boiler", "sub": "Home · 3:00" }
+        { "keys": ["2026-10-25|soon|hhhhhhhh|3:00"], "title": "In 10 min", "body": "Check the boiler", "sub": "Home · 3:00", "task": "hhhhhhhh" }
       ]
     },
     {
@@ -281,7 +284,7 @@
       "tasks": [
         { "id": "iiiiiiii", "text": "Stand-up", "status": " ", "due": "2026-10-21", "dueTime": "10:00", "project": "Work" }
       ],
-      "expect": [{ "keys": ["2026-10-21|soon|iiiiiiii|10:00"], "title": "In 10 min", "body": "Stand-up", "sub": "Work · 10:00" }]
+      "expect": [{ "keys": ["2026-10-21|soon|iiiiiiii|10:00"], "title": "In 10 min", "body": "Stand-up", "sub": "Work · 10:00", "task": "iiiiiiii" }]
     },
     {
       "name": "a task the desktop knows only by project and text",
@@ -305,7 +308,8 @@
           "keys": ["2026-10-21|soon|Work|Plan the week|16:00"],
           "title": "In 5 min",
           "body": "Plan the week",
-          "sub": "Work · 16:00"
+          "sub": "Work · 16:00",
+          "task": "Work|Plan the week"
         }
       ]
     }

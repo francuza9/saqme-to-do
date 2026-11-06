@@ -368,6 +368,29 @@ function showInList(id) {
   row?.scrollIntoView({ block: 'center' });
   focusOn(row);
 }
+const flash = { id: '', until: 0 };   // the task a tapped reminder opened: highlighted for a moment (.row.flash)
+let wantedTask = null;                // { id, until }: a reminder's task this phone does not have (yet); sync may still bring it
+/**
+ * A deadline reminder was tapped (the service worker's message, or #task=<id> when the tap started the app): its
+ * task opens in its list, in view and briefly highlighted. A task deleted since opens nothing; one that moved
+ * opens where it is now. A task this phone has not got yet is waited for (the next sync) for a while.
+ */
+function openReminderTask(id) {
+  if (!/^[0-9a-z]{8,32}$/.test(id || '')) return;
+  const t = store.get('task', id);
+  if (!t || t.fields.deleted.v) { wantedTask = { id, until: Date.now() + 20_000 }; return; }
+  wantedTask = null;
+  closeSheet();
+  flash.id = id; flash.until = Date.now() + 2000;
+  showInList(id);
+  setTimeout(() => { for (const r of els.list.querySelectorAll('.row.flash')) r.classList.remove('flash'); }, 1900);
+}
+function readTaskLink() {
+  const m = /^#task=([0-9a-z]{8,32})$/.exec(location.hash);
+  if (!m) return;
+  history.replaceState(null, '', location.pathname + location.search);
+  openReminderTask(m[1]);
+}
 /** What For Today shows now: [{ task, bucket }], in the order of their deadlines. */
 const todayRows = () => forToday(store.tasks(), new Date(), store.projects().map((p) => p.id));
 
@@ -1129,7 +1152,7 @@ function taskRow(node, section, draft = null) {
   // the row takes keyboard focus as one unit (arrow keys move it), and says what it is in one phrase
   const notesBelow = !!node && (open || ui.notesEditing === id) && (!!notes || ui.notesEditing === id);
   const row = h('div', {
-    class: `row${id && ui.sel === id ? ' sel' : ''}${notesBelow ? ' with-notes' : ''}`, dataset: { id: id ?? '', fk: id ? `row:${id}` : '' }, style: { '--depth': String(depth) },
+    class: `row${id && ui.sel === id ? ' sel' : ''}${notesBelow ? ' with-notes' : ''}${id && flash.id === id && Date.now() < flash.until ? ' flash' : ''}`, dataset: { id: id ?? '', fk: id ? `row:${id}` : '' }, style: { '--depth': String(depth) },
     role: node ? 'group' : null, tabindex: node ? (ui.sel === id ? '0' : '-1') : null, 'aria-label': node ? rowSummary(node, st) : null,
   });
   if (node) {
@@ -2764,7 +2787,7 @@ async function loadLocalInfo() {
 
 /** #claim=<code> from `saqme open`: the local app hands this window its key once. */
 async function readClaimLink() {
-  const m = /^#claim=([A-Za-z0-9_-]{16,})$/.exec(location.hash);
+  const m = /^#claim=([A-Za-z0-9_-]{16,})(?:&task=([0-9a-z]{8,32}))?$/.exec(location.hash);   // (&task: a tapped reminder opened this window)
   if (!m) return;
   history.replaceState(null, '', location.pathname);
   try {
@@ -2772,6 +2795,7 @@ async function readClaimLink() {
     const data = await res.json();
     if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
     if (data.token !== store.meta.token) { store.pair(data.token); ui.welcomeSkipped = true; }
+    if (m[2]) openReminderTask(m[2]);
   } catch (e) { toast(`Could not connect to the app: ${e.message}`); }
 }
 
@@ -3219,7 +3243,10 @@ els.sync.addEventListener('click', () => {
   toast(statusText());
 });
 els.conflicts.addEventListener('click', () => go('conflicts'));
-store.addEventListener('change', requestRender);
+store.addEventListener('change', () => {
+  if (wantedTask) { if (Date.now() > wantedTask.until) wantedTask = null; else openReminderTask(wantedTask.id); }
+  requestRender();
+});
 store.addEventListener('rejected', (e) => {
   const r = e.detail[0];
   const t = r.kind === 'task' ? store.get('task', r.id) : null;
@@ -3247,7 +3274,9 @@ store.addEventListener('sharemoved', (e) => {
 });
 store.addEventListener('savefailed', () => { requestRender(); announce('Changes are not saved on this phone right now.'); });
 store.addEventListener('saved', requestRender);
-window.addEventListener('hashchange', () => { readPairingLink(); readClaimLink(); readJoinLink(); });
+window.addEventListener('hashchange', () => { readPairingLink(); readClaimLink(); readJoinLink(); readTaskLink(); });
+// a tap on a deadline reminder while the app is open (sw.js focuses the window and says which task)
+navigator.serviceWorker?.addEventListener('message', (e) => { if (e.data?.type === 'open-task') openReminderTask(String(e.data.id)); });
 document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') checkClipboardForInvite(); });
 window.addEventListener('focus', () => checkClipboardForInvite());
 setInterval(() => { if (document.visibilityState === 'visible' && !ui.editing) requestRender(); }, 60_000);   // relative dates
@@ -3299,6 +3328,7 @@ if (!store.meta.token && !store.projects().length) {
   try { ui.localUnpaired = (await (await fetch('api/health', { cache: 'no-store' })).json()).local === true; } catch { /* static host: no API */ }
 }
 render();
+readTaskLink();   // (the app was started by a tap on a deadline reminder)
 loadLocalInfo();
 checkClipboardForInvite();
 // the local app's sync status, while Settings are on screen (a Worker's answer never changes: no polling there)

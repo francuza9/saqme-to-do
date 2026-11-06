@@ -10,8 +10,11 @@ const detached = (cmd, args) => { const p = spawn(cmd, args, { detached: true, s
 // ---------------------------------------------------------------- notifications
 const osaQuote = (s) => `"${String(s).replace(/\\/g, '\\\\').replace(/"/g, '\\"')}"`;
 
-/** Shows a desktop notification; resolves to true if a notifier ran. */
-export function notify({ title, body = '', sub = '' }, { icon } = {}) {
+/**
+ * Shows a desktop notification; returns true if a notifier ran. onClick runs when the notification is clicked, where
+ * the notifier can say so (notify-send 0.8 or later on Linux; macOS's osascript cannot, and neither can gdbus here).
+ */
+export function notify({ title, body = '', sub = '' }, { icon, onClick } = {}) {
   const os = platform();
   if (os === 'darwin') {
     const script = `display notification ${osaQuote(body)} with title ${osaQuote(title)}${sub ? ` subtitle ${osaQuote(sub)}` : ''}`;
@@ -22,6 +25,7 @@ export function notify({ title, body = '', sub = '' }, { icon } = {}) {
     if (has('notify-send')) {
       // '--': a task text starting with "-" is text, not an option
       const args = ['-a', 'Saqme To Do', ...(icon && existsSync(icon) ? ['-i', icon] : []), '--', title, text];
+      if (onClick) return notifyWithAction(args, onClick);
       return spawnSync('notify-send', args, { stdio: 'ignore', timeout: 10_000 }).status === 0;
     }
     if (has('gdbus')) {
@@ -32,6 +36,25 @@ export function notify({ title, body = '', sub = '' }, { icon } = {}) {
     }
   }
   return false;
+}
+
+/**
+ * notify-send --action=default=... --wait prints "default" when the notification itself is clicked, and ends when it
+ * goes away. A notify-send that does not know those options fails at once without showing anything: then it is shown
+ * the plain way (a click does nothing).
+ */
+function notifyWithAction(args, onClick) {
+  const at = Date.now();
+  const p = spawn('notify-send', ['--action=default=Open Saqme', '--wait', ...args], { stdio: ['ignore', 'pipe', 'ignore'] });
+  let out = '';
+  p.stdout.on('data', (d) => { out += d; });
+  p.on('error', () => {});
+  p.on('close', (code, signal) => {
+    if (out.trim() === 'default') onClick();
+    else if (code && !signal && !out && Date.now() - at < 2000) spawnSync('notify-send', args, { stdio: 'ignore', timeout: 10_000 });
+  });
+  p.unref(); p.stdout.unref();
+  return true;
 }
 
 // ---------------------------------------------------------------- the app window

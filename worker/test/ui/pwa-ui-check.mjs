@@ -256,7 +256,28 @@ check(order.join('|') === 'Last one|Write the report', `drag moved the task abov
   await page.tap('.row:has-text("Pay the bill") .m-list');
   await page.waitForTimeout(150);
   check(await title(page) === 'Errands' && (await page.textContent('.row.sel .text')) === 'Pay the bill', 'tapping the list name opens the task in its list');
+
+  // a tap on a deadline reminder: #task=<id> (the tap started the app) or sw.js's message (the app was open) opens the task
+  // in its list and highlights it for a moment; a task that is gone is no error and changes nothing
+  const billId = await page.evaluate(() => document.querySelector('.row.sel').dataset.id);
   await openList(page, 'General');
+  await page.evaluate((id) => { location.hash = `#task=${id}`; }, billId);
+  await page.waitForTimeout(150);
+  const viaHash = await page.evaluate(() => ({ hash: location.hash, flash: !!document.querySelector('.row.sel.flash'), text: document.querySelector('.row.sel .text')?.textContent }));
+  check(await title(page) === 'Errands' && viaHash.text === 'Pay the bill' && viaHash.flash && viaHash.hash === '', `#task=<id> opens the task in its list, highlighted (${JSON.stringify(viaHash)})`);
+  await page.waitForTimeout(2300);
+  check(!(await page.$('.row.flash')) && !!(await page.$('.row.sel')), 'the highlight goes after a moment, the task stays selected');
+  await openList(page, 'General');
+  await page.evaluate((id) => navigator.serviceWorker.dispatchEvent(new MessageEvent('message', { data: { type: 'open-task', id } })), billId);
+  await page.waitForTimeout(150);
+  check(await title(page) === 'Errands' && (await page.textContent('.row.sel .text')) === 'Pay the bill', 'the service worker\'s message opens it too, while the app is open');
+  await openList(page, 'General');
+  const errorsBefore = errors.length;
+  await page.evaluate(() => { location.hash = '#task=zzzzzzzz'; });
+  await page.evaluate(() => navigator.serviceWorker.dispatchEvent(new MessageEvent('message', { data: { type: 'open-task', id: '<b>' } })));
+  await page.waitForTimeout(150);
+  check(await title(page) === 'General' && errors.length === errorsBefore, `a task that is gone changes nothing and is no error (${errors.slice(errorsBefore).join()})`);
+  await page.evaluate(() => { location.hash = ''; });
 
   // swipes on the list: to the left the next list, to the right back; past the last one nothing; up and down is a scroll
   const lb = await (await page.$('#list')).boundingBox();

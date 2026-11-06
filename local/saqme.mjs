@@ -616,7 +616,9 @@ export async function startApp({ dataDir = defaultDataDir(), port, interval = 10
   const loops = [files.run(), cloud.run()];
   let reminderTimer = null;
   if (reminders) {
-    const tick = () => localReminders(d1, (r) => notify(r, { icon: appPaths.icon })).catch((e) => log(`reminders: ${e?.message ?? e}`));
+    // (a click on a deadline reminder opens the app on its task, where the notifier reports clicks: local/desktop.mjs)
+    const show = (r) => notify(r, { icon: appPaths.icon, onClick: () => { openApp(p, srv.port, r.task).catch((e) => log(`open: ${e?.message ?? e}`)); } });
+    const tick = () => localReminders(d1, show).catch((e) => log(`reminders: ${e?.message ?? e}`));
     setTimeout(tick, 5000);
     reminderTimer = setInterval(tick, 60_000);
   }
@@ -712,9 +714,15 @@ async function cmdOpen(opts) {
   const p = dataPaths(opts.data);
   const port = await ensureRunning(p, opts);
   if (!port) { console.error(`Saqme To Do did not start. See ${p.log}`); process.exit(1); }
-  const { code } = await api(p, port, '/api/local/code', 'POST');
-  const used = openWindow(launchPage(p, `http://127.0.0.1:${port}/#claim=${code}`));
+  const used = await openApp(p, port);
   if (!used) console.log(`Open http://127.0.0.1:${port} in a browser.`);
+}
+
+/** Opens the app window (on a task, when given the id of one: a tapped deadline reminder). Returns what was used. */
+export async function openApp(p, port, task = '') {
+  const { code } = await api(p, port, '/api/local/code', 'POST');
+  const at = /^[0-9a-z]{8,32}$/.test(task || '') ? `&task=${task}` : '';
+  return openWindow(launchPage(p, `http://127.0.0.1:${port}/#claim=${code}${at}`));
 }
 
 /**

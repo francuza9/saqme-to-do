@@ -1713,9 +1713,14 @@ function Show-TaskInList($it) {
   $name = Get-TodayListOf $it
   $id = [string]$it.Id
   if (-not $name -or -not $id) { return }
+  [void](Open-TaskIn $name $id)
+}
+# the task with this id in the list $name: the list opens with the task selected (and its parents open). False when
+# the list has no such task (any more).
+function Open-TaskIn([string]$name, [string]$id) {
   Switch-Project $name
   $at = -1; for ($k = 0; $k -lt $script:items.Count; $k++) { if ($script:items[$k].Kind -eq 'task' -and $script:items[$k].Id -ceq $id) { $at = $k; break } }
-  if ($at -lt 0) { return }
+  if ($at -lt 0) { return $false }
   $found = $script:items[$at]
   $lvl = $found.Level
   for ($k = $at - 1; $k -ge 0 -and $lvl -gt 0; $k--) {   # its parents, nearest first, open
@@ -1726,6 +1731,37 @@ function Show-TaskInList($it) {
   $script:sel = $found
   Render
   Set-Sel $found -Focus
+  return $true
+}
+# A tap on a deadline reminder (saqme://task?id=..., or the balloon): the app shows the list that holds the task,
+# scrolled to it and highlighted for a moment. Every list is searched, so a task moved meanwhile is found where it is
+# now; one that is gone leaves the app as it is (no error).
+function Open-TaskById([string]$id) {
+  if ($id -cnotmatch '^[0-9a-z]{8,32}$') { return $false }
+  foreach ($p in @(Get-ProjectNames)) {
+    $has = $false
+    foreach ($it in (Read-Items (Read-TextFile (Proj-Path $p)))) { if ($it.Kind -eq 'task' -and $it.Id -ceq $id) { $has = $true; break } }
+    if (-not $has) { continue }
+    if (-not (Open-TaskIn $p $id)) { return $false }
+    Flash-Row (Sel-Row)
+    return $true
+  }
+  return $false
+}
+$script:flashTimer = $null
+function Flash-Row($row) {
+  if (-not $row) { return }
+  $c = $Accent.Color
+  $row.Background = New-Object System.Windows.Media.SolidColorBrush ([System.Windows.Media.Color]::FromArgb(110, $c.R, $c.G, $c.B))
+  if ($script:flashTimer) { $script:flashTimer.Stop() }
+  $script:flashTimer = New-Object System.Windows.Threading.DispatcherTimer
+  $script:flashTimer.Interval = [TimeSpan]::FromMilliseconds(1600)
+  $script:flashTimer.Add_Tick({
+    $script:flashTimer.Stop()
+    $r = Sel-Row   # (the rows may have been drawn again meanwhile: the live one)
+    if ($r) { Paint-TaskRow $r $true }
+  })
+  $script:flashTimer.Start()
 }
 
 # ---------------------------------------------------------------- the list switcher (docs/design.md, "The list switcher")
@@ -4490,6 +4526,7 @@ function Receive-OpenUrl([string]$url = '') {
   if (-not $url -and (Test-Path -LiteralPath $openUrlFile)) {
     try { $url = [IO.File]::ReadAllText($openUrlFile).Trim(); Remove-Item -LiteralPath $openUrlFile -Force } catch { return }
   }
+  if ($url -cmatch '^saqme://task\?id=([0-9a-z]{8,32})$') { Show-Main; [void](Open-TaskById $matches[1]); return }   # a tap on a deadline reminder
   if ($url -and (Get-InviteLink $url)) { Show-Main; [void](Start-JoinShare $url) }
 }
 
@@ -4721,15 +4758,21 @@ function Mark-Notified([string]$k) {
   $keep = @($script:notified.Keys | Where-Object { $_.Substring(0, [Math]::Min(10, $_.Length)) -ge $cut })
   try { Write-Utf8 $notifFile (($keep -join "`n") + "`n") } catch {}
 }
-function Show-Toast([string]$title, [string]$body, [string]$attr) {
+# $taskId: the task a deadline reminder is about. A click on the toast (or the balloon, when toasts are not available)
+# opens that task (Open-TaskById); without one it just brings the app up.
+$script:balloonTask = ''
+function Show-Toast([string]$title, [string]$body, [string]$attr, [string]$taskId = '') {
   if ($SmokeTest) { return }   # the installer's self-check must not pop anything up
+  if ($taskId -cnotmatch '^[0-9a-z]{8,32}$') { $taskId = '' }   # (a task without an id of its own has no link)
+  $launch = $(if ($taskId) { "saqme://task?id=$taskId" } else { 'saqme:open' })
+  $script:balloonTask = $taskId
   $esc = [System.Security.SecurityElement]
   if ($script:toastOk) {
     try {
-      $xml = '<toast activationType="protocol" launch="saqme:open"><visual><binding template="ToastGeneric">' +
+      $xml = "<toast activationType=`"protocol`" launch=`"$launch`"><visual><binding template=`"ToastGeneric`">" +
              "<text>$($esc::Escape($title))</text><text>$($esc::Escape($body))</text>" +
              "<text placement=`"attribution`">$($esc::Escape($attr))</text></binding></visual>" +
-             '<actions><action content="Open Saqme" activationType="protocol" arguments="saqme:open"/></actions></toast>'
+             "<actions><action content=`"Open Saqme`" activationType=`"protocol`" arguments=`"$launch`"/></actions></toast>"
       $x = New-Object Windows.Data.Xml.Dom.XmlDocument
       $x.LoadXml($xml)
       [Windows.UI.Notifications.ToastNotificationManager]::CreateToastNotifier($AppId).Show((New-Object Windows.UI.Notifications.ToastNotification $x))
@@ -4752,7 +4795,7 @@ function Get-DueTasks {
 function Check-Reminders {
   $atStr = $(if ($script:cfg.notifyAt) { $script:cfg.notifyAt } else { '10:00' })
   foreach ($r in (Get-Reminders (Get-DueTasks) (Get-Date) $atStr $script:notified)) {
-    Show-Toast $r.Title $r.Body $r.Sub
+    Show-Toast $r.Title $r.Body $r.Sub $r.Task
     foreach ($k in $r.Keys) { Mark-Notified $k }
   }
 }
@@ -4797,6 +4840,7 @@ $miOpen = $cms.Items.Add('Open Saqme To Do'); $miOpen.Add_Click({ Show-Main })
 [void]$cms.Items.Add((New-Object System.Windows.Forms.ToolStripSeparator))
 $miQuit = $cms.Items.Add('Quit'); $miQuit.Add_Click({ Quit-App })
 $tray.ContextMenuStrip = $cms
+$tray.Add_BalloonTipClicked({ if ($script:balloonTask) { $id = $script:balloonTask; Show-Main; [void](Open-TaskById $id) } })
 $tray.Add_MouseClick({ param($s, $e) if ($e.Button -eq [System.Windows.Forms.MouseButtons]::Left) { Show-Main } })
 $tray.Visible = -not $SmokeTest
 
@@ -5375,6 +5419,27 @@ if ($SmokeTest) {
     foreach ($n in 'Today A', 'Today B') { Remove-Item -LiteralPath (Proj-Path $n) -Force }
     Render
     Write-Output 'FOR TODAY OK'
+    # a click on a deadline reminder (saqme://task?id=...): the list that holds the task opens on it, highlighted; a task
+    # moved to another list is found there; one that is gone (or a made-up id) changes nothing and is no error
+    Write-Utf8 (Proj-Path 'Click A') ("# Click A`n- [ ] ring the bank due:$(& $tdDay 0) 16:00 ^clkaaaa1`n  - [ ] sub of it ^clkaaaa2`n")
+    Write-Utf8 (Proj-Path 'Click B') "# Click B`n- [ ] other ^clkbbbb1`n"
+    Switch-Project $swHome
+    [void](Open-TaskById 'clkaaaa2')
+    if ($script:proj -ne 'Click A' -or -not $script:sel -or $script:sel.Id -ne 'clkaaaa2') { throw "the reminder click did not open the task: $($script:proj)" }
+    if (-not $script:flashTimer -or -not (Sel-Row)) { throw 'the task is not highlighted' }
+    $script:flashTimer.Stop(); $script:flashTimer = $null
+    Write-Utf8 (Proj-Path 'Click A') "# Click A`n"
+    Write-Utf8 (Proj-Path 'Click B') "# Click B`n- [ ] other ^clkbbbb1`n- [ ] ring the bank due:$(& $tdDay 0) 16:00 ^clkaaaa1`n"
+    Switch-Project $swHome
+    [void](Open-TaskById 'clkaaaa1')
+    if ($script:proj -ne 'Click B' -or $script:sel.Id -ne 'clkaaaa1') { throw "a moved task was not found in its new list: $($script:proj)" }
+    $script:flashTimer.Stop(); $script:flashTimer = $null
+    Switch-Project $swHome
+    foreach ($u in 'clkgone99', '', 'X;rm -rf', 'CLKAAAA1') { if (Open-TaskById $u) { throw "a reminder for '$u' opened something" } }
+    if ($script:proj -ne $swHome -or $script:flashTimer) { throw 'a reminder for a task that is gone changed something' }
+    foreach ($n in 'Click A', 'Click B') { Remove-Item -LiteralPath (Proj-Path $n) -Force }
+    Render
+    Write-Output 'REMINDER CLICK OK'
     # Focus ring, header, press feedback and moving between views (docs/design.md, "Motion"; no window on screen here,
     # so nothing moves by itself: $script:motion 'on' sets moves up as on screen, and they are ended by hand)
     if (-not $script:HasA11y) { throw 'a11y.cs did not load' }

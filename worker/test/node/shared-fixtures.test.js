@@ -65,7 +65,7 @@ describe('reminders.json: computeReminders', () => {
   for (const c of load('reminders.json').cases) {
     it(c.name, () => {
       const got = computeReminders(c.tasks, { tz: c.tz, notifyAt: c.notifyAt, nowMs: Date.parse(c.now), notified: new Set(c.notified) });
-      expect(got.map(({ keys, title, body, sub }) => ({ keys, title, body, sub }))).toEqual(c.expect);
+      expect(got.map(({ keys, title, body, sub, task }) => ({ keys, title, body, sub, task }))).toEqual(c.expect);
     });
   }
 });

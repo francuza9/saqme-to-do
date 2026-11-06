@@ -71,7 +71,11 @@ foreach ($c in (Read-Fixture 'reminders.json')['cases']) {
     $now = [TimeZoneInfo]::ConvertTimeFromUtc($utc, [TimeZoneInfo]::FindSystemTimeZoneById($c['windowsTz']))
     $tasks = @(foreach ($t in $c['tasks']) { @{ Id = $t['id']; Text = $t['text']; Status = $t['status']; Due = $t['due']; DueTime = $t['dueTime']; Project = $t['project'] } })
     $notified = @{}; foreach ($k in $c['notified']) { $notified[$k] = $true }
-    $got = @(foreach ($r in (Get-Reminders $tasks $now $c['notifyAt'] $notified)) { @{ keys = @($r.Keys); title = $r.Title; body = $r.Body; sub = $r.Sub } })
+    $got = @(foreach ($r in (Get-Reminders $tasks $now $c['notifyAt'] $notified)) {
+      $g = @{ keys = @($r.Keys); title = $r.Title; body = $r.Body; sub = $r.Sub }
+      if ($r.Task) { $g['task'] = $r.Task }   # (the daily summary is not about one task)
+      $g
+    })
     Assert-Eq (ConvertTo-Canon $got) (ConvertTo-Canon $c['expect'])
   }
 }

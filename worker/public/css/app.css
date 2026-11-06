@@ -175,6 +175,9 @@ svg { display: block; }
 @media (pointer: fine) { .row { min-height: var(--row-min-pointer); padding-top: 6px; padding-bottom: 6px; } }
 .row.with-notes { padding-bottom: 3px; }   /* its notes follow right under the text */
 .row.sel { background: var(--card-selected); border-left-color: var(--violet); }
+/* a task a tapped reminder opened: the selection colour fades in and out for a moment */
+.row.flash { animation: flash 1.8s var(--ease-out) 1; }
+@keyframes flash { 0%, 55% { background: var(--card-selected); box-shadow: inset 0 0 0 2px var(--violet); } 100% { box-shadow: inset 0 0 0 2px transparent; } }
 @media (hover: hover) { .row:hover { background: var(--card-hover); } .row.sel:hover { background: var(--card-selected); } .row:hover .grip { opacity: .8; } }
 /* pressing a task's text (which edits it, or opens its menu held down) tints its line; its buttons answer by themselves */
 .row:not(.sel):has(.text:active) { background: var(--card-pressed); transition-duration: var(--press-in); }

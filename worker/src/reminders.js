@@ -41,7 +41,8 @@ export function localClock(tz, nowMs) {
 
 /**
  * tasks: [{ id, text, status, due: 'YYYY-MM-DD', dueTime: 'H:MM' | '', project }]
- * Returns [{ keys: [...dedupe keys to record], title, body, tag, sub }] for keys not yet in `notified`.
+ * Returns [{ keys: [...dedupe keys to record], title, body, tag, sub, task }] for keys not yet in `notified`; task is the
+ * id of the task a deadline reminder is about (a click on the notification opens it), absent on the daily summary.
  * lastRun: minute of the day of the caller's last run, when it does not run every minute (the Worker's cron
  * runs every 5 minutes, last at 23:55): a daily summary time after it is moved to it.
  */
@@ -58,10 +59,10 @@ export function computeReminders(tasks, { tz, notifyAt, nowMs, notified, lastRun
     const kSoon = `${t.due}|soon|${t.id}|${t.dueTime}`;
     const kNow = `${t.due}|now|${t.id}|${t.dueTime}`;
     if (now.abs >= at - 15 && now.abs < at && !notified.has(kSoon)) {
-      out.push({ keys: [kSoon], title: `In ${at - now.abs} min`, body: t.text, tag: `due-${t.id}`, sub: `${t.project} · ${t.dueTime}` });
+      out.push({ keys: [kSoon], title: `In ${at - now.abs} min`, body: t.text, tag: `due-${t.id}`, sub: `${t.project} · ${t.dueTime}`, task: t.id });
     } else if (now.abs >= at && now.abs < at + 12 * 60 && !notified.has(kNow)) {
       const title = now.abs - at < 5 ? 'Due now' : `Overdue since ${t.dueTime}`;
-      out.push({ keys: [kNow, kSoon], title, body: t.text, tag: `due-${t.id}`, sub: t.project });
+      out.push({ keys: [kNow, kSoon], title, body: t.text, tag: `due-${t.id}`, sub: t.project, task: t.id });
     }
   }
   const kDig = `${now.date}|digest`;
@@ -92,8 +93,8 @@ async function loadVapid(env) {
 const clip = (s, n) => (s && s.length > n ? `${s.slice(0, n - 1)}…` : s);
 
 /** Keeps a payload far below the 3993-byte Web Push limit, whatever the task texts are. */
-export function pushPayload({ title, body, tag, sub, url = '/' }) {
-  return JSON.stringify({ title: clip(title, 120), body: clip(body, 600), tag, sub: clip(sub, 120), url });
+export function pushPayload({ title, body, tag, sub, url = '/', task }) {
+  return JSON.stringify({ title: clip(title, 120), body: clip(body, 600), tag, sub: clip(sub, 120), url, ...(task ? { task: clip(task, 64) } : {}) });
 }
 
 /**
@@ -181,7 +182,7 @@ async function deliver(db, vapid, due, subs, { prefix = '', budget, after, nowMs
     ).bind(JSON.stringify(keys), nowMs).all();
     if (!claimed.results.some((x) => x.key === keys[0])) continue;
     budget.left -= subs.length;
-    const res = await sendToAll(vapid, subs, { title: r.title, body: r.body, tag: r.tag, sub: r.sub, url: '/' });
+    const res = await sendToAll(vapid, subs, { title: r.title, body: r.body, tag: r.tag, sub: r.sub, url: '/', task: r.task });
     after.push(...outcomes(res.updates));
     if (!res.sent && res.failed) {
       // nothing got through: give the keys back so the next run tries again

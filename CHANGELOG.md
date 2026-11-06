@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+**A tap on a deadline reminder opens its task.** The 15-minutes-before and at-the-time notifications now open the
+app on the list that holds the task, scrolled to it and highlighted for a moment: on the phone (the app comes to
+the front, or starts on the task), in the Windows app (also from the tray), and in the Linux app (where the
+notifier reports clicks: notify-send 0.8 or later; macOS notifications cannot). A task moved to another list
+meanwhile is found in its new list; one that was deleted just opens the app, with no error. The daily summary
+still just opens the app. The push payload carries the task id (`task`), so the Worker must be updated for phones.
+
 **For Today.** A new entry at the top of the lists menu, on the phone app (and the Linux/macOS window) and in the
 Windows app, shows the open tasks (to do, in progress, blocked) of **every** list that are overdue, due today or due in
 the next 3 days, in the order of their deadlines (a task with a time before one without, within a day), under
