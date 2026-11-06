@@ -115,6 +115,25 @@ await page.tap('.row:has-text("Buy milk") .chip-btn');
 await page.tap('.menu-item:has-text("In progress")');
 await page.waitForTimeout(100);
 check(await page.isVisible('.row:has-text("Buy milk") .chip.s-prog'), 'status changed to in progress');
+// the change animates once (150-300 ms); nothing else on the list does
+const chipAnims = () => page.evaluate(() => document.getAnimations().filter((a) => a.effect?.target?.classList?.contains('chip')).map((a) => a.effect.getTiming().duration));
+await page.tap('.row:has-text("Buy milk") .chip-btn');
+await page.tap('.menu-item:has-text("Done")');
+await page.waitForTimeout(40);
+const strike = await page.evaluate(() => document.getAnimations().filter((a) => a.effect?.pseudoElement === '::after').length);
+check(strike === 0 || strike === 1, 'marking done draws the strike-through at most once');
+await page.tap('.completed-toggle');
+await page.tap('.row:has-text("Buy milk") .chip-btn');
+await page.tap('.menu-item:has-text("In progress")');
+await page.waitForTimeout(40);
+const during = await chipAnims();
+check(during.length === 1 && during[0] >= 150 && during[0] <= 300, `status change animates the changed chip only (${during})`);
+await page.waitForTimeout(350);
+check((await chipAnims()).length === 0, 'the animation is over after 350 ms');
+await page.evaluate(() => localStorage.removeItem('saqme.showCompleted'));   // (Completed closed again, as the checks below expect)
+await page.reload();
+await page.waitForSelector('.row');
+check((await chipAnims()).length === 0, 'first paint does not animate');
 await page.tap('.row:has-text("Call Anna") .chip-btn');
 await page.tap('.menu-item:has-text("Done")');
 await page.waitForTimeout(100);

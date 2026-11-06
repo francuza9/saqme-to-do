@@ -213,6 +213,12 @@ button.chip-btn:active .chip { transform: scale(var(--press-chip)); transition-d
 .t-post { color: var(--smoke); font-style: italic; }
 .t-done, .t-rej { color: var(--closed); text-decoration: line-through; text-decoration-thickness: 1px; }
 .t-aband { color: var(--closed); text-decoration: line-through; text-decoration-thickness: 1px; font-style: italic; }
+/* a status just set to closed: ::after draws the line (js playStatusAnim); the text's own line waits for it */
+.text.striking { position: relative; text-decoration-color: transparent; }
+.text.striking::after {
+  content: attr(data-text); position: absolute; inset: 0; pointer-events: none; color: transparent;
+  text-decoration: line-through; text-decoration-thickness: 1px; text-decoration-color: var(--closed);
+}
 /* (on the selected row's tint closed grey falls under 4.5 : 1; smoke stays above it, the strike-through says closed) */
 .row.sel .t-done, .row.sel .t-rej, .row.sel .t-aband { color: var(--smoke); }
 .editor {

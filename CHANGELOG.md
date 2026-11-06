@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+**Status changes animate.** On the phone app (and the Linux/macOS window), a status you set on this device plays a
+quick, subtle change (about 200 ms): the status icon pops into its new look, and marking a task done draws the
+strike-through across its text from left to right; going back to open fades the text in. Nothing animates on first
+paint or for tasks that arrive from sync, and nothing with "reduce motion" on. The Windows app does not animate this
+(its strike-through is a text decoration, which cannot be drawn partway).
+
 **A tap on a deadline reminder opens its task.** The 15-minutes-before and at-the-time notifications now open the
 app on the list that holds the task, scrolled to it and highlighted for a moment: on the phone (the app comes to
 the front, or starts on the task), in the Windows app (also from the tray), and in the Linux app (where the

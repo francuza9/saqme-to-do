@@ -80,6 +80,39 @@ function chip(mark) {
   return h('span', { class: `chip s-${s.key}` }, g ? icon(g) : null);
 }
 
+// Status changes made on this device animate once, on the row the next render builds (never sync, never first paint)
+const statusAnim = new Map();   // task id -> { from, to, at }
+/** Sets a task's status from this device's UI; the row it lands in animates the change. */
+function setStatus(id, mark) {
+  const from = store.get('task', id)?.fields.status.v;
+  // (noted first: the change renders at once)
+  if (from != null && from !== mark && !reducedMotion()) statusAnim.set(id, { from, to: mark, at: performance.now() });
+  if (store.setTask(id, { status: mark })) return true;
+  statusAnim.delete(id);
+  return false;
+}
+/** The row's chip and text play the change that setStatus() left for it (150-300 ms, subtle). */
+function playStatusAnim(id, chipEl, textEl) {
+  const a = statusAnim.get(id);
+  if (!a) return;
+  statusAnim.delete(id);
+  if (performance.now() - a.at > 1000 || reducedMotion() || !chipEl) return;
+  const opt = (ms) => ({ duration: ms, easing: 'cubic-bezier(.33, 1, .68, 1)' });
+  chipEl.animate?.([{ transform: 'scale(.6)', opacity: 0.4 }, { transform: 'scale(1.08)', opacity: 1, offset: 0.6 }, { transform: 'none', opacity: 1 }], opt(220));
+  chipEl.firstElementChild?.animate?.([{ transform: 'scale(0) rotate(-60deg)' }, { transform: 'none' }], opt(220));
+  if (!textEl) return;
+  if (rank(a.to) === 2 && rank(a.from) !== 2) {
+    // the strike-through line draws across the text: a copy of it, drawn only as its line, uncovered left to right
+    textEl.dataset.text = textEl.textContent;
+    textEl.classList.add('striking');
+    const done = () => textEl.classList.remove('striking');
+    const draw = textEl.animate?.([{ clipPath: 'inset(0 100% 0 0)' }, { clipPath: 'inset(0)' }], { ...opt(260), pseudoElement: '::after' });
+    if (draw) draw.finished.then(done, done); else done();
+  } else {
+    textEl.animate?.([{ opacity: 0.35 }, { opacity: 1 }], opt(200));
+  }
+}
+
 let toastTimer;
 function toast(text, action) {
   clearTimeout(toastTimer);
@@ -1184,18 +1217,20 @@ function taskRow(node, section, draft = null) {
     : h('button', { class: 'chip-btn', 'aria-label': `Status: ${st.name}`, 'aria-haspopup': 'dialog', dataset: { fk: id ? `chip:${id}` : '' } }, chip(mark));
   if (node && !ro) chipBtn.addEventListener('click', () => { commitAll(); statusSheet(id); });
   row.append(chipBtn);
+  let textEl = null;
 
   // text and its meta line share one column, so long titles get the full width (docs/design.md)
   const main = h('div', { class: 'main' });
   const editingThis = draft || (ui.editing && ui.editing.id === id);
   if (editingThis) main.append(editor(node, draft));
-  else if (ro) main.append(h('span', { class: `text t-${st.key}${t.fields.text.v ? '' : ' empty'}` }, t.fields.text.v || 'Untitled'));
+  else if (ro) main.append(textEl = h('span', { class: `text t-${st.key}${t.fields.text.v ? '' : ' empty'}` }, t.fields.text.v || 'Untitled'));
   else {
     // a button: tapping it (or Enter / Space on it) edits the text
     const text = h('button', { class: `text t-${st.key}${t.fields.text.v ? '' : ' empty'}`, dataset: { fk: `text:${id}` } }, t.fields.text.v || 'Untitled');
     text.addEventListener('click', () => beginEdit(id));
-    main.append(text);
+    main.append(textEl = text);
   }
+  if (node && statusAnim.has(id)) queueMicrotask(() => playStatusAnim(id, chipBtn.firstElementChild, textEl));   // (once the row is in the page)
   if (node) {
     const meta = [];
     const due = t.fields.due.v;
@@ -1561,7 +1596,7 @@ function menuItem(iconName, label, fn, { danger = false, hint = '', current = fa
 function statusSheet(id) {
   const t = store.get('task', id);
   if (!t || roTask(id)) return;
-  sheet(t.fields.text.v, STATUSES.map((s) => menuItem(chip(s.mark), s.name, () => store.setTask(id, { status: s.mark }), { current: s.mark === t.fields.status.v })));
+  sheet(t.fields.text.v, STATUSES.map((s) => menuItem(chip(s.mark), s.name, () => setStatus(id, s.mark), { current: s.mark === t.fields.status.v })));
 }
 
 function dueSheet(id) {
@@ -1775,7 +1810,7 @@ document.addEventListener('keydown', (e) => {
     case 'ArrowDown': e.preventDefault(); if (vis.length) ui.sel = vis[Math.min(i + 1, vis.length - 1)]; break;
     case 'ArrowUp': e.preventDefault(); if (vis.length) ui.sel = vis[Math.max(i - 1, 0)]; break;
     case 'Enter': if (edit) { e.preventDefault(); beginEdit(edit.id); } return;
-    case ' ': if (edit) { e.preventDefault(); store.setTask(edit.id, { status: rank(edit.fields.status.v) === 2 ? ' ' : 'x' }); } return;
+    case ' ': if (edit) { e.preventDefault(); setStatus(edit.id, rank(edit.fields.status.v) === 2 ? ' ' : 'x'); } return;
     case 'ArrowRight': if (sel) { setOpen(sel.id, true); } break;
     case 'ArrowLeft': if (sel) { setOpen(sel.id, false); } break;
     case 'Escape': ui.sel = null; break;
