@@ -170,6 +170,42 @@ export function listCounts(tasks, now = new Date()) {
   return out;
 }
 
+/** How many days ahead "For Today" looks: the next 3 days after today. */
+export const TODAY_AHEAD_DAYS = 3;
+
+/**
+ * The "For Today" view: the open tasks (to do, in progress, blocked) of every list in `projectIds` whose deadline is
+ * overdue, today or within the next 3 days, in the order of their deadlines. A task is 'over' when its deadline has
+ * passed (an earlier date, or today's time gone), 'today' when it is due today, else 'soon' (today+1..today+3).
+ * Within a day, tasks with a time come first by time, then those without (due by the end of the day); ties keep the
+ * lists' order and then their order in the list. Rules also in desktop/rules.ps1 (Get-ForToday), checked against
+ * shared/fixtures/today.json. Returns [{ task, bucket }].
+ */
+export function forToday(tasks, now = new Date(), projectIds = null) {
+  const order = projectIds ? new Map(projectIds.map((id, i) => [id, i])) : null;
+  const todayStr = fmtDate(now);
+  const last = fmtDate(new Date(now.getFullYear(), now.getMonth(), now.getDate() + TODAY_AHEAD_DAYS));
+  const out = [];
+  tasks.forEach((t, i) => {
+    if (!live(t) || !t.fields.text.v || !isOpenStatus(t.fields.status.v)) return;
+    const due = t.fields.due.v;
+    if (!due || due.date > last) return;
+    const project = place(t).project;
+    if (order && !order.has(project)) return;
+    const bucket = dueTone(due, false, now) === 'over' ? 'over' : due.date === todayStr ? 'today' : 'soon';
+    out.push({ task: t, bucket, at: i, list: order ? order.get(project) : 0 });
+  });
+  // a time sorts as minutes; no time is the end of the day
+  const minutes = (due) => (due.time ? +due.time.split(':')[0] * 60 + +due.time.split(':')[1] : 1440);
+  out.sort((a, b) => {
+    const da = a.task.fields.due.v;
+    const db = b.task.fields.due.v;
+    return (da.date < db.date ? -1 : da.date > db.date ? 1 : 0) || minutes(da) - minutes(db) || a.list - b.list
+      || cmpPos(place(a.task).pos, a.task.id, place(b.task).pos, b.task.id);
+  });
+  return out.map(({ task, bucket }) => ({ task, bucket }));
+}
+
 const LINK_RE = /(https?:\/\/[^\s<>"]+|www\.[^\s<>"]+)/g;
 /** Splits note text into [{ text } | { url, text }] parts, like the desktop's clickable links. */
 export function linkify(s) {

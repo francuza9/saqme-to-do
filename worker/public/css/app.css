@@ -232,6 +232,9 @@ button.chip-btn:active .chip { transform: scale(var(--press-chip)); transition-d
 }
 .meta .item { display: inline-flex; align-items: center; gap: var(--space-2); }
 .meta svg { width: 13px; height: 13px; }
+/* For Today: the list a task is in; a tap opens the task there */
+.meta .m-list { max-width: 11em; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--smoke); text-decoration: underline dotted; text-underline-offset: 3px; }
+button.m-list:active { color: var(--violet); }
 .due { display: inline-flex; align-items: center; min-height: 24px; color: var(--smoke); white-space: nowrap; }
 .pill { display: inline-flex; align-items: center; height: 24px; padding: 0 var(--space-3); border-radius: var(--r-control); font-weight: 500; white-space: nowrap; }
 button.m-due { transition: transform var(--press-out) var(--ease-out); }

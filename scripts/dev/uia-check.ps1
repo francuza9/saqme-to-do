@@ -159,7 +159,7 @@ try {
     $radios = $A::RootElement.FindAll([System.Windows.Automation.TreeScope]::Descendants, (New-Object System.Windows.Automation.AndCondition($ofApp, (New-Object System.Windows.Automation.PropertyCondition($A::ControlTypeProperty, $CT::RadioButton)))))
     $rbs = @($radios | ForEach-Object { [pscustomobject]@{ Name = $_.Current.Name; Sel = $_.GetCurrentPattern([System.Windows.Automation.SelectionItemPattern]::Pattern).Current.IsSelected } })
     $newList = $A::RootElement.FindFirst([System.Windows.Automation.TreeScope]::Descendants, (New-Object System.Windows.Automation.AndCondition($ofApp, (New-Object System.Windows.Automation.PropertyCondition($A::NameProperty, 'New list')))))
-    Check ($rbs.Count -eq 3 -and @($rbs | Where-Object { $_.Sel }).Count -eq 1 -and ($rbs | Where-Object { $_.Sel }).Name -like 'Work*' -and $null -ne $newList) "Expand opens the lists menu: a radio item per list, the current one selected, and New list ($(($rbs | ForEach-Object { $_.Name + $(if ($_.Sel) { ' [selected]' } else { '' }) }) -join ' | '))"
+    Check ($rbs.Count -eq 4 -and $rbs[0].Name -like 'For Today*' -and @($rbs | Where-Object { $_.Sel }).Count -eq 1 -and ($rbs | Where-Object { $_.Sel }).Name -like 'Work*' -and $null -ne $newList) "Expand opens the lists menu: For Today, a radio item per list, the current one selected, and New list ($(($rbs | ForEach-Object { $_.Name + $(if ($_.Sel) { ' [selected]' } else { '' }) }) -join ' | '))"
     Check ($ec.Current.ExpandCollapseState -eq 'Expanded') 'the title says it is expanded while the menu is open'
     $ec.Collapse(); Start-Sleep -Milliseconds 600
     Check ($ec.Current.ExpandCollapseState -eq 'Collapsed') 'Collapse closes it, and the title says so'

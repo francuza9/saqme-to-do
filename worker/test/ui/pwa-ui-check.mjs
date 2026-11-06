@@ -29,7 +29,7 @@ const title = (pg) => pg.textContent('#switcher .switcher-name');
 async function listNames(pg) {
   await pg.tap('#switcher');
   await pg.waitForSelector('#listMenu [role="menuitemradio"]');
-  const names = await pg.$$eval('#listMenu [role="menuitemradio"] .g-label', (e) => e.map((x) => x.textContent));
+  const names = (await pg.$$eval('#listMenu [role="menuitemradio"] .g-label', (e) => e.map((x) => x.textContent))).filter((n) => n !== 'For Today');
   await pg.keyboard.press('Escape');
   return names;
 }
@@ -161,7 +161,7 @@ const opened = await page.evaluate(() => ({
   rows: [...document.querySelectorAll('#listMenu [role="menuitemradio"]')].map((r) => `${r.querySelector('.g-label').textContent}:${r.getAttribute('aria-checked')}`).join(),
   chevron: getComputedStyle(document.querySelector('#switcher .switcher-chev svg')).transform,
 }));
-check(opened.expanded === 'true' && opened.rows === 'General:true' && /^matrix\(-1, /.test(opened.chevron),`the title opens the lists menu, its chevron turned (${JSON.stringify(opened)})`);
+check(opened.expanded === 'true' && opened.rows === 'For Today:false,General:true' && /^matrix\(-1, /.test(opened.chevron),`the title opens the lists menu, its chevron turned (${JSON.stringify(opened)})`);
 await page.tap('#listMenu [data-fk="list-new"]');
 await page.fill('.sheet input.field', 'Errands');
 await page.press('.sheet input.field', 'Enter');
@@ -225,6 +225,39 @@ check(order.join('|') === 'Last one|Write the report', `drag moved the task abov
   await page.tap('#listMenuScrim', { position: { x: toggle.x + toggle.width / 2, y: toggle.y + toggle.height / 2 } });
   check(await page.isHidden('#listMenuWrap') && (await page.getAttribute('.completed-toggle', 'aria-expanded')) === shown, 'a tap outside the menu closes it, and goes no further');
 
+  // For Today: the open tasks due soon of every list, each with its list's name; a change there is made in the task's list
+  await page.tap('#switcher');
+  const todayValue = await page.textContent('#listMenu [data-fk="list-today"] .g-value');
+  await page.tap('#listMenu [data-fk="list-today"]');
+  await page.waitForTimeout(150);
+  const today = await page.evaluate(() => ({
+    title: document.querySelector('#switcher .switcher-name').textContent,
+    heads: [...document.querySelectorAll('.list-head')].map((e) => e.textContent),
+    rows: [...document.querySelectorAll('.row')].map((r) => `${r.querySelector('.text').textContent} in ${r.querySelector('.m-list')?.textContent}`),
+    add: getComputedStyle(document.getElementById('addBar')).display,
+  }));
+  check(today.title === 'For Today' && today.heads.join() === 'Overdue,Next 3 days' && today.rows.join() === 'Pay the bill in Errands,Write the report in General' && today.add === 'none' && /2 due soon, some overdue/.test(todayValue),
+    `For Today lists the task due soon with its list, without an add line (${JSON.stringify(today)}, ${todayValue})`);
+  await page.tap('.row:has-text("Pay the bill") .chip-btn');
+  await page.tap('.menu-item:has-text("Done")');
+  await page.waitForTimeout(150);
+  check((await rows()).join() === 'Write the report', 'a task marked done in For Today leaves it');
+  await openList(page, 'Errands');
+  await page.tap('.completed-toggle');
+  check((await rows()).includes('Pay the bill'), 'and is done in its own list');
+  await page.tap('.row:has-text("Pay the bill") .chip-btn');
+  await page.tap('.menu-item:has-text("To do")');
+  await page.waitForTimeout(250);
+  await page.evaluate(() => localStorage.setItem('saqme.showCompleted', '0'));
+  await page.tap('#switcher');
+  await page.tap('#listMenu [data-fk="list-today"]');
+  await page.waitForTimeout(150);
+  check((await rows()).join() === 'Pay the bill,Write the report', 'to do again, it is back in For Today');
+  await page.tap('.row:has-text("Pay the bill") .m-list');
+  await page.waitForTimeout(150);
+  check(await title(page) === 'Errands' && (await page.textContent('.row.sel .text')) === 'Pay the bill', 'tapping the list name opens the task in its list');
+  await openList(page, 'General');
+
   // swipes on the list: to the left the next list, to the right back; past the last one nothing; up and down is a scroll
   const lb = await (await page.$('#list')).boundingBox();
   const midY = lb.y + lb.height / 2;
@@ -250,12 +283,12 @@ check(order.join('|') === 'Last one|Write the report', `drag moved the task abov
   await page.tap('#sheet .menu-item:has-text("Move up")');
   await page.waitForSelector('#listMenu [role="menuitemradio"]');
   await page.waitForTimeout(400);   // (the menu grows into place; a long press needs it still)
-  const moved =await page.$$eval('#listMenu [role="menuitemradio"] .g-label', (e) => e.map((x) => x.textContent));
+  const moved = await page.$$eval('#listMenu .lm-lists [role="menuitemradio"] .g-label', (e) => e.map((x) => x.textContent));
   check(moved.join() === 'Errands,General' && (await page.evaluate(() => document.activeElement?.dataset.fk ?? '')).startsWith('list:'), `Move up: the menu opens again in the new order (${moved.join()})`);
   await longPress('#listMenu [role="menuitemradio"]:has-text("Errands")');
   await page.tap('#sheet .menu-item:has-text("Move down")');
   await page.waitForSelector('#listMenu [role="menuitemradio"]');
-  check((await page.$$eval('#listMenu [role="menuitemradio"] .g-label', (e) => e.map((x) => x.textContent))).join() === 'General,Errands', 'Move down puts it back');
+  check((await page.$$eval('#listMenu .lm-lists [role="menuitemradio"] .g-label', (e) => e.map((x) => x.textContent))).join() === 'General,Errands', 'Move down puts it back');
   await page.keyboard.press('Escape');
 
   // a long Georgian name ends in "…" in the title and pushes nothing off the screen; rename and delete

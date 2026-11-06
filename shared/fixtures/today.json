@@ -1,0 +1,74 @@
+{
+  "about": [
+    "The 'For Today' view: which open tasks of all lists it shows, in which order, and under which heading. Implementations:",
+    "forToday in worker/public/js/model.js and Get-ForToday in desktop/rules.ps1. 'now' is the local wall-clock time.",
+    "Each group has 'projects' (the lists, in their order) and 'tasks' in file order: [id, project, status mark, due date or",
+    "'' for none, due time or '', text]. 'expected' is [[id, bucket], ...] in display order. A bucket is 'over' (the deadline",
+    "has passed: an earlier date, or today's time gone), 'today' or 'soon' (tomorrow to 3 days ahead). Only to do ' ', in",
+    "progress '/' and blocked '!' tasks with text count; a task without a deadline, or in a list that is not in 'projects',",
+    "is left out. Order: by date, then a task with a time before one without, by time; ties by list, then file order."
+  ],
+  "groups": [
+    {
+      "about": "overdue, today and the next 3 days, from several lists, mixed up in the files",
+      "now": "2026-10-21T15:30",
+      "projects": ["Work", "Home"],
+      "tasks": [
+        ["w-far", "Work", " ", "2026-10-25", "", "four days away: not shown"],
+        ["w-3d", "Work", " ", "2026-10-24", "", "three days away"],
+        ["h-tmr", "Home", "/", "2026-10-22", "9:00", "tomorrow 9"],
+        ["w-today-pm", "Work", "!", "2026-10-21", "17:00", "today 17:00, blocked"],
+        ["h-old", "Home", " ", "2026-10-10", "", "eleven days overdue"],
+        ["w-today", "Work", " ", "2026-10-21", "", "today, no time"],
+        ["h-yest", "Home", " ", "2026-10-20", "14:00", "yesterday 14:00"],
+        ["w-today-am", "Work", " ", "2026-10-21", "9:30", "today 9:30, gone by"],
+        ["h-today-same", "Home", " ", "2026-10-21", "17:00", "today 17:00 as in Work, later list"]
+      ],
+      "expected": [
+        ["h-old", "over"],
+        ["h-yest", "over"],
+        ["w-today-am", "over"],
+        ["w-today-pm", "today"],
+        ["h-today-same", "today"],
+        ["w-today", "today"],
+        ["h-tmr", "soon"],
+        ["w-3d", "soon"]
+      ]
+    },
+    {
+      "about": "finished, postponed, failed, abandoned, empty and undated tasks stay out; a task of an unknown list too",
+      "now": "2026-10-21T08:00",
+      "projects": ["Work"],
+      "tasks": [
+        ["done", "Work", "x", "2026-10-20", "", "done"],
+        ["post", "Work", ">", "2026-10-20", "", "postponed"],
+        ["fail", "Work", "-", "2026-10-20", "", "failed"],
+        ["aband", "Work", "~", "2026-10-20", "", "abandoned"],
+        ["empty", "Work", " ", "2026-10-20", "", ""],
+        ["nodue", "Work", " ", "", "", "no deadline"],
+        ["gone", "Elsewhere", " ", "2026-10-20", "", "list not shown"],
+        ["ok", "Work", " ", "2026-10-20", "", "the only one"]
+      ],
+      "expected": [["ok", "over"]]
+    },
+    {
+      "about": "a timed task is over from its minute on, past a month end; four days ahead is out",
+      "now": "2026-10-30T23:59",
+      "projects": ["A"],
+      "tasks": [
+        ["late", "A", " ", "2026-10-30", "23:58", "gone a minute ago"],
+        ["next", "A", " ", "2026-10-31", "", "tomorrow"],
+        ["nov2", "A", " ", "2026-11-02", "0:05", "in 3 days"],
+        ["nov3", "A", " ", "2026-11-03", "", "four days: not shown"]
+      ],
+      "expected": [["late", "over"], ["next", "soon"], ["nov2", "soon"]]
+    },
+    {
+      "about": "nothing to show",
+      "now": "2026-01-01T00:00",
+      "projects": ["A"],
+      "tasks": [["a", "A", " ", "2026-02-01", "", "far"]],
+      "expected": []
+    }
+  ]
+}

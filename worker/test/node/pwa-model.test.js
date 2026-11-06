@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { parseDue, parseDueDate, dueLabel, dueTone, fmtDate, quickDates } from '../../public/js/dates.js';
-import { buildTree, sections, kidsInDisplayOrder, positionAt, linkify, cleanProjectName, openCount, listCounts, newId, rank } from '../../public/js/model.js';
+import { buildTree, sections, kidsInDisplayOrder, positionAt, linkify, cleanProjectName, openCount, listCounts, newId, rank, forToday } from '../../public/js/model.js';
 
 // Wednesday 2026-10-21 15:30 local
 const NOW = new Date(2026, 9, 21, 15, 30);
@@ -144,5 +144,41 @@ describe('misc helpers', () => {
   });
   it('rank', () => {
     expect([' ', '/', '!', '>', 'x', '-', '~'].map(rank)).toEqual([0, 0, 0, 1, 2, 2, 2]);
+  });
+});
+
+describe('For Today', () => {
+  const task = (id, project, due, over = {}) => ({
+    id,
+    fields: {
+      place: { v: { project, parent: null, pos: id } }, text: { v: over.text ?? id }, status: { v: over.status ?? ' ' },
+      due: { v: due }, deleted: { v: over.deleted ?? false },
+    },
+  });
+  const ids = (rows) => rows.map((r) => r.task.id);
+
+  it('skips deleted tasks, and sorts in the local time zone of "now"', () => {
+    const tasks = [
+      task('a', 'p', { date: '2026-10-21', time: '' }),
+      task('b', 'p', { date: '2026-10-21', time: '' }, { deleted: true }),
+      task('c', 'p', { date: '2026-10-24', time: '23:59' }),
+      task('d', 'p', { date: '2026-10-24', time: '' }),
+    ];
+    const rows = forToday(tasks, NOW, ['p']);
+    expect(rows.map((r) => [r.task.id, r.bucket])).toEqual([['a', 'today'], ['c', 'soon'], ['d', 'soon']]);
+  });
+  it('a subtask counts like any task, a done parent does not hide it', () => {
+    const sub = task('s', 'p', { date: '2026-10-20', time: '' });
+    sub.fields.place.v.parent = 'par';
+    const parent = task('par', 'p', null, { status: 'x' });
+    expect(ids(forToday([parent, sub], NOW, ['p']))).toEqual(['s']);
+  });
+  it('without a list order every list is shown', () => {
+    expect(ids(forToday([task('a', 'p', { date: '2026-10-21', time: '' }), task('b', 'q', { date: '2026-10-21', time: '' })], NOW))).toEqual(['a', 'b']);
+  });
+  it('does not change its input', () => {
+    const tasks = [task('b', 'p', { date: '2026-10-22', time: '' }), task('a', 'p', { date: '2026-10-21', time: '' })];
+    forToday(tasks, NOW, ['p']);
+    expect(ids(tasks.map((t) => ({ task: t })))).toEqual(['b', 'a']);
   });
 });

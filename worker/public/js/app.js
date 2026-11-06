@@ -4,7 +4,7 @@
 import { Store, SHARING_API, OLDER_SERVER, SELF_UPDATE_API, CONNECTOR_API } from './store.js';
 import { AI_LINKS, aiOptions } from './ai.js';
 import {
-  STATUSES, statusOf, rank, sections, kidsInDisplayOrder, progress, linkify, listCounts, subtreeIds, isAncestor,
+  STATUSES, statusOf, rank, sections, forToday, kidsInDisplayOrder, progress, linkify, listCounts, subtreeIds, isAncestor,
   cleanText, cleanNotes,   // same cleanup as the server (worker/src/merge.js): saving never changes text by itself
 } from './model.js';
 import { parseDue, dueLabel, dueLong, dueTone, quickDates } from './dates.js';
@@ -40,6 +40,7 @@ const ui = {
   focusKey: '',          // the control (data-fk) that gets keyboard focus after the next render (a view just opened)
   advancedOpen: false,   // Settings > Sync & sharing > Advanced
   project: ls.get('project'),
+  today: ls.get('today') === '1',   // the For Today view (open tasks due soon, from every list) instead of a list
   editing: null,         // { id } or { draft: { projectId, parentId, index, afterId, depth } }
   notesEditing: null,    // task id
   sel: null,
@@ -156,7 +157,7 @@ function render() {
   if (els.switcher.hidden || inSettings) closeListMenu({ focus: false });
   renderSwitcher();
   renderStatus();
-  els.list.classList.toggle('swipeable', ui.view === 'list' && !showWelcome() && store.projects().length > 1);
+  els.list.classList.toggle('swipeable', ui.view === 'list' && !ui.today && !showWelcome() && store.projects().length > 1);
   if (!(ui.editing || ui.notesEditing || ui.drag)) renderMain();   // never pull the rug while typing / dragging
   if (ui.focusKey) {
     // a view just opened: focus on what go() asked for, else on its Back button (keyboard and screen readers land there)
@@ -238,9 +239,9 @@ function listValue(c) {
 function renderSwitcher() {
   const cur = currentProject();
   const counts = listCounts(store.tasks());
-  const due = store.projects().filter((p) => p.id !== cur?.id && counts.get(p.id)?.due);
-  const mark = cur ? sharedMark(cur.id) : null;
-  const name = cur ? listName(cur) : 'Lists';
+  const due = ui.today ? [] : store.projects().filter((p) => p.id !== cur?.id && counts.get(p.id)?.due);
+  const mark = cur && !ui.today ? sharedMark(cur.id) : null;
+  const name = ui.today ? 'For Today' : cur ? listName(cur) : 'Lists';
   // (the dot has its words in the tooltip and for screen readers; the menu says which list and how many)
   const dueWords = due.length ? `Due in ${due.map(listName).join(', ')}` : '';
   els.switcher.replaceChildren(...[
@@ -259,8 +260,19 @@ const menuItems = () => [...els.menu.querySelectorAll('[role^="menuitem"]')];
 /** The lists menu: one row per list in their order (the current one checked), then "New list" in a card of its own. */
 function renderListMenu(counts = listCounts(store.tasks())) {
   const cur = currentProject();
+  const soon = todayRows();
+  const anyOver = soon.some((r) => r.bucket === 'over');
+  const todayAbout = soon.length ? `${soon.length} due soon${anyOver ? ', some overdue' : ''}` : '';
+  const todayRow = h('button', {
+    class: 'g-row lm-item', role: 'menuitemradio', 'aria-checked': String(ui.today), tabindex: '-1',
+    title: ['For Today', 'Open tasks of every list that are overdue, due today or in the next 3 days', todayAbout].filter(Boolean).join(' · '), dataset: { fk: 'list-today', id: 'today' },
+    onclick: () => { if (!els.sheetWrap.hidden) return; closeListMenu(); showToday(); },
+  },
+  h('span', { class: 'check', 'aria-hidden': 'true' }, ui.today ? icon('check') : null),
+  h('span', { class: 'g-label' }, 'For Today'),
+  soon.length ? h('span', { class: `g-value${anyOver ? ' lm-over' : ''}` }, h('span', { class: 'sr-only' }, ', '), String(soon.length), h('span', { class: 'sr-only' }, todayAbout.slice(String(soon.length).length))) : null);
   const rows = store.projects().map((p) => {
-    const isCur = p.id === cur?.id;
+    const isCur = !ui.today && p.id === cur?.id;
     const v = listValue(counts.get(p.id));
     const mark = sharedMark(p.id);
     const row = h('button', {
@@ -280,7 +292,8 @@ function renderListMenu(counts = listCounts(store.tasks())) {
     class: 'g-row action lm-item lm-new', role: 'menuitem', tabindex: '-1', dataset: { fk: 'list-new' },
     onclick: () => { closeListMenu(); projectNameSheet(null); },
   }, h('span', { class: 'check', 'aria-hidden': 'true' }, icon('plus')), h('span', { class: 'g-label' }, 'New list'));
-  els.menu.replaceChildren(...[rows.length ? h('div', { class: 'group lm-lists', role: 'group', 'aria-label': 'Your lists' }, rows) : null, h('div', { class: 'group', role: 'group' }, add)].filter(Boolean));
+  els.menu.replaceChildren(...[rows.length ? h('div', { class: 'group lm-today', role: 'group', 'aria-label': 'Across all lists' }, todayRow) : null,
+    rows.length ? h('div', { class: 'group lm-lists', role: 'group', 'aria-label': 'Your lists' }, rows) : null, h('div', { class: 'group', role: 'group' }, add)].filter(Boolean));
 }
 
 /** Opens the lists menu with focus on the current list (focus: 'last' for "New list", or a list:<id> key). */
@@ -321,15 +334,46 @@ function placeListMenu() {
 
 /** Shows a list (from Settings too); its tasks from the top. */
 function switchList(id) {
-  if (ui.view === 'list' && ui.project === id) return;
+  if (ui.view === 'list' && !ui.today && ui.project === id) return;
   commitAll();
   ui.view = 'list';
+  ui.today = false; ls.set('today', '0');
   ui.project = id; ls.set('project', id); ui.sel = null;
   render();
   els.list.scrollTop = 0;
 }
+/** The For Today view (from Settings too); its tasks from the top. */
+function showToday() {
+  if (ui.view === 'list' && ui.today) return;
+  commitAll();
+  ui.view = 'list';
+  ui.today = true; ls.set('today', '1'); ui.sel = null;
+  render();
+  els.list.scrollTop = 0;
+}
+/** A task in its own list: the list opens with the task selected (its parents opened) and in view. */
+function showInList(id) {
+  const t = store.get('task', id);
+  if (!t) return;
+  commitAll();
+  const project = t.fields.place.v.project;
+  const node = nodeOf(id)?.node;
+  for (let p = node?.parent; p; p = p.parent) setOpen(p.id, true);
+  ui.today = false; ls.set('today', '0');
+  ui.view = 'list';
+  ui.project = project; ls.set('project', project);
+  ui.sel = id;
+  render();
+  const row = els.list.querySelector('.row.sel');
+  row?.scrollIntoView({ block: 'center' });
+  focusOn(row);
+}
+/** What For Today shows now: [{ task, bucket }], in the order of their deadlines. */
+const todayRows = () => forToday(store.tasks(), new Date(), store.projects().map((p) => p.id));
+
 /** The next (1) or previous (-1) list in their order; null past either end (it does not wrap round). */
 function neighbourList(dir) {
+  if (ui.today) return null;
   const list = store.projects();
   const i = list.findIndex((p) => p.id === currentProject()?.id);
   return i < 0 ? null : list[i + dir] ?? null;
@@ -360,8 +404,8 @@ els.switcher.addEventListener('keydown', (e) => {
   e.stopPropagation();
 });
 // the current list's own menu: a right-click or a long press on the title, as on its tab before
-els.switcher.addEventListener('contextmenu', (e) => { e.preventDefault(); if (currentProject()) listOptions(currentProject().id); });
-onLongPress(els.switcher, () => { if (currentProject()) listOptions(currentProject().id); });
+els.switcher.addEventListener('contextmenu', (e) => { e.preventDefault(); if (currentProject() && !ui.today) listOptions(currentProject().id); });
+onLongPress(els.switcher, () => { if (currentProject() && !ui.today) listOptions(currentProject().id); });
 
 const typed = { text: '', at: 0 };
 els.menu.addEventListener('keydown', (e) => {
@@ -683,7 +727,7 @@ function confirmJoin(link, inv) {
           } else {
             const s = await store.joinShare(link);
             closeSheet();
-            ui.view = 'list'; ui.project = s.projectId; ls.set('project', s.projectId);
+            ui.view = 'list'; ui.today = false; ls.set('today', '0'); ui.project = s.projectId; ls.set('project', s.projectId);
             toast(`Joined “${s.name}”`);
             syncSharePush();
           }
@@ -771,7 +815,7 @@ function projectNameSheet(id) {
     const clash = store.projects().find((x) => x.id !== id && x.fields.name.v.toLowerCase() === name.toLowerCase());
     if (clash) { input.classList.add('bad'); toast('A list with that name already exists'); return; }
     if (id) store.renameProject(id, name);
-    else { const nid = store.addProject(name); if (nid) { ui.project = nid; ls.set('project', nid); ui.view = 'list'; } }
+    else { const nid = store.addProject(name); if (nid) { ui.project = nid; ls.set('project', nid); ui.today = false; ls.set('today', '0'); ui.view = 'list'; } }
     closeSheet();
   };
   input.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); save(); } });
@@ -836,7 +880,7 @@ function renderMain() {
   // another view than the one on screen: that one leaves (moving between views, below)
   const from = ui.shownView;
   const leaving = from && from !== ui.view ? leaveView() : null;
-  const showAdd = ui.view === 'list' && !!currentProject() && !showWelcome() && !readOnly(currentProject().id);
+  const showAdd = ui.view === 'list' && !ui.today && !!currentProject() && !showWelcome() && !readOnly(currentProject().id);
   els.addBar.hidden = !showAdd;
   els.app.classList.toggle('no-add', !showAdd);
   if (ui.view === 'list' && showWelcome()) renderWelcome();
@@ -943,6 +987,7 @@ function setListContent(nodes) {
 }
 
 function renderTasks() {
+  if (ui.today && !showWelcome() && currentProject()) { renderToday(); return; }
   const frag = [];
   ui.visible = [];
   const proj = currentProject();
@@ -1000,6 +1045,34 @@ function renderTasks() {
   if (ui.sel && !ui.visible.includes(ui.sel)) ui.sel = null;
 }
 
+const TODAY_HEADS = { over: 'Overdue', today: 'Today', soon: 'Next 3 days' };
+/** For Today: the open tasks due soon from every list, in the order of their deadlines, under Overdue / Today / Next 3 days. */
+function renderToday() {
+  const frag = [];
+  ui.visible = [];
+  if (store.saveError) frag.push(saveWarning());
+  frag.push(h('h1', { class: 'sr-only' }, 'For Today'));
+  const rows = todayRows();
+  for (const bucket of ['over', 'today', 'soon']) {
+    const items = [];
+    for (const { task } of rows.filter((r) => r.bucket === bucket)) {
+      const ctx = nodeOf(task.id);
+      if (!ctx?.node) continue;
+      // (a flat list: the task by itself, at the left edge; its subtasks are in its own list)
+      const node = { ...ctx.node, depth: 0, kids: [] };
+      ui.visible.push(node.id);
+      const open = ui.notesEditing === node.id || (isOpen(node) && !!node.task.fields.notes.v);
+      items.push(listItem(0, taskRow(node, 'today'), open ? notesBlock(node) : null));
+    }
+    if (!items.length) continue;
+    frag.push(h('h2', { class: 'g-head list-head' }, TODAY_HEADS[bucket]));
+    frag.push(h('div', { class: 'tasks group', role: 'list', 'aria-label': TODAY_HEADS[bucket] }, items));
+  }
+  if (!ui.visible.length) frag.push(h('div', { class: 'empty-state' }, 'Nothing overdue, due today or in the next 3 days.'));
+  setListContent(frag.filter(Boolean));
+  if (ui.sel && !ui.visible.includes(ui.sel)) ui.sel = null;
+}
+
 // one list item per task (its row + notes); nesting is flat in the page and told by aria-level. Its depth also
 // places the hairline above it, from where its text starts
 const listItem = (depth, ...children) => h('div', { class: 'task-item', role: 'listitem', 'aria-level': String(depth + 1), style: { '--depth': String(depth) } }, ...children);
@@ -1019,6 +1092,7 @@ function rowSummary(node, st) {
   const t = node.task;
   const due = t.fields.due.v;
   const parts = [t.fields.text.v || 'Untitled', st.name];
+  if (ui.today) parts.push(`in ${projectName(t)}`);
   if (due) parts.push(`deadline ${dueLong(due)}${dueTone(due, rank(t.fields.status.v) === 2) === 'over' ? ', overdue' : ''}`);
   if (node.kids.length) { const p = progress(node); parts.push(`${p.done} of ${p.total} subtasks closed`); }
   return parts.join(', ');
@@ -1039,6 +1113,8 @@ function saveWarning() {
     h('b', {}, 'Changes are not saved on this phone right now. '),
     `${store.saveError} They stay while the app is open and are saved as soon as it works again.${store.meta.token ? '' : ' Export your lists (Settings › Your lists) to be safe.'}`);
 }
+
+const projectName = (t) => { const p = store.projects().find((x) => x.id === t.fields.place.v.project); return p ? listName(p) : ''; };
 
 function taskRow(node, section, draft = null) {
   const t = node?.task;
@@ -1111,6 +1187,11 @@ function taskRow(node, section, draft = null) {
       }, shown);
       if (!ro) b.addEventListener('click', () => { commitAll(); dueSheet(id); });
       meta.push(b);
+    }
+    if (section === 'today') {
+      // which list it is in; a tap opens the task there
+      const name = projectName(t);
+      meta.push(h('button', { class: 'item m-list', title: `Show in ${name}`, 'aria-label': `Show in ${name}`, dataset: { fk: `showlist:${id}` }, onclick: () => showInList(id) }, name));
     }
     if (hasKids) {
       const p = progress(node);
@@ -1501,16 +1582,18 @@ function rowMenu(id) {
   const i = sibs.indexOf(node);
   const projectId = t.fields.place.v.project;
   const others = store.projects().filter((p) => p.id !== projectId && !readOnly(p.id) && !(ui.local && sharing(p.id)?.withMe));
+  const flat = ui.today;   // (For Today has no order of its own to change: that is done in the task's list)
   sheet(t.fields.text.v, [
+    flat && menuItem('lists', `Show in ${projectName(t)}`, () => showInList(id)),
     menuItem('edit', 'Edit', () => beginEdit(id)),
     menuItem('calendar', 'Deadline…', () => dueSheet(id), { keepOpen: true }),
     menuItem('note', 'Notes / links', () => beginNotes(id)),
-    menuItem('sub', 'Add subtask', () => addSubtask(id)),
+    !flat && menuItem('sub', 'Add subtask', () => addSubtask(id)),
     h('div', { class: 'menu-sep' }),
-    i > 0 && menuItem('up', 'Move up', () => nudge(id, -1)),
-    i >= 0 && i < sibs.length - 1 && menuItem('down', 'Move down', () => nudge(id, 1)),
-    i > 0 && menuItem('indent', 'Make subtask of the task above', () => shiftLevel(id, 1)),
-    node?.parent && menuItem('outdent', 'Move out one level', () => shiftLevel(id, -1)),
+    !flat && i > 0 && menuItem('up', 'Move up', () => nudge(id, -1)),
+    !flat && i >= 0 && i < sibs.length - 1 && menuItem('down', 'Move down', () => nudge(id, 1)),
+    !flat && i > 0 && menuItem('indent', 'Make subtask of the task above', () => shiftLevel(id, 1)),
+    !flat && node?.parent && menuItem('outdent', 'Move out one level', () => shiftLevel(id, -1)),
     others.length && menuItem('move', 'Move to list…', () => moveSheet(id), { keepOpen: true }),
     h('div', { class: 'menu-sep' }),
     menuItem('trash', node?.kids.length ? 'Delete (with subtasks)' : 'Delete', () => deleteWithUndo(id), { danger: true }),

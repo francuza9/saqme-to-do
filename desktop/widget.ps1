@@ -828,9 +828,12 @@ function Row-Summary($node, $st) {
   return ($parts -join ', ')
 }
 
+# (For Today lists tasks of every level flat, at the left edge)
+function Get-RowLevel($it) { if ($script:todayView) { return 0 } else { return [int]$it.Level } }
+
 function New-Row($node) {
   $it = $node.Item; $st = St $it.Mark
-  $ro = $script:readOnly   # a view-only shared list: read, never changed (no editing, menus, drag or hover actions)
+  $ro = $script:readOnly -or [bool]$node.ReadOnly   # a view-only shared list: read, never changed (no editing, menus, drag or hover actions)
   $hasKids = $node.Kids.Count -gt 0
   $open = Is-Open $node
   $row = New-Control 'listitem' (Row-Summary $node $st) 'Enter edits, Space marks it done, Ctrl+M for more' { param($s, $e) Set-Sel $s.Tag -Focus }
@@ -840,9 +843,11 @@ function New-Row($node) {
   # a row of the list's card, as wide as the card: a subtask is indented inside it. Its notes, when open, follow
   # right under the text (Render-Node), so the row keeps little room below it then.
   $notesBelow = ($open -or $script:notesEditing -eq $it) -and ($it.Notes -or $script:notesEditing -eq $it)
-  $row.Padding = "$($it.Level * $Tokens.Row.indent),9,8,$(if ($notesBelow) { 3 } else { 9 })"; $row.MinHeight = $Tokens.Row.minPointer
+  $row.Padding = "$((Get-RowLevel $it) * $Tokens.Row.indent),9,8,$(if ($notesBelow) { 3 } else { 9 })"; $row.MinHeight = $Tokens.Row.minPointer
   $row.BorderThickness = '2,0,0,0'
   $row.Tag = $it
+  # (For Today: a press anywhere on the row makes its list the open one before anything on it acts)
+  $row.Add_PreviewMouseDown({ param($s, $e) Enter-TodayList $s.Tag })
   Paint-TaskRow $row ($it -eq $script:sel)
   $g = New-Object System.Windows.Controls.Grid
   # columns: 0 grip | 1 chevron | 2 chip | 3 text | 4 deadline, subtask count, notes mark | 5 (spare); the hover
@@ -894,6 +899,17 @@ function New-Row($node) {
   # 3: on the right of the first line, the row's value: notes mark, subtask progress, deadline (rightmost)
   $meta = New-Object System.Windows.Controls.StackPanel
   $meta.Orientation = 'Horizontal'; $meta.VerticalAlignment = 'Top'; $meta.Height = $Tokens.Type.body.Line
+  if ($node.List) {
+    # For Today: the list it is in; a click opens the task there
+    $ln = New-Object System.Windows.Controls.TextBlock
+    $ln.Text = $node.List; $ln.FontFamily = $UI; $ln.FontSize = $TypeSize.meta; $ln.Foreground = $Faint; $ln.Margin = '10,0,0,0'
+    $ln.MaxWidth = 130; $ln.TextTrimming = 'CharacterEllipsis'; $ln.TextWrapping = 'NoWrap'; $ln.VerticalAlignment = 'Center'; $ln.Cursor = 'Hand'
+    $ln.ToolTip = "Show in $($node.List)"; $ln.Tag = $it; Set-Name $ln "In $($node.List). Click to show the task there"
+    $ln.Add_MouseEnter({ param($s, $e) $s.Foreground = $Accent; $s.TextDecorations = [System.Windows.TextDecorations]::Underline })
+    $ln.Add_MouseLeave({ param($s, $e) $s.Foreground = $Faint; $s.TextDecorations = $null })
+    $ln.Add_MouseLeftButtonUp({ param($s, $e) $e.Handled = $true; Show-TaskInList $s.Tag })
+    [void]$meta.Children.Add($ln)
+  }
   if ($it.Notes -and -not $open) {
     $n = New-Object System.Windows.Controls.TextBlock
     $n.Text = G 0xE71B; $n.FontFamily = $MDL2; $n.FontSize = 11; $n.Foreground = $Faint; $n.Margin = '10,1,0,0'
@@ -931,7 +947,7 @@ function New-Row($node) {
   $del = New-IconButton 0xE711 'Delete (with subtasks)' { param($s, $e) Delete-Task $s.Tag }; $del.Tag = $it
   $del.Add_MouseLeftButtonUp({ param($s, $e) $e.Handled = $true; Delete-Task $s.Tag })
   foreach ($x in @($cal, $nt, $add, $del)) { [System.Windows.Input.KeyboardNavigation]::SetIsTabStop($x, $false) }
-  if (-not $ro) { foreach ($x in @($cal, $nt, $add, $del)) { [void]$acts.Children.Add($x) } }
+  if (-not $ro) { foreach ($x in @($cal, $nt, $add, $del)) { if ($x -eq $add -and $node.List) { continue }; [void]$acts.Children.Add($x) } }   # (a subtask would not be due: it is added in the list)
   # floats over the end of the row on hover instead of reserving width
   [System.Windows.Controls.Grid]::SetColumn($acts, 3); [System.Windows.Controls.Grid]::SetColumnSpan($acts, 3); [void]$g.Children.Add($acts)
 
@@ -1038,6 +1054,7 @@ function Move-Task($it, $target, [bool]$atEnd) {
 }
 # the delete button and menu: the task and its subtasks, to Recently deleted (Remove-Subtree); Undo is offered
 function Delete-Task($it) {
+  Enter-TodayList $it
   Commit-Edit
   if ($script:readOnly) { return }
   $i = $script:items.IndexOf($it); if ($i -lt 0) { return }
@@ -1239,10 +1256,15 @@ function Nudge-Task($it, [int]$dir) {
 
 # ---------------------------------------------------------------- row menu (right-click / Ctrl+M) + move to list
 function Show-RowMenu($target, $it) {
+  Enter-TodayList $it
   Commit-Edit
   $script:sel = $it
   if ($script:readOnly) { return }   # a view-only shared list: nothing to change
   $m = New-Menu
+  if ($script:todayView) {
+    $e00 = New-MenuItem "Show in $($script:proj)"; $e00.Tag = $it; $e00.Add_Click({ param($s, $e) Show-TaskInList $s.Tag })
+    [void]$m.Items.Add($e00)
+  }
   $e0 = New-MenuItem 'Change status...'; $e0.Tag = $target
   $e0.Add_Click({ param($s, $e) if (Is-TaskRow $s.Tag) { Show-StatusMenu $s.Tag.Child.Children[1] } })
   [void]$m.Items.Add($e0)
@@ -1250,7 +1272,7 @@ function Show-RowMenu($target, $it) {
   $e2 = New-MenuItem 'Deadline...'; $e2.Tag = @{ It = $it; T = $target }; $e2.Add_Click({ param($s, $e) Show-DuePopup $s.Tag.It $s.Tag.T })
   $e3 = New-MenuItem 'Notes / links'; $e3.Tag = $it; $e3.Add_Click({ param($s, $e) Begin-Notes $s.Tag })
   $e4 = New-MenuItem 'Add subtask'; $e4.Tag = $it; $e4.Add_Click({ param($s, $e) Add-Subtask $s.Tag })
-  foreach ($x in @($e1, $e2, $e3, $e4)) { [void]$m.Items.Add($x) }
+  foreach ($x in @($e1, $e2, $e3, $e4)) { if ($x -eq $e4 -and $script:todayView) { continue }; [void]$m.Items.Add($x) }   # (a subtask would not be due: it is added in the list)
   # (not into a view-only shared list; into or out of an editable one it is a copy there and a delete here, which
   # each list's sync sends to its own server)
   $others = @(Get-ProjectNames | Where-Object { $_ -ne $script:proj } | Where-Object { $sb = Get-ShareOf $_; -not ($sb -and [string]$sb['access'] -ne 'edit') })
@@ -1301,6 +1323,7 @@ function Move-ToProject($it, [string]$proj) {
 }
 
 function Show-StatusMenu($chip) {
+  Enter-TodayList $chip.Tag
   Commit-Edit
   if ($script:readOnly) { return }
   $it = $chip.Tag
@@ -1366,6 +1389,7 @@ function New-ShadowHost($content, [double]$depth, [double]$opacity) {
 }
 
 function Show-DuePopup($it, $target) {
+  Enter-TodayList $it
   Commit-Edit
   if ($script:readOnly) { return }
   $p = New-Object System.Windows.Controls.Primitives.Popup
@@ -1423,7 +1447,8 @@ $script:notesEditing = $null; $script:notesBox = $null
 # a task's notes when it is open: quiet text in the task's card, right under the task's text (no box of its own)
 function New-Notes($it) {
   $wrap = New-Object System.Windows.Controls.Border
-  $wrap.Background = $GroupBg; $wrap.Padding = "$($it.Level * $Tokens.Row.indent + $RowTextX),0,12,10"
+  $wrap.Background = $GroupBg; $wrap.Padding = "$((Get-RowLevel $it) * $Tokens.Row.indent + $RowTextX),0,12,10"
+  $wrap.Tag = $it; $wrap.Add_PreviewMouseDown({ param($s, $e) Enter-TodayList $s.Tag })   # (For Today: the notes' list becomes the open one)
   if ($script:notesEditing -eq $it) {
     $gr = New-Object System.Windows.Controls.Grid
     $box = New-Object System.Windows.Controls.TextBox
@@ -1477,6 +1502,7 @@ function New-Notes($it) {
 }
 
 function Begin-Notes($it) {
+  Enter-TodayList $it
   Commit-Edit
   if ($script:readOnly) { return }
   $script:openState[(Open-Key $it)] = '1'; Save-State
@@ -1501,6 +1527,7 @@ $script:sel = $null; $script:visible = New-Object System.Collections.ArrayList
 $script:rows = New-Object System.Collections.ArrayList; $script:tabRow = $null   # the task rows Render made (Set-Sel)
 
 function Begin-Edit($tb) {
+  Enter-TodayList $tb.Tag
   Commit-Edit
   if ($script:readOnly) { return }
   $it = $tb.Tag; $grid = $tb.Parent
@@ -1539,6 +1566,10 @@ function Rekey-State([string]$oldText, [string]$newText) {
 function Edit-Key($box, $e) {
   $it = $script:editItem
   $shift = ([System.Windows.Input.Keyboard]::Modifiers -band [System.Windows.Input.ModifierKeys]::Shift) -ne 0
+  if ($script:todayView -and ($e.Key -eq 'Return' -or $e.Key -eq 'Tab')) {
+    # (For Today has no place for a new task or a change of level: Enter saves, as in a list's last task)
+    $e.Handled = $true; Commit-Edit; [void]$w.Focus(); return
+  }
   if ($e.Key -eq 'Return') {
     $e.Handled = $true
     $text = $box.Text.Trim()
@@ -1604,6 +1635,7 @@ function Switch-Project([string]$name) {
   Commit-Edit
   if ($script:saveFailed) { Save-Items }
   if ($script:saveFailed) { Save-Recovery }   # leaving a list whose edits still cannot be written
+  $script:todayView = $false
   $script:proj = $name
   $script:todo = Proj-Path $name
   Update-ReadOnly
@@ -1612,6 +1644,88 @@ function Switch-Project([string]$name) {
   [void](Use-Loaded (Load-Items))
   $script:cfg.active = $name; Save-Settings
   Render
+}
+
+# ---------------------------------------------------------------- For Today
+# One more place in the lists menu, above the lists: the open tasks of EVERY list that are overdue, due today or due
+# in the next 3 days, in the order of their deadlines (Get-ForToday, rules.ps1; shared/fixtures/today.json), each
+# with the name of its list. It is not a list: nothing is added to it, and it has no order of its own to change.
+# The rows are the very task objects of each list's parsed file, so changing one is changing it in its list: before a
+# row is acted on, Enter-TodayList makes its list the open one ($script:proj, $script:items, ...) and every action
+# (status, deadline, text, notes, delete, move) then runs and saves exactly as in that list, merging with the file
+# if it changed on disk meanwhile (Save-Items). Tasks without an id yet (a list nobody has opened or synced since an
+# editor added them) wait for one, so that every change is followed by sync.
+$script:todayView = $false
+$script:todayLists = @{}   # list name -> @{ Items; Text; Eol; Mtime }: what the rows on screen came from
+function Get-TodayData {
+  Update-Bindings
+  $lists = @{}; $tasks = New-Object System.Collections.ArrayList
+  $names = @(Get-ProjectNames)
+  foreach ($n in $names) {
+    if ($n -eq $script:proj -and -not $script:listBusy -and $null -ne $script:loadedText) {
+      # the open list as it is in memory (edits not yet written included)
+      $lists[$n] = @{ Items = $script:items; Text = $script:loadedText; Eol = $(if ($script:eol) { $script:eol } else { "`n" }); Mtime = $script:lastWrite }
+    } else {
+      $path = Proj-Path $n
+      try { $mt = (Get-Item -LiteralPath $path -ErrorAction Stop).LastWriteTimeUtc } catch { continue }
+      $text = Read-TextFile $path
+      if ($null -eq $text) { continue }   # busy in another program: not in the view this time
+      $lists[$n] = @{ Items = (Read-Items $text); Text = $text; Eol = (Get-TextEol $text); Mtime = $mt }
+    }
+    $b = Get-ShareOf $n
+    $ro = [bool]($b -and [string]$b['access'] -ne 'edit')
+    foreach ($it in $lists[$n].Items) {
+      if ($it.Kind -ne 'task' -or -not $it.Id) { continue }
+      [void]$tasks.Add(@{ Id = $it.Id; Text = $it.Text; Status = $it.Mark; Due = $it.Due; DueTime = $it.DueTime; Project = $n; Entry = $it; ReadOnly = $ro })
+    }
+  }
+  return @{ Lists = $lists; Rows = @(Get-ForToday $tasks (Get-Date) $names) }
+}
+function Show-Today {
+  if ($script:todayView) { return }
+  Commit-Edit
+  if ($script:saveFailed) { Save-Items }
+  if ($script:saveFailed) { Save-Recovery }
+  $script:todayView = $true; $script:sel = $null
+  Render
+}
+function Get-TodayListOf($it) {
+  foreach ($k in @($script:todayLists.Keys)) { if ($script:todayLists[$k].Items.IndexOf($it) -ge 0) { return [string]$k } }
+  return $null
+}
+# makes the list of a For Today row the open one (no-op in a list, and for a task of the open list)
+function Enter-TodayList($it) {
+  if (-not $script:todayView -or $null -eq $it -or $script:items.IndexOf($it) -ge 0) { return }
+  if ($script:editItem -or $script:notesBox) { Commit-Edit }   # (into the list it was typed in)
+  if ($script:saveFailed) { Save-Items }
+  if ($script:saveFailed) { Save-Recovery }
+  $name = Get-TodayListOf $it
+  if (-not $name) { return }   # (the view was drawn again meanwhile: this row is gone)
+  $L = $script:todayLists[$name]
+  $script:proj = $name; $script:todo = Proj-Path $name
+  Update-ReadOnly
+  $script:items = $L.Items; $script:loadedText = $L.Text; $script:eol = $L.Eol
+  $script:listBusy = $false; $script:allowRemove.Clear(); $script:undoExtra = $null
+  $script:lastWrite = $L.Mtime   # (a file that changed since is then read again by the timer)
+}
+# a task in its own list: the list opens with the task selected (and its parents open)
+function Show-TaskInList($it) {
+  $name = Get-TodayListOf $it
+  $id = [string]$it.Id
+  if (-not $name -or -not $id) { return }
+  Switch-Project $name
+  $at = -1; for ($k = 0; $k -lt $script:items.Count; $k++) { if ($script:items[$k].Kind -eq 'task' -and $script:items[$k].Id -ceq $id) { $at = $k; break } }
+  if ($at -lt 0) { return }
+  $found = $script:items[$at]
+  $lvl = $found.Level
+  for ($k = $at - 1; $k -ge 0 -and $lvl -gt 0; $k--) {   # its parents, nearest first, open
+    $p = $script:items[$k]
+    if ($p.Kind -eq 'task' -and $p.Level -lt $lvl) { $script:openState[(Open-Key $p)] = '1'; $lvl = $p.Level }
+  }
+  Save-State
+  $script:sel = $found
+  Render
+  Set-Sel $found -Focus
 }
 
 # ---------------------------------------------------------------- the list switcher (docs/design.md, "The list switcher")
@@ -1653,9 +1767,9 @@ function New-ShareBadge([string]$name, $ink) {
 }
 
 function New-TitleButton {
-  $name = [string]$script:proj
+  $name = $(if ($script:todayView) { 'For Today' } else { [string]$script:proj })
   $open = [bool]($script:listsPopup -and $script:listsPopup.IsOpen)
-  $other = @($script:listNames | Where-Object { $_ -ne $name -and $script:listInfo[$_] -and $script:listInfo[$_].Due -gt 0 })
+  $other = @($script:listNames | Where-Object { -not $script:todayView -and $_ -ne $name -and $script:listInfo[$_] -and $script:listInfo[$_].Due -gt 0 })
   $b = New-Control 'disclosure' $name 'Shows your lists' { param($s, $e) Toggle-ListsMenu }
   if ($script:HasA11y) { $b.IsExpanded = $open }
   $b.CornerRadius = New-Object System.Windows.CornerRadius($Tokens.Radius.control); $b.Padding = '8,4,8,4'; $b.Cursor = 'Hand'; $b.Background = $Clear
@@ -1675,7 +1789,7 @@ function New-TitleButton {
   [System.Windows.Controls.DockPanel]::SetDock($chev, 'Right'); [void]$dp.Children.Add($chev)
   $script:titleChev = $chev
   $label = $name
-  $bd = New-ShareBadge $name $Faint
+  $bd = $(if ($script:todayView) { $null } else { New-ShareBadge $name $Faint })
   if ($bd) { $bd.Margin = '8,2,0,0'; [System.Windows.Controls.DockPanel]::SetDock($bd, 'Right'); [void]$dp.Children.Add($bd); $label += ', ' + ([string]$bd.Tag).Split(':')[0].ToLower() }
   $t = New-Object System.Windows.Controls.TextBlock
   $t.Text = $name; $t.FontFamily = $UI; $t.FontSize = $TypeSize.title; $t.FontWeight = 'SemiBold'; $t.Foreground = $Ink
@@ -1689,7 +1803,7 @@ function New-TitleButton {
   # closes it on the press (outside the popup); Toggle-ListsMenu's 250 ms guard ignores the release that follows.
   $b.Add_MouseLeftButtonDown({ param($s, $e) $e.Handled = $true })
   $b.Add_MouseLeftButtonUp({ param($s, $e) $e.Handled = $true; Toggle-ListsMenu })
-  $b.ContextMenu = New-ListContextMenu $name
+  if (-not $script:todayView) { $b.ContextMenu = New-ListContextMenu $name }   # (For Today is not a list: nothing to rename or share)
   return $b
 }
 
@@ -1763,8 +1877,46 @@ function Choose-List([string]$name) {
   if ($name -ne $script:proj) { Switch-Project $name }
 }
 
+function Choose-Today {
+  Close-ListsMenu $true
+  Show-Today
+}
+# the For Today row of the lists menu: its name, a check when it is open, and how many tasks it shows (red when any is overdue)
+function New-TodayRow {
+  $rows = @((Get-TodayData).Rows)
+  $over = @($rows | Where-Object { $_.Bucket -ceq 'over' }).Count
+  $b = New-Control 'radio' 'For Today' '' { param($s, $e) Choose-Today }
+  if ($script:HasA11y) { $b.IsSelected = $script:todayView }
+  $b.CornerRadius = New-Object System.Windows.CornerRadius($Tokens.Radius.control); $b.Padding = '10,9,12,9'; $b.Cursor = 'Hand'; $b.Background = $Clear
+  $b.ToolTip = 'Open tasks of every list that are overdue, due today or in the next 3 days'
+  $g = New-Object System.Windows.Controls.Grid
+  foreach ($wd in @('22', '*', 'Auto')) { $cd = New-Object System.Windows.Controls.ColumnDefinition; $cd.Width = $wd; $g.ColumnDefinitions.Add($cd) }
+  if ($script:todayView) {
+    $ck = New-Object System.Windows.Controls.TextBlock; $ck.Text = G 0xE73E; $ck.FontFamily = $MDL2; $ck.FontSize = 11; $ck.Foreground = $Accent
+    $ck.VerticalAlignment = 'Top'; $ck.Margin = '0,4,0,0'
+    [void]$g.Children.Add($ck)
+  }
+  $t = New-Object System.Windows.Controls.TextBlock
+  $t.Text = 'For Today'; $t.FontFamily = $UI; $t.FontSize = $TypeSize.label; $t.Foreground = $Ink; $t.TextWrapping = 'Wrap'
+  if ($script:todayView) { $t.FontWeight = 'SemiBold' }
+  [System.Windows.Controls.Grid]::SetColumn($t, 1); [void]$g.Children.Add($t)
+  $label = 'For Today'
+  if ($rows.Count) {
+    $vt = New-Object System.Windows.Controls.TextBlock
+    $vt.Text = [string]$rows.Count; $vt.FontFamily = $UI; $vt.FontSize = $TypeSize.meta; $vt.Margin = '12,2,0,0'; $vt.VerticalAlignment = 'Top'; Set-Tabular $vt
+    $vt.Foreground = $(if ($over) { $Red } else { $Faint })
+    [System.Windows.Controls.Grid]::SetColumn($vt, 2); [void]$g.Children.Add($vt)
+    $label += ", $($rows.Count) due soon" + $(if ($over) { ", $over overdue" } else { '' })
+  }
+  $b.Child = $g; Set-Name $b $label; Set-Press $b 1 $GroupPress
+  $b.Add_MouseEnter({ param($s, $e) $s.Background = $MenuHover })
+  $b.Add_MouseLeave({ param($s, $e) $s.Background = $Clear })
+  $b.Add_MouseLeftButtonUp({ param($s, $e) $e.Handled = $true; Choose-Today })
+  return $b
+}
+
 function New-ListRow([string]$name) {
-  $cur = ($name -eq $script:proj)
+  $cur = ($name -eq $script:proj -and -not $script:todayView)
   $info = $script:listInfo[$name]
   $label = $name
   $b = New-Control 'radio' $name '' { param($s, $e) Choose-List ([string]$s.Tag) }
@@ -1816,6 +1968,11 @@ function Show-ListsMenu {
   $col = New-Object System.Windows.Controls.StackPanel
   $col.Width = [math]::Min(320, [math]::Max(200, $w.ActualWidth - 50))
   $script:listsRows.Clear()
+  # For Today: above the lists, a card of its own
+  $tr = New-TodayRow
+  $tc = New-Object System.Windows.Controls.Border
+  $tc.Background = $GroupBg; $tc.CornerRadius = New-Object System.Windows.CornerRadius($CardRadius); $tc.Padding = '2'; $tc.Margin = '0,0,0,8'; $tc.Child = $tr
+  [void]$col.Children.Add($tc); [void]$script:listsRows.Add($tr)
   $sp = New-Object System.Windows.Controls.StackPanel
   $first = $true
   foreach ($n in $script:listNames) {
@@ -1866,7 +2023,7 @@ function Show-ListsMenu {
   $script:titleChev.RenderTransform = New-Object System.Windows.Media.RotateTransform(180)
   $p.IsOpen = $true
   $script:openPopup = $p
-  $cur = $null; foreach ($r in $script:listsRows) { if ($r.Tag -eq $script:proj) { $cur = $r } }
+  $cur = $null; if (-not $script:todayView) { foreach ($r in $script:listsRows) { if ($r.Tag -eq $script:proj) { $cur = $r } } }
   if (-not $cur) { $cur = $script:listsRows[0] }
   [void]$cur.Focus()
 }
@@ -1887,7 +2044,8 @@ function Render-Tabs {
   $script:tabSig = Tab-Signature
 }
 function Cycle-Project([int]$dir) {
-  $names = @(Get-ProjectNames); if ($names.Count -lt 2) { return }
+  $names = @(Get-ProjectNames); if ($names.Count -lt 2 -and -not $script:todayView) { return }
+  if ($script:todayView) { Switch-Project $(if ($dir -gt 0) { $names[0] } else { $names[$names.Count - 1] }); return }   # (from For Today: the first / last list)
   $i = [array]::IndexOf($names, $script:proj)
   Switch-Project $names[(($i + $dir) % $names.Count + $names.Count) % $names.Count]
 }
@@ -2441,18 +2599,54 @@ function New-CompletedHeading([int]$count, [bool]$show) {
 # Below this window width a task's deadline, subtask count and notes mark go under its text rather than beside it:
 # the text column would get too narrow for one line otherwise.
 $MetaBelowW = 380; $script:metaBelow = $false
+
+# For Today (see its section above): Overdue, Today and Next 3 days, a card each, every row with its list's name
+function Render-Today([bool]$fromSettings, [bool]$hadFocus) {
+  Set-Name $list 'For Today tasks'
+  $data = Get-TodayData
+  $script:todayLists = $data.Lists
+  $script:visible = New-Object System.Collections.ArrayList; $script:rows = New-Object System.Collections.ArrayList
+  $heads = @{ over = 'Overdue'; today = 'Today'; soon = 'Next 3 days' }
+  foreach ($bucket in 'over', 'today', 'soon') {
+    $in = @($data.Rows | Where-Object { $_.Bucket -ceq $bucket })
+    if (-not $in.Count) { continue }
+    Add-Heading $heads[$bucket] $ListHeadX
+    foreach ($r in $in) {
+      $it = $r.Task.Entry
+      # (a flat list: the task by itself; its subtasks are in its own list)
+      $node = [pscustomobject]@{ Item = $it; Kids = (New-Object System.Collections.ArrayList); ReadOnly = [bool]$r.Task.ReadOnly; List = [string]$r.Task.Project }
+      [void]$script:visible.Add($it)
+      $row = New-Row $node; [void]$script:rows.Add($row)
+      Add-CardRow $row $RowTextX
+      if (($it.Notes -and (Is-Open $node)) -or $script:notesEditing -eq $it) { Add-CardRow (New-Notes $it) -Joined }
+    }
+  }
+  Close-Card
+  if (-not $script:visible.Count) {
+    $e = New-Text 'Nothing overdue, due today or in the next 3 days.' $TypeSize.body $Faint
+    $e.Margin = "$ListHeadX,24,$CardPad,8"
+    [void]$list.Children.Add($e)
+  }
+  $countText.Text = ''
+  if ($script:sel -and $script:visible.IndexOf($script:sel) -lt 0) { $script:sel = $null }
+  $f = [System.Windows.Input.Keyboard]::FocusedElement
+  Set-Sel $script:sel -Focus:($hadFocus -and ($null -eq $f -or $f -eq $w -or -not $f.IsVisible))
+  if ($fromSettings -and $hadFocus -and -not $script:sel -and $logo) { [void]$logo.Focus() }
+}
+
 function Render {
   if ($script:editItem -or $script:notesBox) { return }
   $script:metaBelow = $w.Width -lt $MetaBelowW
   Render-Tabs
   Update-ReadOnly
   if ($script:view -ne 'list') { Render-Settings; return }
-  $addBorder.Visibility = $(if ($script:readOnly) { 'Collapsed' } else { 'Visible' })
+  $addBorder.Visibility = $(if ($script:readOnly -or $script:todayView) { 'Collapsed' } else { 'Visible' })
   $fromSettings = $script:renderedView -ne 'list'; $script:renderedView = 'list'
   $hadFocus = $list.IsKeyboardFocusWithin -or ($fromSettings -and $verBar.IsKeyboardFocusWithin)
   $verBar.Visibility = 'Collapsed'
   Clear-View; Reset-Groups
   if ($script:HasA11y) { $list.Role = 'list' }
+  if ($script:todayView) { Render-Today $fromSettings $hadFocus; return }
   Set-Name $list "$($script:proj) tasks"
   $share = Get-ShareOf $script:proj
   if ($share) {
@@ -4404,6 +4598,7 @@ function Render-ConflictsView {
 
 # ---------------------------------------------------------------- keyboard
 function Set-Sel($it, [switch]$Focus) {
+  Enter-TodayList $it   # (For Today: the selected task's list is the open one, for the keys that change it)
   $script:sel = $it
   $first = $null; $selRow = $null
   # (only the rows whose state changes are touched: the one selected before and the new one; long lists stay quick)
@@ -4449,7 +4644,7 @@ $w.Add_PreviewKeyDown({
 
   $f = [System.Windows.Input.Keyboard]::FocusedElement
   # (Shift+F10 arrives as the System key)
-  if ($f -eq $script:titleBtn -and (($key -eq 'F10' -and $shift) -or $key -eq 'Apps')) { $e.Handled = $true; Show-ListMenu $script:proj $true; return }
+  if ($f -eq $script:titleBtn -and (($key -eq 'F10' -and $shift) -or $key -eq 'Apps')) { $e.Handled = $true; if (-not $script:todayView) { Show-ListMenu $script:proj $true }; return }
   if ($script:HasA11y -and $f -is [Saqme.AccessibleBorder] -and $f.Role -ne 'listitem' -and -not $ctrl -and -not $alt) {
     if ($key -eq 'Return' -or $key -eq 'Space') { return }   # the focused button's own action (its KeyDown)
     if ($f -eq $script:titleBtn -and ($key -eq 'Left' -or $key -eq 'Right')) {
@@ -4484,7 +4679,7 @@ $w.Add_PreviewKeyDown({
   }
   if ($alt -and ($key -eq 'Up' -or $key -eq 'Down')) {
     $e.Handled = $true
-    if ($sel -and (Node-Rank $sel) -eq 0 -and -not $script:readOnly) { Nudge-Task $sel $(if ($key -eq 'Up') { -1 } else { 1 }); Set-Sel $sel }
+    if ($sel -and (Node-Rank $sel) -eq 0 -and -not $script:readOnly -and -not $script:todayView) { Nudge-Task $sel $(if ($key -eq 'Up') { -1 } else { 1 }); Set-Sel $sel }
     return
   }
   if ($ctrl) {
@@ -4507,7 +4702,7 @@ $w.Add_PreviewKeyDown({
         $k = Open-Key $sel
         $isOpen = $(if ($script:openState.ContainsKey($k)) { $script:openState[$k] -eq '1' } else { $vis.Count -gt $i + 1 -and $vis[$i + 1].Level -gt $sel.Level })
         if ((Node-HasMore $sel) -and $isOpen) { $script:openState[$k] = '0'; Save-State; Render }
-        elseif ($sel.Level -gt 0) { for ($p = $i - 1; $p -ge 0; $p--) { if ($vis[$p].Level -lt $sel.Level) { Set-Sel $vis[$p]; break } } }
+        elseif ($sel.Level -gt 0 -and -not $script:todayView) { for ($p = $i - 1; $p -ge 0; $p--) { if ($vis[$p].Level -lt $sel.Level) { Set-Sel $vis[$p]; break } } }
       }
     }
     'Escape' { $e.Handled = $true; Set-Sel $null }
@@ -4708,9 +4903,10 @@ $timer.Add_Tick({
     $nb = (Get-ListsBackups $DataDir) | Select-Object -First 1
     if (-not $nb -or ((Get-Date) - $nb.At).TotalHours -ge 24) { [void](New-ListsBackup $DataDir 'daily') }
   }
-  if ($script:tick % 3 -eq 0) { if ((Tab-Signature) -ne $script:tabSig) { Render-Tabs } }
+  if ($script:tick % 3 -eq 0) { if ((Tab-Signature) -ne $script:tabSig) { if ($script:todayView) { Render } else { Render-Tabs } } }   # (For Today shows every list: any file changing redraws it)
   # midnight: refresh deadline labels (Today / Tomorrow / overdue)
-  if ($script:tick % 75 -eq 0) { $d = (Get-Date).Date; if ($d -ne $script:lastDay) { $script:lastDay = $d; Render } }
+  # (and each minute in For Today, where a task whose time has just passed moves up to Overdue)
+  if ($script:tick % 75 -eq 0) { $d = (Get-Date).Date; if ($d -ne $script:lastDay -or $script:todayView) { $script:lastDay = $d; Render } }
 })
 $script:lastDay = (Get-Date).Date
 if ((Read-SyncConfigUi) -or (Read-ShareBindings $listsDir).Count) { Start-SyncLoop }   # (lists shared with this PC sync without sync of its own too)
@@ -5101,7 +5297,7 @@ if ($SmokeTest) {
     if ($tb.Child.Children[0] -isnot [System.Windows.Shapes.Ellipse] -or -not [object]::ReferenceEquals($tb.Child.Children[1], $script:titleChev)) { throw 'the title does not read name, chevron, dot' }
     Show-ListsMenu
     $swNames = @(Get-ProjectNames)
-    if (-not $script:listsPopup.IsOpen -or $script:listsRows.Count -ne $swNames.Count + 1) { throw "the lists menu has $($script:listsRows.Count) rows for $($swNames.Count) lists" }
+    if (-not $script:listsPopup.IsOpen -or $script:listsRows.Count -ne $swNames.Count + 2) { throw "the lists menu has $($script:listsRows.Count) rows for $($swNames.Count) lists" }   # (For Today, the lists, New list)
     if ($script:HasA11y -and (-not $tb.IsExpanded -or -not @($script:listsRows | Where-Object { $_.Role -eq 'radio' -and $_.IsSelected -and $_.Tag -eq $swHome }).Count)) { throw 'the menu is not expanded or does not select the current list' }
     $swRow = @($script:listsRows | Where-Object { $_.Tag -eq 'Switch check' })[0]
     if ([System.Windows.Automation.AutomationProperties]::GetName($swRow) -ne 'Switch check, 2 due, 1 overdue') { throw "the row says: $([System.Windows.Automation.AutomationProperties]::GetName($swRow))" }
@@ -5141,6 +5337,44 @@ if ($SmokeTest) {
     Remove-Item -LiteralPath (Proj-Path 'Switch check') -Force
     Render
     Write-Output 'SWITCHER OK'
+    # For Today: the open tasks of every list due soon, by deadline; a change made there is made in its own list
+    $tdDay = { param([int]$n) (Get-Date).Date.AddDays($n).ToString('yyyy-MM-dd') }
+    Write-Utf8 (Proj-Path 'Today A') ("# Today A`n- [ ] later one due:$(& $tdDay 2) ^tdaaaaa1`n- [ ] far one due:$(& $tdDay 9) ^tdaaaaa2`n- [/] no deadline ^tdaaaaa3`n")
+    Write-Utf8 (Proj-Path 'Today B') ("# Today B`n- [ ] overdue one due:$(& $tdDay -1) ^tdbbbbb1`n- [x] done one due:$(& $tdDay -1) ^tdbbbbb2`n- [!] today one due:$(& $tdDay 0) ^tdbbbbb3`n")
+    Show-Today
+    if (-not $script:todayView -or $script:titleBtn.Child.Children[$script:titleBtn.Child.Children.Count - 1].Text -ne 'For Today') { throw 'For Today did not open or is not the title' }
+    $tdMine = { @($script:visible | Where-Object { $_.Id -like 'td*' } | ForEach-Object { $_.Text }) -join '|' }   # (the self-check's own tasks in General are due today too)
+    $tdTexts = & $tdMine
+    if ($tdTexts -ne 'overdue one|today one|later one') { throw "For Today shows: $tdTexts" }
+    if ($addBorder.Visibility -ne 'Collapsed') { throw 'For Today has an add line' }
+    # a status change in the row of another list than the open one
+    $tdRow = @($script:visible | Where-Object { $_.Id -ceq 'tdbbbbb1' })[0]
+    Enter-TodayList $tdRow
+    if ($script:proj -ne 'Today B' -or $script:items.IndexOf($tdRow) -lt 0) { throw 'pressing a row did not open its list' }
+    $tdRow.Mark = '/'; Save-Items; Render
+    if (-not ([IO.File]::ReadAllText((Proj-Path 'Today B')) -match '(?m)^- \[/\] overdue one')) { throw 'the status did not reach its list' }
+    if ([IO.File]::ReadAllText((Proj-Path 'Today A')) -notmatch 'later one due') { throw 'another list changed' }
+    # a text change in a row of the other list
+    $tdRow = @($script:visible | Where-Object { $_.Text -eq 'later one' })[0]
+    Edit-Item $tdRow
+    if (-not $script:editBox) { throw 'a For Today row could not be edited' }
+    $script:editBox.Text = 'later one, renamed'; Commit-Edit
+    if (-not ([IO.File]::ReadAllText((Proj-Path 'Today A')) -match '(?m)^- \[ \] later one, renamed due:')) { throw 'the text did not reach its list' }
+    if ($script:proj -ne 'Today A' -or -not $script:todayView) { throw 'editing left For Today' }
+    # a finished task leaves the view
+    $tdRow = @($script:visible | Where-Object { $_.Text -eq 'today one' })[0]
+    Enter-TodayList $tdRow; $tdRow.Mark = 'x'; Save-Items; Render
+    if ((& $tdMine) -ne 'overdue one|later one, renamed') { throw 'a done task is still in For Today' }
+    # the lists menu offers it, and a task opens in its list
+    Show-ListsMenu
+    if ($script:listsRows[0].Tag -or -not $script:listsPopup.IsOpen -or $script:listsRows.Count -ne @(Get-ProjectNames).Count + 2) { throw 'the lists menu has no For Today row' }
+    Close-ListsMenu $true
+    Show-TaskInList (@($script:visible | Where-Object { $_.Text -eq 'overdue one' })[0])
+    if ($script:todayView -or $script:proj -ne 'Today B' -or -not $script:sel -or $script:sel.Id -ne 'tdbbbbb1') { throw 'the task did not open in its list' }
+    Switch-Project $swHome
+    foreach ($n in 'Today A', 'Today B') { Remove-Item -LiteralPath (Proj-Path $n) -Force }
+    Render
+    Write-Output 'FOR TODAY OK'
     # Focus ring, header, press feedback and moving between views (docs/design.md, "Motion"; no window on screen here,
     # so nothing moves by itself: $script:motion 'on' sets moves up as on screen, and they are ended by hand)
     if (-not $script:HasA11y) { throw 'a11y.cs did not load' }

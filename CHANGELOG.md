@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+**For Today.** A new entry at the top of the lists menu, on the phone app (and the Linux/macOS window) and in the
+Windows app, shows the open tasks (to do, in progress, blocked) of **every** list that are overdue, due today or due in
+the next 3 days, in the order of their deadlines (a task with a time before one without, within a day), under
+*Overdue*, *Today* and *Next 3 days*. Each row names its list; tapping the name (or *Show in list* in the task's
+menu) opens the task in its list. Status, text, deadline, notes and delete work there exactly as in the list itself
+and sync the same way. The rules are shared by both sides (`forToday` / `Get-ForToday`, `shared/fixtures/today.json`).
+
 **Windows install line that antivirus does not block.** The one-liner is now just `irm …/setup.ps1 | iex`, pasted
 into PowerShell (README, docs/setup.md, the invite page, setup's own hints). The old form started a second
 PowerShell with `-ExecutionPolicy Bypass -Command "irm … | iex"`, a pattern antivirus and Windows security rules

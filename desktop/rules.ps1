@@ -5,6 +5,7 @@
 #   Parse-DueDate / Parse-Due   "today", "fri", "+3", "25 oct", "fri 14:00", "3pm" -> date (+ time)
 #   Due-Label / Get-DueTone     "Today", "Fri", "17 Oct" / over | soon | later | closed
 #   Get-Reminders               which notifications are due now (15 min before, at the time, daily summary)
+#   Get-ForToday                the "For Today" view: open tasks overdue, due today or in the next 3 days, in order
 # Every function takes "now" as a local wall-clock [datetime] (default: the computer's clock).
 
 $script:RuleCI = [Globalization.CultureInfo]::InvariantCulture
@@ -157,6 +158,32 @@ function Get-Reminders($tasks, [datetime]$Now, [string]$notifyAt, $notified) {
     [void]$out.Add(@{ Keys = @($kDig); Title = $title; Body = ($lines -join "`n"); Sub = $(if ($digest.Count -eq 1) { $digest[0].T.Project } else { 'Saqme To Do' }) })
   }
   return ,$out
+}
+
+# The "For Today" view (same as forToday in worker/public/js/model.js; shared/fixtures/today.json): the open tasks
+# (to do, in progress, blocked) of the lists in $projects whose deadline is overdue, today or in the next 3 days, in
+# the order of their deadlines. A task is 'over' once its deadline has passed (an earlier date, or today's time gone),
+# 'today' when it is due today, else 'soon'. Within a day a task with a time comes first, by time, then those without
+# a time; ties by list (the order of $projects), then by their place in $tasks (file order).
+#   $tasks: @{ Text; Status; Due = 'YYYY-MM-DD' or ''; DueTime = 'H:MM' or ''; Project } (more keys are kept)
+# Returns @{ Task; Bucket } for each one shown.
+function Get-ForToday($tasks, [datetime]$Now, $projects) {
+  $order = @{}
+  $n = 0; foreach ($p in @($projects)) { $order[[string]$p] = $n; $n++ }
+  $todayS = $Now.ToString('yyyy-MM-dd', $script:RuleCI)
+  $lastS = $Now.Date.AddDays(3).ToString('yyyy-MM-dd', $script:RuleCI)
+  $found = New-Object 'System.Collections.Generic.SortedDictionary[string,object]' ([StringComparer]::Ordinal)
+  $seq = 0
+  foreach ($t in @($tasks)) {
+    $seq++
+    if (@(' ', '/', '!') -cnotcontains $t.Status -or -not $t.Text -or -not $t.Due) { continue }
+    if ([string]::CompareOrdinal($t.Due, $lastS) -gt 0 -or -not $order.ContainsKey([string]$t.Project)) { continue }
+    $tone = Get-DueTone $t.Due ([string]$t.DueTime) $false $Now
+    $bucket = $(if ($tone -ceq 'over') { 'over' } elseif ($t.Due -ceq $todayS) { 'today' } else { 'soon' })
+    $mins = Get-RuleMinutes ([string]$t.DueTime); if ($null -eq $mins) { $mins = 1440 }   # no time: the end of the day
+    $found.Add(('{0}|{1:0000}|{2:000000}|{3:00000000}' -f $t.Due, $mins, $order[[string]$t.Project], $seq), @{ Task = $t; Bucket = $bucket })
+  }
+  return @($found.Values)   # (callers wrap it in @(): one result alone is not an array otherwise)
 }
 
 # "Use with AI": the instructions an AI assistant needs to manage the lists folder, with the real path filled in

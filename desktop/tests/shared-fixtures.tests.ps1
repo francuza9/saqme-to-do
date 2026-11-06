@@ -76,6 +76,17 @@ foreach ($c in (Read-Fixture 'reminders.json')['cases']) {
   }
 }
 
+# ---------------------------------------------------------------- For Today
+Write-Host 'today.json: Get-ForToday (rules.ps1)'
+foreach ($g in (Read-Fixture 'today.json')['groups']) {
+  Test-Case "$($g['about']) ($($g['now']))" {
+    $now = Get-WallNow $g
+    $tasks = @(foreach ($t in $g['tasks']) { @{ Id = $t[0]; Project = $t[1]; Status = $t[2]; Due = $t[3]; DueTime = $t[4]; Text = $t[5] } })
+    $got = @(foreach ($r in (Get-ForToday $tasks $now @($g['projects']))) { , @($r.Task.Id, $r.Bucket) })
+    Assert-Eq (ConvertTo-Canon $got) (ConvertTo-Canon $g['expected'])
+  }
+}
+
 # ---------------------------------------------------------------- markdown list format
 Write-Host 'markdown.json: Read-Items, ConvertTo-MarkdownText, Set-MissingIds (sync-core.ps1)'
 $md = Read-Fixture 'markdown.json'

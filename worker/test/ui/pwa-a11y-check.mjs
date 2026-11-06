@@ -224,7 +224,7 @@ console.log('2. keyboard, focus and announcements');
   await page.keyboard.press('End'); const end = (await inMenu()).name;
   await page.keyboard.press('Home'); const first = (await inMenu()).name;
   await page.keyboard.press('ArrowUp'); m = await inMenu();
-  check(end === 'New list' && first === 'General' && m.name === 'New list', `End, Home, and Up from the first goes round to the last (${end}, ${first}, ${m.name})`);
+  check(end === 'New list' && first === 'For Today' && m.name === 'New list', `End, Home (For Today, above the lists), and Up from the first goes round to the last (${end}, ${first}, ${m.name})`);
   await page.keyboard.press('h'); m = await inMenu();
   check(m.name === 'Home', `a typed letter goes to the list that starts with it (${m.name})`);
   await page.keyboard.press('Enter');

@@ -70,6 +70,24 @@ describe('reminders.json: computeReminders', () => {
   }
 });
 
+// ---------------------------------------------------------------- For Today
+describe('today.json: forToday', () => {
+  for (const g of load('today.json').groups) {
+    it(`${g.about} (${g.now})`, () => {
+      const [y, mo, d, h, mi] = g.now.split(/[-T:]/).map(Number);
+      const tasks = g.tasks.map(([id, project, status, date, time, text], i) => ({
+        id,
+        fields: {
+          place: { v: { project, parent: null, pos: String(i).padStart(4, '0') } }, text: { v: text }, status: { v: status },
+          due: { v: date ? { date, time } : null }, deleted: { v: false },
+        },
+      }));
+      const got = model.forToday(tasks, new Date(y, mo - 1, d, h, mi), g.projects);
+      expect(got.map((r) => [r.task.id, r.bucket])).toEqual(g.expected);
+    });
+  }
+});
+
 // ---------------------------------------------------------------- markdown list format
 describe('markdown.json: parseItems, formatItems, setMissingIds', () => {
   const fx = load('markdown.json');
