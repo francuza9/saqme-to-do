@@ -39,13 +39,16 @@
         <div class="list-menu" id="listMenu" role="menu" aria-label="Lists"></div>
       </div>
     </header>
-    <main class="list" id="list" tabindex="-1"></main>
-    <footer class="add" id="addBar">
-      <div class="add-card">
-        <span class="add-plus" aria-hidden="true"></span>
-        <input id="addInput" type="text" maxlength="10000" placeholder="Add a task" autocomplete="off" autocapitalize="sentences" enterkeyhint="done" aria-label="Add a task">
-      </div>
-    </footer>
+    <main class="list" id="list" tabindex="-1">
+      <!-- the add line lives at the end of the list, so it sits right under the last task (app.js keeps it there) -->
+      <form class="add" id="addBar" autocomplete="off">
+        <div class="add-card">
+          <button type="button" class="add-plus" id="addPlus" aria-label="Add the task" tabindex="-1"></button>
+          <input id="addInput" type="text" maxlength="10000" placeholder="New task" autocomplete="off" autocapitalize="sentences" enterkeyhint="done" aria-label="New task">
+          <button type="submit" class="add-go" id="addGo" aria-label="Add the task" hidden></button>
+        </div>
+      </form>
+    </main>
   </div>
   <div class="sheet-wrap" id="sheetWrap" hidden>
     <div class="sheet-backdrop" id="sheetBackdrop"></div>

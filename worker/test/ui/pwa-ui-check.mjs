@@ -75,6 +75,18 @@ check(await page.isVisible('#switcher') && await page.isVisible('#syncBtn'), 'af
 for (const t of ['Buy milk', 'Write report', 'Call Anna']) { await page.fill('#addInput', t); await page.press('#addInput', 'Enter'); }
 await page.waitForTimeout(150);
 check((await rows()).join('|') === 'Buy milk|Write report|Call Anna', `add bar adds at the end (${(await rows()).join('|')})`);
+// the "+" and the tick add too; the line sits right under the last task, inside the list
+await page.fill('#addInput', 'Via plus'); await page.tap('#addPlus');
+await page.fill('#addInput', 'Via tick'); await page.tap('#addGo');
+await page.waitForTimeout(150);
+check((await rows()).slice(-2).join('|') === 'Via plus|Via tick', 'the "+" and the tick add the task');
+check(await page.isHidden('#addGo'), 'the tick shows only with text in the line');
+check(await page.evaluate(() => {
+  const last = [...document.querySelectorAll('.row')].pop().getBoundingClientRect(), a = document.getElementById('addBar').getBoundingClientRect();
+  return document.getElementById('list').contains(document.getElementById('addBar')) && a.top - last.bottom >= 0 && a.top - last.bottom < 40;
+}), 'the add line sits under the last task');
+for (const t of ['Via plus', 'Via tick']) { await page.tap(`.row:has-text("${t}") .text`); await page.keyboard.press('Control+A'); await page.keyboard.press('Backspace'); await page.keyboard.press('Enter'); }
+await page.waitForTimeout(200);
 
 // inline edit: Enter saves + opens a new task below, typing there adds it
 await page.tap('.row:has-text("Write report") .text');

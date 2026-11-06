@@ -25,7 +25,7 @@ const $ = (id) => document.getElementById(id);
 const els = {
   strip: $('strip'), switcher: $('switcher'), menuWrap: $('listMenuWrap'), menu: $('listMenu'), scrim: $('listMenuScrim'),
   list: $('list'), logo: $('logo'), sync: $('syncBtn'), conflicts: $('conflictsBadge'),
-  addBar: $('addBar'), add: $('addInput'), sheetWrap: $('sheetWrap'), sheet: $('sheet'), backdrop: $('sheetBackdrop'),
+  addBar: $('addBar'), add: $('addInput'), addGo: $('addGo'), addPlus: $('addPlus'), sheetWrap: $('sheetWrap'), sheet: $('sheet'), backdrop: $('sheetBackdrop'),
   toast: $('toast'), announce: $('announce'), app: $('app'),
 };
 const ls = {
@@ -875,7 +875,7 @@ function leaveView() {
   ghost.setAttribute('aria-hidden', 'true');
   Object.assign(ghost.style, { left: `${els.list.offsetLeft}px`, top: `${els.list.offsetTop}px`, width: `${els.list.offsetWidth}px`, height: `${els.list.offsetHeight}px`, transform: '', opacity: '' });
   const top = els.list.scrollTop;
-  ghost.append(...els.list.childNodes);
+  ghost.append(...[...els.list.childNodes].filter((n) => n !== els.addBar));   // (the add line stays in the list)
   // (focus keys and ids stay the new view's alone)
   for (const n of ghost.querySelectorAll('[data-fk], [id]')) { n.removeAttribute('data-fk'); n.removeAttribute('id'); }
   els.list.after(ghost);
@@ -936,6 +936,12 @@ function isOpen(node) {
 }
 function setOpen(id, open) { ls.set(`open.${id}`, open ? '1' : '0'); }
 
+/** Puts these in the list, above the add line: that one node stays (keeps focus, and what is typed in it) and is always last. */
+function setListContent(nodes) {
+  for (const n of [...els.list.childNodes]) if (n !== els.addBar) n.remove();
+  els.addBar.before(...nodes);
+}
+
 function renderTasks() {
   const frag = [];
   ui.visible = [];
@@ -944,7 +950,7 @@ function renderTasks() {
     frag.push(h('div', { class: 'welcome' },
       h('p', {}, 'No lists yet.'),
       h('button', { class: 'btn primary', onclick: () => projectNameSheet(null) }, icon('plus'), 'New list')));
-    els.list.replaceChildren(...frag);
+    setListContent(frag);
     return;
   }
   if (store.saveError) frag.push(saveWarning());
@@ -990,7 +996,7 @@ function renderTasks() {
   if (!ui.visible.length && !draft) {
     frag.push(h('div', { class: 'empty-state' }, readOnly(proj.id) ? 'No tasks here yet.' : 'No tasks here yet. Add one below.'));
   }
-  els.list.replaceChildren(...frag.filter(Boolean));
+  setListContent(frag.filter(Boolean));
   if (ui.sel && !ui.visible.includes(ui.sel)) ui.sel = null;
 }
 
@@ -1603,18 +1609,43 @@ function endDrag(apply) {
 }
 
 // ---------------------------------------------------------------- add bar
+// Return on the keyboard, the "+", the tick and a form submit all add the task; the input keeps focus for the next one.
+function addTypedTask() {
+  const text = cleanText(els.add.value);
+  const proj = currentProject();
+  if (!text || !proj) return;
+  store.addTask(proj.id, { text });
+  els.add.value = '';
+  syncAddGo();
+  revealAdd();
+}
+/** The add line is the last thing in the list: keep it in view (under the keyboard too). */
+function revealAdd() {
+  requestAnimationFrame(() => els.addBar.scrollIntoView({ block: 'end' }));
+}
+const syncAddGo = () => { els.addGo.hidden = !cleanText(els.add.value); };
 els.add.addEventListener('keydown', (e) => {
-  if (e.key === 'Enter' && !e.isComposing) {
-    e.preventDefault();
-    const text = cleanText(els.add.value);
-    const proj = currentProject();
-    if (!text || !proj) return;
-    store.addTask(proj.id, { text });
-    els.add.value = '';
-    requestAnimationFrame(() => { els.list.scrollTop = els.list.scrollHeight; });
-  } else if (e.key === 'Escape') { els.add.value = ''; els.add.blur(); }
+  if (e.key === 'Enter' && !e.isComposing) { e.preventDefault(); addTypedTask(); }
+  else if (e.key === 'Escape') { els.add.value = ''; syncAddGo(); els.add.blur(); }
   else if (e.key === 'ArrowUp' && ui.visible.length && !els.add.value) { e.preventDefault(); beginEdit(ui.visible[ui.visible.length - 1]); }
 });
+els.addBar.addEventListener('submit', (e) => { e.preventDefault(); addTypedTask(); });
+els.add.addEventListener('input', syncAddGo);
+// (pointerdown/mousedown kept from stealing focus, so the keyboard stays up after a tap on "+" or the tick)
+for (const b of [els.addPlus, els.addGo]) b.addEventListener('mousedown', (e) => e.preventDefault());
+els.addPlus.addEventListener('click', () => { if (cleanText(els.add.value)) addTypedTask(); else els.add.focus(); });
+els.add.addEventListener('focus', revealAdd);
+// iOS does not shrink the page when the keyboard opens, it covers it: size the window to what is visible instead
+if (window.visualViewport) {
+  const fit = () => {
+    const vv = window.visualViewport;
+    const covered = Math.round(window.innerHeight - vv.height - vv.offsetTop);
+    els.app.style.bottom = covered > 80 ? `${covered}px` : '';
+    if (covered > 80 && document.activeElement === els.add) revealAdd();
+  };
+  window.visualViewport.addEventListener('resize', fit);
+  window.visualViewport.addEventListener('scroll', fit);
+}
 els.add.addEventListener('focus', () => { if (ui.editing || ui.notesEditing) { commitAll(); render(); } });
 
 // ---------------------------------------------------------------- keyboard (hardware keyboards / desktop browsers)
@@ -1793,7 +1824,7 @@ function renderSettingsView() {
   if (!VIEWS[ui.view] || (ui.view === 'updates' && !ui.local && !store.meta.token)) ui.view = 'settings';
   // a view rebuilt in place (sync status, the Linux/macOS app's news) keeps what was typed in its boxes
   const typed = new Map([...els.list.querySelectorAll('input.g-input[data-fk]')].map((i) => [i.dataset.fk, [i.value, i.selectionStart, i.selectionEnd]]));
-  els.list.replaceChildren(viewHeader(VIEW_TITLES[ui.view]), ...VIEWS[ui.view]().filter(Boolean), versionLine());
+  setListContent([viewHeader(VIEW_TITLES[ui.view]), ...VIEWS[ui.view]().filter(Boolean), versionLine()]);
   for (const i of els.list.querySelectorAll('input.g-input[data-fk]')) {
     const t = typed.get(i.dataset.fk);
     if (t && !i.readOnly) { i.value = t[0]; try { i.setSelectionRange(t[1], t[2]); } catch { /* not a text box */ } }
@@ -3041,11 +3072,11 @@ function renderWelcome() {
   els.addBar.hidden = true;
   const logo = h('img', { src: 'icons/apple-touch-icon.png', alt: '' });
   if (ui.localUnpaired) {
-    els.list.replaceChildren(h('div', { class: 'welcome' }, logo, h('h1', {}, 'Saqme To Do'),
-      h('p', {}, 'This window is not connected to Saqme on this computer yet. Open Saqme To Do from your applications, or run ', h('b', {}, 'saqme open'), ' in a terminal.')));
+    setListContent([h('div', { class: 'welcome' }, logo, h('h1', {}, 'Saqme To Do'),
+      h('p', {}, 'This window is not connected to Saqme on this computer yet. Open Saqme To Do from your applications, or run ', h('b', {}, 'saqme open'), ' in a terminal.'))]);
     return;
   }
-  els.list.replaceChildren(h('div', { class: 'welcome' }, logo,
+  setListContent([h('div', { class: 'welcome' }, logo,
     h('h1', {}, 'Saqme To Do'),
     h('p', {}, 'To-do lists in plain markdown. No account needed: start on this device right away, and your lists stay on it. Sync with your computer through your own free Cloudflare account later, if you like.'),
     h('button', { class: 'btn primary', onclick: () => { ui.welcomeSkipped = true; ls.set('localOnly', '1'); store.addProject('General'); render(); } }, 'Use it on this device'),
@@ -3055,7 +3086,7 @@ function renderWelcome() {
       h('li', {}, isStandalone() ? 'Type the code it shows below.' : 'Type the code it shows below, or scan its QR code with the camera.'),
       isIOS() && !isStandalone() ? h('li', {}, 'On iPhone, add Saqme to the Home Screen first (', h('b', {}, 'Share'), ' › ', h('b', {}, 'Add to Home Screen'), '), open it from there and type the code in it.') : null),
     pairingField(),
-    h('p', {}, 'Someone sent you an invite to a shared list? ', h('button', { class: 'linkish', onclick: () => joinSheet() }, 'Join it'), '.')));
+    h('p', {}, 'Someone sent you an invite to a shared list? ', h('button', { class: 'linkish', onclick: () => joinSheet() }, 'Join it'), '.'))]);
 }
 
 function pair(token, server = '') {
@@ -3172,7 +3203,8 @@ async function watchVersion() {
 document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') watchVersion(); });
 setInterval(() => { if (document.visibilityState === 'visible') watchVersion(); }, 30 * 60_000);
 
-els.addBar.querySelector('.add-plus').append(icon('plus'));
+els.addPlus.append(icon('plus'));
+els.addGo.append(icon('check'));
 await store.open();
 // ask the browser not to clear the lists when space runs low (granted to installed apps, mostly)
 navigator.storage?.persist?.().catch(() => {});

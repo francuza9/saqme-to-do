@@ -127,7 +127,7 @@ svg { display: block; }
 /* ------------------------------------------------------------------ the list: lines in grouped cards */
 .list {
   position: relative; flex: 1; overflow-y: auto; overflow-x: hidden; -webkit-overflow-scrolling: touch; outline: none; overscroll-behavior: contain;
-  padding: var(--space-3) calc(env(safe-area-inset-right) + var(--card-inset)) var(--space-7) calc(env(safe-area-inset-left) + var(--card-inset));
+  padding: var(--space-3) calc(env(safe-area-inset-right) + var(--card-inset)) calc(env(safe-area-inset-bottom) + var(--space-7)) calc(env(safe-area-inset-left) + var(--card-inset));
 }
 /* Moving between views (app.js, "moving between views"): the view left behind, in a copy of the list's box over or
    under the new one, slides or fades out; it takes no taps, focus or screen reader. Both are opaque meanwhile. */
@@ -293,20 +293,18 @@ h2.completed-heading { margin: var(--card-gap) 0 0; font: inherit; }
 .shared-note b { color: var(--ink); font-weight: 600; }
 .shared-note.trouble { color: var(--ink); }
 
-/* ------------------------------------------------------------------ add line: a card of its own under the list */
-/* the "+" sits in the chip column and the text in the task text column, like the next line of the list */
-.add {
-  flex: none;
-  padding: var(--space-3) calc(env(safe-area-inset-right) + var(--card-inset)) calc(env(safe-area-inset-bottom) + var(--card-inset)) calc(env(safe-area-inset-left) + var(--card-inset));
-  background: var(--surface);
-}
+/* ------------------------------------------------------------------ add line: a card of its own, right under the last task */
+/* the "+" sits in the chip column and the text in the task text column, like the next line of the list; it scrolls with the list */
+.add { margin: var(--space-3) 0 0; padding: 0; scroll-margin-bottom: var(--space-4); }
 .add-card {
   display: flex; align-items: center; gap: var(--space-3); min-height: var(--row-min-touch);
   padding: 0 var(--card-padding) 0 var(--head-x); border-radius: var(--r-card); background: var(--card);
 }
 @media (pointer: fine) { .add-card { min-height: var(--row-min-pointer); } }
-.add-plus { display: grid; place-items: center; width: 18px; height: 18px; color: var(--violet); flex: none; }
+.add-plus, .add-go { display: grid; place-items: center; width: 18px; height: 18px; color: var(--violet); flex: none; }
 .add-plus svg { width: 15px; height: 15px; }
+.add-go { width: 32px; height: 32px; margin-right: -8px; border-radius: 50%; }
+.add-go svg { width: 16px; height: 16px; }
 .add input { flex: 1; min-width: 0; padding: var(--space-3) 0; border: 0; background: transparent; outline: none; caret-color: var(--violet); }
 .add input::placeholder { color: var(--smoke); }
 
