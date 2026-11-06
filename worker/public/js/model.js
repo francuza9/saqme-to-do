@@ -124,20 +124,20 @@ export function positionAt(siblings, at, excludeId = null) {
 }
 
 /** Visible order of one project like the desktop renders it: active roots, Postponed, Completed. */
-export function sections(tree) {
+export function sections(tree, rankOf = (n) => rank(n.task.fields.status.v)) {
   const active = [];
   const postponed = [];
   const closed = [];
   for (const n of tree.roots) {
-    const r = rank(n.task.fields.status.v);
+    const r = rankOf(n);
     (r === 0 ? active : r === 1 ? postponed : closed).push(n);
   }
   return { active, postponed, closed };
 }
 
 /** Children in display order: active first, then postponed, then closed (stable within each). */
-export function kidsInDisplayOrder(node) {
-  return [0, 1, 2].flatMap((r) => node.kids.filter((k) => rank(k.task.fields.status.v) === r));
+export function kidsInDisplayOrder(node, rankOf = (n) => rank(n.task.fields.status.v)) {
+  return [0, 1, 2].flatMap((r) => node.kids.filter((k) => rankOf(k) === r));
 }
 
 export function progress(node) {

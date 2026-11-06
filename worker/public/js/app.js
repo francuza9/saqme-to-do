@@ -86,10 +86,37 @@ const statusAnim = new Map();   // task id -> { from, to, at }
 function setStatus(id, mark) {
   const from = store.get('task', id)?.fields.status.v;
   // (noted first: the change renders at once)
-  if (from != null && from !== mark && !reducedMotion()) statusAnim.set(id, { from, to: mark, at: performance.now() });
+  if (from != null && from !== mark && !reducedMotion()) {
+    statusAnim.set(id, { from, to: mark, at: performance.now() });
+    if (rank(mark) !== 2) cancelHold(id);
+    else if (rank(from) !== 2) holdRow(id, rank(from));
+  }
   if (store.setTask(id, { status: mark })) return true;
   statusAnim.delete(id);
+  cancelHold(id);
   return false;
+}
+
+// A task closed on this device stays in its place while the strike-through draws (STRIKE_MS) and for a beat, then
+// fades out and drops into Completed; the data is written at once, only the row's move waits. Sync never holds.
+const STRIKE_MS = 260;
+const HOLD_MS = STRIKE_MS + 320;
+const holds = new Map();   // task id -> { rank: where it sat, timer }
+const heldRank = (n) => holds.get(n.id)?.rank ?? rank(n.task.fields.status.v);
+function holdRow(id, was) {
+  cancelHold(id);
+  holds.set(id, { rank: was, timer: setTimeout(() => {
+    const row = els.list.querySelector(`.row[data-id="${id}"]`);
+    const fade = row?.closest('.task-item')?.animate?.([{ opacity: 1 }, { opacity: 0 }], { duration: 140, easing: 'ease-out', fill: 'forwards' });
+    const go = () => { if (holds.delete(id)) render(); };
+    if (fade) fade.finished.then(go, go); else go();
+  }, HOLD_MS) });
+}
+function cancelHold(id) {
+  const hold = holds.get(id);
+  if (!hold) return;
+  clearTimeout(hold.timer);
+  holds.delete(id);
 }
 /** The row's chip and text play the change that setStatus() left for it (150-300 ms, subtle). */
 function playStatusAnim(id, chipEl, textEl) {
@@ -1069,7 +1096,7 @@ function renderTasks() {
     }
   }
   const tree = store.tree(proj.id);
-  const { active, postponed, closed } = sections(tree);
+  const { active, postponed, closed } = sections(tree, heldRank);
   const draft = ui.editing?.draft;
   const name = listName(proj);
   frag.push(h('h1', { class: 'sr-only' }, name));
@@ -1139,7 +1166,7 @@ function renderNode(frag, node, section) {
   frag.push(listItem(node.depth, taskRow(node, section), open && (node.task.fields.notes.v || ui.notesEditing === node.id) ? notesBlock(node) : null));
   if (open) {
     if (draft && draft.parentId === node.id && draft.index === 0) frag.push(listItem(draft.depth, taskRow(null, section, draft)));
-    for (const k of kidsInDisplayOrder(node)) renderNode(frag, k, section);
+    for (const k of kidsInDisplayOrder(node, heldRank)) renderNode(frag, k, section);
   }
   if (draft && draft.afterId === node.id) frag.push(listItem(draft.depth, taskRow(null, section, draft)));
 }

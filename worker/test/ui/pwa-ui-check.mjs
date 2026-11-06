@@ -119,9 +119,36 @@ check(await page.isVisible('.row:has-text("Buy milk") .chip.s-prog'), 'status ch
 const chipAnims = () => page.evaluate(() => document.getAnimations().filter((a) => a.effect?.target?.classList?.contains('chip')).map((a) => a.effect.getTiming().duration));
 await page.tap('.row:has-text("Buy milk") .chip-btn');
 await page.tap('.menu-item:has-text("Done")');
-await page.waitForTimeout(40);
-const strike = await page.evaluate(() => document.getAnimations().filter((a) => a.effect?.pseudoElement === '::after').length);
-check(strike === 0 || strike === 1, 'marking done draws the strike-through at most once');
+// the row stays in place while the strike-through draws (260 ms) and for a beat, then fades into Completed
+const where = () => page.evaluate(() => {
+  const row = [...document.querySelectorAll('.row')].find((r) => r.textContent.includes('Buy milk'));
+  return { inList: !!row && row.closest('.group')?.getAttribute('aria-label') !== 'Completed', completed: !!document.querySelector('.completed-toggle') };
+});
+const strikeState = () => page.evaluate(() => {
+  const a = document.getAnimations().find((x) => x.effect?.pseudoElement === '::after');
+  const text = [...document.querySelectorAll('.row .text')].find((t) => t.textContent === 'Buy milk');
+  return { n: document.getAnimations().filter((x) => x.effect?.pseudoElement === '::after').length, t: a?.currentTime ?? null, striking: !!text?.classList.contains('striking') };
+});
+await page.waitForTimeout(80);
+const s1 = await strikeState();
+check(s1.n === 1 && s1.striking && s1.t > 0 && s1.t < 260, `the strike-through is drawing, partway (${JSON.stringify(s1)})`);
+check((await where()).inList && !(await where()).completed, 'the row is still in its place while the line draws');
+await page.waitForTimeout(280);   // (~400 ms: the line is complete, the beat is on)
+const s2 = await strikeState();
+check(s2.n === 0 && !s2.striking, 'the strike-through is finished');
+check(await page.evaluate(() => [...document.querySelectorAll('.row .text.t-done')].some((t) => t.textContent === 'Buy milk')), 'the finished line shows on the row (done text)');
+check((await where()).inList, 'the row is still in place after the line finishes');
+await page.waitForTimeout(600);   // (~1 s: it has moved)
+const s3 = await where();
+check(!s3.inList && s3.completed, 'then the row moves into Completed');
+// changing it back inside the window cancels the move
+await page.tap('.row:has-text("Inserted after") .chip-btn');
+await page.tap('.menu-item:has-text("Done")');
+await page.waitForTimeout(150);
+await page.tap('.row:has-text("Inserted after") .chip-btn');
+await page.tap('.menu-item:has-text("To do")');
+await page.waitForTimeout(900);
+check(await page.isVisible('.row:has-text("Inserted after") .chip.s-todo') && (await page.textContent('.completed-toggle')).includes('· 1'), 'back to open before the move: the row stays, nothing moves');
 await page.tap('.completed-toggle');
 await page.tap('.row:has-text("Buy milk") .chip-btn');
 await page.tap('.menu-item:has-text("In progress")');
@@ -136,8 +163,8 @@ await page.waitForSelector('.row');
 check((await chipAnims()).length === 0, 'first paint does not animate');
 await page.tap('.row:has-text("Call Anna") .chip-btn');
 await page.tap('.menu-item:has-text("Done")');
-await page.waitForTimeout(100);
-check(await page.isVisible('.completed-toggle'), 'done task folds into Completed');
+await page.waitForTimeout(1000);
+check((await page.textContent('.completed-toggle')).includes('· 1') && !(await page.isVisible('.row:has-text("Call Anna")')), 'done task folds into Completed');
 await page.tap('.row:has-text("Inserted after") .chip-btn');
 await page.tap('.menu-item:has-text("Postponed")');
 await page.waitForTimeout(100);

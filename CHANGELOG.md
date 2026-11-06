@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+**A task you close on the phone waits for its strike-through.** Marking a task done, failed or abandoned in the
+phone app keeps its row in place while the line draws and for a beat after, then the row fades out into Completed;
+change it back meanwhile and it never moves. With "reduce motion" on, or when the change comes from sync, it moves
+at once as before. The change itself is saved and synced at once. (For Today still drops the task straight away.)
+
 **Status changes animate.** On the phone app (and the Linux/macOS window), a status you set on this device plays a
 quick, subtle change (about 200 ms): the status icon pops into its new look, and marking a task done draws the
 strike-through across its text from left to right; going back to open fades the text in. Nothing animates on first
