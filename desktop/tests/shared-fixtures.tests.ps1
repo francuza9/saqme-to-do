@@ -423,6 +423,59 @@ Test-Case 'decision' {
   }
 }
 
+# ---------------------------------------------------------------- languages
+# the phone app's language files, read by the Windows app (i18n.ps1); worker/test/node/i18n.test.js checks the files
+Write-Host 'worker/public/js/lang: i18n.ps1'
+Test-Case 'every language reads, with exactly the keys of English' {
+  $en = Read-LangFile 'en'
+  Assert-True ($en -and $en.Count -gt 30) 'en.js read'
+  foreach ($code in $script:Langs) {
+    $d = Read-LangFile $code
+    Assert-True ($null -ne $d) "$code.js read"
+    Assert-Eq $d.Count $en.Count "$code.js: number of keys"
+    foreach ($k in $en.Keys) { Assert-True $d.ContainsKey($k) "$code.js: $k" }
+    # the same text the JavaScript side reads (sync-core's JSON reader, not ConvertFrom-Json)
+    $src = Read-Utf8 (Join-Path $PSScriptRoot "..\..\worker\public\js\lang\$code.js")
+    $j = ConvertFrom-JsonText $src.Substring($src.IndexOf('{', $src.IndexOf('export default')), $src.LastIndexOf('}') - $src.IndexOf('{', $src.IndexOf('export default')) + 1)
+    foreach ($k in $en.Keys) { Assert-Eq $d[$k] $j[$k] "$code.js: $k" }
+  }
+}
+Test-Case 'the language: the choice, else the system language if the app has it, else English' {
+  Assert-Eq (Get-PickedLanguage 'ka' 'de-DE') 'ka'
+  Assert-Eq (Get-PickedLanguage '' 'fr-CA') 'fr'
+  Assert-Eq (Get-PickedLanguage '' 'ka-GE') 'ka'
+  Assert-Eq (Get-PickedLanguage 'xx' 'pt-BR') 'en'
+  Assert-Eq (Get-PickedLanguage '' '') 'en'
+}
+Test-Case 'messages: placeholders, count forms (French: 0 is one), English for a missing key, the key itself last' {
+  try {
+    [void](Set-AppLanguage 'fr')
+    Assert-Eq (T 'remind.overdueSince' @{ time = '9:30' }) ((Read-LangFile 'fr')['remind.overdueSince'].Replace('{time}', '9:30'))
+    $script:LangTable['x.n.one'] = '{n} t'; $script:LangTable['x.n.other'] = '{n} ts'
+    Assert-Eq (TN 'x.n' 0) '0 t'
+    Assert-Eq (TN 'x.n' 2) '2 ts'
+    [void]$script:LangTable.Remove('date.today')
+    Assert-Eq (T 'date.today') 'Today'
+    Assert-Eq (T 'no.such.key') 'no.such.key'
+  } finally { $script:LangCache.Remove('fr'); [void](Set-AppLanguage 'en') }
+}
+Test-Case "reminders and deadlines in the app's language; the tasks' text and the keys as they are" {
+  try {
+    [void](Set-AppLanguage 'ka')
+    $milk = -join [char[]](0x10E0, 0x10EB, 0x10D4)   # (this file stays ASCII)
+    $now = New-Object DateTime(2026, 10, 14, 13, 50, 0)
+    $r = @(Get-Reminders @(@{ Id = 'aaaaaaaa'; Text = $milk; Status = ' '; Due = '2026-10-14'; DueTime = '14:00'; Project = 'Home' }) $now '10:00' @{})
+    Assert-Eq $r[0].Title (T 'remind.inMin' @{ n = 10 })
+    Assert-Eq $r[0].Body $milk
+    Assert-Eq (@($r[0].Keys) -join ',') '2026-10-14|soon|aaaaaaaa|14:00'
+    Assert-Eq (Get-DueText (New-Object DateTime(2026, 10, 14)) $now) (T 'date.today')
+    Assert-Eq (Get-DueText (New-Object DateTime(2026, 10, 16)) $now) ([Globalization.CultureInfo]::GetCultureInfo('ka-GE').DateTimeFormat.AbbreviatedDayNames[5])
+    [void](Set-AppLanguage 'en')
+    Assert-Eq (Get-DueText (New-Object DateTime(2026, 11, 20)) $now) '20 Nov'
+    Assert-Eq (Get-DueLongText (New-Object DateTime(2026, 10, 16)) '14:00') 'Friday, 16 October 2026, 14:00'
+  } finally { [void](Set-AppLanguage 'en') }
+}
+
 Write-Host ''
 Write-Host "$script:passed passed, $script:failed failed"
 if ($script:failed) { exit 1 }

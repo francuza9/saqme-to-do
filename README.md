@@ -43,6 +43,8 @@ list, and anything it deletes waits in **Recently deleted** for 30 days.
   on the web and in their phone apps. Without sync, Claude Desktop gets them in one click. [How](docs/ai.md).
 - **Every platform, one look.** A small widget on Windows, an app window on macOS and Linux, and the phone
   app on iPhone and Android. All work offline and share one design, down to the typeface.
+- **Five languages.** English, Georgian (ქართული), French, Spanish and German: each app follows the language of
+  its device, or the one you pick in Settings › General. Your tasks and list names stay as you wrote them.
 - **No account needed.** Everything works on a single device. Sync is optional: it runs on the free plan of
   your own Cloudflare account, with no subscription and no server run by anyone else.
 - **Built for real lists.** Subtasks with progress, seven statuses, deadlines with an optional time (type

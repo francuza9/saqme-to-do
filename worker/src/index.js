@@ -5,7 +5,7 @@
 //   POST /api/sync                { deviceId, cursor, changes[] } -> { cursor, more, changes[], rejected[], serverTime, dbId, api, version }
 //   POST /api/push/subscribe      { deviceId, subscription }
 //   POST /api/push/unsubscribe    { endpoint }
-//   POST /api/push/test           { endpoint? }
+//   POST /api/push/test           { endpoint?, lang? } (the test notification's words, in that language)
 //   POST /api/pair/code           -> { code, expiresAt }: a one-time pairing code for a new phone (src/pairing.js)
 //   POST /api/pair/claim          { code } -> { token }, no auth: what the phone app does with that code
 //   POST /api/shares/invite       { projectId, alias, access } -> { share, code, link, expiresAt } (src/shares.js)
@@ -42,6 +42,7 @@ import { adoptRemote, joinRemote, leaveRemote, relaySync, remotesQuery, remoteVi
 import { afterSchemaFailure, confirmUpdate, saveToken, scheduledUpdate, setAuto, startNow, updateStatus, UpdateError } from './selfupdate.js';
 import { connectorAuthorized, connectorRateOk, connectorStatus, disconnectConnector, rotateConnector, RATE_LIMIT } from './connector.js';
 import { handleMcp } from './mcp.js';
+import { textsFor } from './texts.js';
 
 // The push services browsers use (Chrome and other Chromium browsers, Firefox, Safari, legacy Edge): the
 // cron sends requests to subscription endpoints, so a subscription may only point at one of these.
@@ -223,7 +224,7 @@ async function handleApi(request, env, url, ctx) {
     case 'POST /api/push/test': {
       const body = await readJson(request);
       const only = typeof body.endpoint === 'string' ? body.endpoint : undefined;
-      const r = await pushToAll(env, { title: 'Saqme To Do', body: 'Notifications are working.', tag: 'test', url: '/' }, { only });
+      const r = await pushToAll(env, { title: 'Saqme To Do', body: textsFor(body.lang).t('remind.test'), tag: 'test', url: '/' }, { only });
       return json(r, r.error ? 503 : 200);
     }
   }
@@ -270,7 +271,7 @@ async function shareApi(request, env, url, route, share) {
     case 'POST /api/push/test': {
       const body = await readJson(request);
       const only = typeof body.endpoint === 'string' ? body.endpoint : undefined;
-      const r = await pushToShare(env, share.id, { title: 'Saqme To Do', body: 'Notifications are working.', tag: 'test', url: '/' }, { only });
+      const r = await pushToShare(env, share.id, { title: 'Saqme To Do', body: textsFor(body.lang).t('remind.test'), tag: 'test', url: '/' }, { only });
       return json(r, r.error ? 503 : 200);
     }
   }

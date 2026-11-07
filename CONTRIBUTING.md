@@ -143,6 +143,22 @@ anything with a token in it.
   `requestRender()` in `worker/public/js/app.js`.
 - Sync changes need tests: unit tests for the rule, and the end-to-end run must still converge.
 
+## Words and languages
+
+The apps speak English, Georgian, French, Spanish and German ([docs/architecture.md](docs/architecture.md#languages)).
+No word the user sees is written in the code: it is a key in `worker/public/js/lang/en.js`, used as `t('key')` in
+JavaScript and `T 'key'` in PowerShell (`tn` / `TN` for counts, with `key.one` and `key.other`).
+
+- **A new or changed text:** change `en.js` and the same key in `ka.js`, `fr.js`, `es.js` and `de.js` (a changed
+  meaning needs a new key, so no language keeps the old one by mistake). Whole sentences with `{placeholders}`, never
+  pieces glued together: word order differs. Keep labels short; Georgian and German run long, so look at the
+  narrow places (buttons, menus, the Windows Settings rows) in both.
+- **A new language:** a new `lang/<code>.js` with every key, its code in `LANGS` (`js/i18n.js`), `$script:Langs`
+  and `$script:LangCultures` (`desktop/i18n.ps1`), `worker/src/texts.js` and the service worker's list (`sw.js`).
+- The language files are JavaScript whose body is plain JSON (double quotes, no comments inside, no trailing
+  comma) because Windows PowerShell reads them too. PowerShell files stay ASCII.
+- `cd worker && npx vitest run test/node/i18n.test.js` checks keys, placeholders and leftover English.
+
 ## The repository name (forks)
 
 The repository the project is published from is set in one place: `repository` in `worker/package.json`.

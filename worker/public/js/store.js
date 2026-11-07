@@ -17,11 +17,12 @@ import { buildTree, positionAt, subtreeIds, newId, cleanProjectName } from './mo
 import { keyBetween, cmpPos } from './keys.js';
 import { listTree, treeToMarkdown, toFileName, MARKS, isValidDate as validDate } from './markdown.js';
 import { parseInviteLink } from './pairing.js';
+import { t } from './i18n.js';
 
 const DB_NAME = 'saqme';
 // a server API (worker/src/version.js) features need, and what the app says on an older one
 export const SHARING_API = 2;
-export const OLDER_SERVER = 'Your sync service runs an older version than this app, without shared lists yet. It is updated together with the app on your computer (Settings > Updates there); then try again.';
+export const OLDER_SERVER = 'server.older';   // (a key: what the app says, in its language)
 export const SELF_UPDATE_API = 4;   // the sync service updating itself (Settings > Updates)
 export const CONNECTOR_API = 5;     // the AI connector (Settings > Use with AI)
 const MAX_BATCH = 100;
@@ -146,7 +147,7 @@ export class Store extends EventTarget {
     for (const k of keys) this.dirty.add(k);
     if (meta) this.metaDirty = true;
     const first = !this.saveError;
-    this.saveError = error.name === 'QuotaExceededError' ? 'This phone is out of storage for the app.' : (error.message || String(error));
+    this.saveError = error.name === 'QuotaExceededError' ? t('store.outOfStorage') : (error.message || String(error));
     if (first) this.dispatchEvent(new Event('savefailed'));
     clearTimeout(this.retryTimer);
     this.retryTimer = setTimeout(async () => {
@@ -491,7 +492,7 @@ export class Store extends EventTarget {
 
   /** Lists reached through this device's own Worker wait while it is not paired (kept, with their edits). */
   pauseRelayed() {
-    for (const s of this.shares()) if (s.via !== 'direct') this.shareStatus.set(s.id, { state: 'paused', message: 'Waits until this app is paired again' });
+    for (const s of this.shares()) if (s.via !== 'direct') this.shareStatus.set(s.id, { state: 'paused', message: t('store.waitsPaired') });
   }
 
   /** This device's own server first, then each list shared with it, each from its own cursor. */
@@ -515,7 +516,7 @@ export class Store extends EventTarget {
       } catch (e) {
         if (e.ended) { this.shareEnded(share, e); continue; }
         const offline = !e.auth && (e instanceof TypeError || globalThis.navigator?.onLine === false);
-        this.shareStatus.set(share.id, { state: offline ? 'offline' : 'error', message: offline ? 'No connection' : e.message });
+        this.shareStatus.set(share.id, { state: offline ? 'offline' : 'error', message: offline ? t('store.noConnection') : e.message });
         failed ??= e.auth ? e : Object.assign(e, { share: true });
       }
     }
@@ -527,7 +528,7 @@ export class Store extends EventTarget {
     if (!this.meta.token) { this.setStatus('unpaired'); this.emit(); return; }
     if (!failed || failed.share) { this.setStatus('idle'); return; }
     const offline = !failed.auth && (failed instanceof TypeError || globalThis.navigator?.onLine === false);
-    this.setStatus(offline ? 'offline' : 'error', offline ? 'No connection — changes are saved on this phone.' : failed.message);
+    this.setStatus(offline ? 'offline' : 'error', offline ? t('store.offlineSaved') : failed.message);
   }
 
   /**
@@ -579,11 +580,11 @@ export class Store extends EventTarget {
         cache: 'no-store',
       });
       const refusal = share && (res.status === 401 || (res.status === 404 && share.via !== 'direct')) ? await this.shareRefusal(share, res) : null;
-      if (refusal?.ended) throw Object.assign(new Error('This list is not shared with this app any more.'), refusal);
+      if (refusal?.ended) throw Object.assign(new Error(t('store.shareGoneApp')), refusal);
       if (res.status === 401) {
-        throw Object.assign(new Error('This device is no longer paired (token rejected). Pair it again from the desktop app.'), { auth: true });
+        throw Object.assign(new Error(t('store.unpaired')), { auth: true });
       }
-      if (!res.ok) throw new Error((share && res.status === 502 && (await res.json().catch(() => ({}))).error) || `Server error ${res.status}`);   // (the relay's: why the owner's was not reached)
+      if (!res.ok) throw new Error((share && res.status === 502 && (await res.json().catch(() => ({}))).error) || t('store.serverError', { status: res.status }));   // (the relay's: why the owner's was not reached)
       const data = await res.json();
       const recvAt = Date.now();
       m.clockOffset = Math.round(data.serverTime - (sentAt + recvAt) / 2);
@@ -885,10 +886,10 @@ export class Store extends EventTarget {
     if (res.status === 401) {
       const refusal = await this.shareRefusal(share, res);   // (a direct list's 401 always ends it)
       this.shareEnded(share, refusal);
-      throw Object.assign(new Error('This list is not shared with you any more.'), refusal);
+      throw Object.assign(new Error(t('store.shareGone')), refusal);
     }
     const data = await res.json().catch(() => ({}));
-    if (!res.ok) throw new Error(data.error || `Server error ${res.status}`);
+    if (!res.ok) throw new Error(data.error || t('store.serverError', { status: res.status }));
     return data;
   }
 
@@ -896,7 +897,7 @@ export class Store extends EventTarget {
   addBinding(fields) {
     const list = this.projects();
     const share = {
-      id: newId(10), access: 'view', name: 'Shared list', pos: keyBetween(list.length ? this.projectPos(list[list.length - 1]) : null, null),
+      id: newId(10), access: 'view', name: t('share.defaultName'), pos: keyBetween(list.length ? this.projectPos(list[list.length - 1]) : null, null),
       cursor: 0, dbId: '', clockOffset: 0, lastSync: 0, joinedAt: Date.now(), ...fields,
     };
     this.setMeta({ shares: [...this.shares(), share] });
@@ -905,7 +906,7 @@ export class Store extends EventTarget {
 
   /** A list of this device's own Worker (remoteView in worker/src/remotes.js) -> its binding here. */
   bindRemote(remote) {
-    const fields = { via: 'relay', remote: remote.id, server: remote.server, access: remote.access === 'edit' ? 'edit' : 'view', name: String(remote.name || 'Shared list') };
+    const fields = { via: 'relay', remote: remote.id, server: remote.server, access: remote.access === 'edit' ? 'edit' : 'view', name: String(remote.name || t('share.defaultName')) };
     const known = this.shares().find((s) => s.remote === remote.id) ?? this.shareOf(remote.projectId);
     if (!known) return this.addBinding({ ...fields, projectId: remote.projectId });
     // the same list (moved here from the browser, say): its rows stay, from now on through this Worker
@@ -923,29 +924,29 @@ export class Store extends EventTarget {
    */
   async joinShare(link, { fetchImpl = fetch } = {}) {
     const inv = parseInviteLink(link);
-    if (!inv) throw new Error('That is not an invite link (it looks like https://…/join#code=…).');
+    if (!inv) throw new Error(t('store.notInvite'));
     let share;
     if (this.meta.token) {
-      if (inv.server === this.ownOrigin()) throw new Error('That invite is for one of your own lists.');
-      if (this.olderServer(SHARING_API)) throw new Error(OLDER_SERVER);
+      if (inv.server === this.ownOrigin()) throw new Error(t('store.ownInvite'));
+      if (this.olderServer(SHARING_API)) throw new Error(t(OLDER_SERVER));
       let r;
-      try { r = await this.ownCall('remotes/join', { link }, fetchImpl); } catch { throw new Error('No connection. Try again when you are online.'); }
-      if (r.status === 401) throw new Error('This device is no longer paired (token rejected). Pair it again from the desktop app.');
-      if (r.status === 404 && (this.meta.serverApi ?? 1) < SHARING_API) throw new Error(OLDER_SERVER);
-      if (r.status !== 200 || !validId(r.data.remote?.projectId)) throw new Error(r.data.error || `The invite did not work (${r.status}).`);
-      if (this.get('project', r.data.remote.projectId) && !this.shareOf(r.data.remote.projectId)) throw new Error(`“${r.data.remote.name}” is one of your own lists.`);
+      try { r = await this.ownCall('remotes/join', { link }, fetchImpl); } catch { throw new Error(t('common.noConnection')); }
+      if (r.status === 401) throw new Error(t('store.unpaired'));
+      if (r.status === 404 && (this.meta.serverApi ?? 1) < SHARING_API) throw new Error(t(OLDER_SERVER));
+      if (r.status !== 200 || !validId(r.data.remote?.projectId)) throw new Error(r.data.error || t('store.inviteFailed', { status: r.status }));
+      if (this.get('project', r.data.remote.projectId) && !this.shareOf(r.data.remote.projectId)) throw new Error(t('store.ownList', { name: r.data.remote.name }));
       this.setMeta({ leaving: (this.meta.leaving ?? []).filter((id) => id !== r.data.remote.id) });
       share = this.bindRemote(r.data.remote);
     } else {
       if (inv.server !== this.hereOrigin()) {
-        throw Object.assign(new Error('This app has no sync of its own, so it opens shared lists from their owner\'s address only. Open the invite link itself and choose “Use it in this browser”, or pair this app with your own sync first.'), { needsPairing: true, server: inv.server });
+        throw Object.assign(new Error(t('store.noSyncOfItsOwn', { open: t('join.browser.open') })), { needsPairing: true, server: inv.server });
       }
       let res;
       try {
         res = await fetchImpl(`${inv.server}/api/shares/claim`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ code: inv.code }) });
-      } catch { throw new Error('No connection. Try again when you are online.'); }
+      } catch { throw new Error(t('common.noConnection')); }
       const data = await res.json().catch(() => ({}));
-      if (!res.ok || typeof data.token !== 'string' || !validId(data.projectId)) throw new Error(data.error || `The invite did not work (${res.status}).`);
+      if (!res.ok || typeof data.token !== 'string' || !validId(data.projectId)) throw new Error(data.error || t('store.inviteFailed', { status: res.status }));
       const access = data.access === 'edit' ? 'edit' : 'view';
       const leaveAgain = () => fetchImpl(`${inv.server}/api/shares/leave`, { method: 'POST', headers: { authorization: `Bearer ${data.token}` } }).catch(() => {});
       const known = this.shareOf(data.projectId);
@@ -954,9 +955,9 @@ export class Store extends EventTarget {
         this.setMeta({ shares: this.shares() });
         share = known;
       } else {
-        if (known) { leaveAgain(); throw new Error(`“${data.projectName}” is already here.`); }
-        if (this.get('project', data.projectId)) { leaveAgain(); throw new Error(`“${data.projectName}” is one of your own lists.`); }
-        share = this.addBinding({ via: 'direct', server: inv.server, token: data.token, access, projectId: data.projectId, name: String(data.projectName || 'Shared list') });
+        if (known) { leaveAgain(); throw new Error(t('store.alreadyHere', { name: data.projectName })); }
+        if (this.get('project', data.projectId)) { leaveAgain(); throw new Error(t('store.ownList', { name: data.projectName })); }
+        share = this.addBinding({ via: 'direct', server: inv.server, token: data.token, access, projectId: data.projectId, name: String(data.projectName || t('share.defaultName')) });
       }
     }
     await this.save();
@@ -998,10 +999,10 @@ export class Store extends EventTarget {
     }
     const r = await this.ownCall('remotes/adopt', { server: share.server, token: share.token, name: share.name });
     if (r.status === 401 && ['revoked', 'transferred'].includes(r.data.error)) {
-      throw Object.assign(new Error('This list is not shared with you any more.'), { ended: r.data.error, convert: r.data.error === 'revoked' });
+      throw Object.assign(new Error(t('store.shareGone')), { ended: r.data.error, convert: r.data.error === 'revoked' });
     }
-    if (r.status === 401) throw Object.assign(new Error('This device is no longer paired (token rejected). Pair it again from the desktop app.'), { auth: true });
-    if (r.status !== 200 || typeof r.data.remote?.id !== 'string') throw new Error(r.data.error || `Server error ${r.status}`);
+    if (r.status === 401) throw Object.assign(new Error(t('store.unpaired')), { auth: true });
+    if (r.status !== 200 || typeof r.data.remote?.id !== 'string') throw new Error(r.data.error || t('store.serverError', { status: r.status }));
     if (share.push) fetch(`${share.server}/api/push/unsubscribe`, { method: 'POST', headers: { 'content-type': 'application/json', authorization: `Bearer ${share.token}` }, body: JSON.stringify({ endpoint: share.push.endpoint }) }).catch(() => {});
     Object.assign(share, { via: 'relay', remote: r.data.remote.id });
     delete share.token;
@@ -1015,7 +1016,7 @@ export class Store extends EventTarget {
    */
   async transferShare(shareId) {
     const share = this.shares().find((s) => s.id === shareId);
-    if (!share || share.via !== 'direct') throw new Error('Only a list used in the browser moves to an app.');
+    if (!share || share.via !== 'direct') throw new Error(t('store.browserOnlyMoves'));
     return this.shareCall(share, 'shares/transfer', {});
   }
 
@@ -1048,7 +1049,7 @@ export class Store extends EventTarget {
   shareEnded(share, { ended, convert } = {}) {
     if (!this.shares().includes(share)) return;
     if (convert) { this.endShare(share, ended); return; }
-    const name = cleanProjectName(this.get('project', share.projectId)?.fields.name.v || share.name) || 'Shared list';
+    const name = cleanProjectName(this.get('project', share.projectId)?.fields.name.v || share.name) || t('share.defaultName');
     this.dropShare(share);
     this.emit();
     if (ended === 'transferred') this.dispatchEvent(Object.assign(new Event('sharemoved'), { detail: { name } }));
@@ -1062,7 +1063,7 @@ export class Store extends EventTarget {
    */
   endShare(share, reason = 'revoked') {
     const p = this.get('project', share.projectId);
-    const name = cleanProjectName(p?.fields.name.v || share.name) || 'Shared list';
+    const name = cleanProjectName(p?.fields.name.v || share.name) || t('share.defaultName');
     const pos = this.projectPos(p ?? { id: share.projectId, fields: { pos: { v: share.pos } } });
     const tree = this.tree(share.projectId);
     const deleted = !!p?.fields.deleted.v;

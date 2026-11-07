@@ -37,6 +37,7 @@
 | `worker/public/` | The PWA: `index.html`, `js/app.js` (UI), `js/store.js` (data + sync, one session per server), `js/model.js`, `js/dates.js`, `js/keys.js`, `js/markdown.js` (list format, shared with the Linux/macOS app), `js/zip.js` (export / import), `sw.js`; `join.html` + `js/join.js`, the page a shared list's invite link opens. |
 | `local/` | The Linux/macOS app (Node.js 22.13+, no dependencies): `saqme.mjs` (commands, the app process), `server.mjs` (local server), `d1.mjs` (D1 API on `node:sqlite`), `engine.mjs` (lists folder engine, a port of `sync-core.ps1`), `shares.mjs` (lists shared with this computer), `desktop.mjs` (notifications, app window), `update.mjs` (the updater's rules, downloads and install layout; also run by `setup.sh`), `updater.mjs` (the app's side: checks, *Update now*, idle updates), `paths.mjs`, `icns.mjs`. |
 | `worker/migrations/` | D1 schema (the Worker applies it itself, from `worker/src/migrations.js`). |
+| `worker/public/js/i18n.js`, `js/lang/*.js`, `desktop/i18n.ps1`, `worker/src/texts.js` | The apps' words in English, Georgian, French, Spanish and German: one file per language, shared by every app. See [Languages](#languages). |
 | `scripts/` | `setup.ps1` (Windows), `setup.sh` (Linux, macOS, WSL), `cloud-setup.mjs` (provisioning; `--update` deploys code only, keeping the keys), `build-release.mjs` (the release assets, the Worker's bundle among them), dev helpers. |
 | `shared/fixtures/` | Input → expected output for every rule that exists in both languages; see below. |
 | `.github/workflows/pages.yml` | Publishes `worker/public` as a static site (GitHub Pages) for using the phone app without a Cloudflare account. |
@@ -244,6 +245,31 @@ Decisions the fixtures pin down, where the two languages behave differently by d
 To run only these: `cd worker && npx vitest run test/node/shared-fixtures.test.js` and
 `powershell -NoProfile -ExecutionPolicy Bypass -File desktop\tests\shared-fixtures.tests.ps1`. When they
 disagree, decide which side is right, fix the other one and keep the case in the fixture.
+
+## Languages
+
+Every word the apps show comes from one file per language, `worker/public/js/lang/<code>.js` (`en`, `ka`, `fr`, `es`,
+`de`): a JavaScript module whose body is plain JSON, keyed `area.what` (`{name}` is filled in, `key.one` /
+`key.other` are a count's forms, `<b>…</b>` is bold). English is the fallback for a key a language lacks.
+
+| Who | Reads them with | Picks the language |
+|---|---|---|
+| Phone app, Linux/macOS window, the invite page (`join.html`) | `js/i18n.js` (`t`, `tn`, `rich`; English is built in, the others load on first use and are in the service worker's cache) | Settings > General > Language, kept in the browser (`saqme.lang`); *System* follows the browser's languages |
+| Windows app | `desktop/i18n.ps1` (`T`, `TN`), the same files, installed as `lang\` | Settings > General > Language (`.widget-settings`); *System* follows the Windows display language |
+| The Worker (reminders, the daily summary, the test notification) | `worker/src/texts.js`, all five built in | your reminders: the synced setting `lang`, which a phone with notifications on (or the Linux/macOS window) sets to its language when that changes; a shared list's browser reminders: the language its subscription was made in (`share_push.lang`, migration `0005_lang.sql`) |
+
+The language is a device's own choice, like the theme; only the one for notifications is synced. Dates use
+`Intl` (`.NET` culture data on Windows) for weekday and month names, or the language file's `date.wdShort` …
+`date.monLong` where the browser has no data for the language; English keeps the app's own forms ("Fri",
+"17 Oct"), which `shared/fixtures/dates.json` pins down for both sides. Messages made elsewhere (the Worker's errors,
+the sync loop's and the updater's) stay English at their source, for logs and the command line; the apps translate
+the ones they know when they show them. Deadlines are still typed in the English
+forms (`fri 14:00`, `25 oct`) or as numbers (`25.10`, `+3`, `14:00`), which work in every language.
+
+Never translated: tasks, notes and list names, the list format, the AI connector's tools and the instructions for an
+AI app (written for the AI), command-line and log output. `worker/test/node/i18n.test.js` checks that every language
+has exactly English's keys, placeholders and bold parts, that every key the code uses exists, and that the main UI
+files have no English left in them.
 
 ## Security notes
 

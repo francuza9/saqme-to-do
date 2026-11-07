@@ -2,6 +2,33 @@
 
 ## Unreleased
 
+**Five languages: English, Georgian (ქართული), French, Spanish and German.** Every app speaks them: the phone app,
+the Windows app, the Linux/macOS window, the invite page of a shared list, and the notifications (reminders, the daily
+summary, the test notification). Each app follows the language of its device on first start (English when it is none
+of these) and has a **Language** choice in Settings › General that overrides it; switching takes effect at once,
+nothing to reinstall. Weekdays, months and "Today" / "Overdue" / "Next 3 days" are in that language too (from the
+system's own names: Intl, and .NET's culture data on Windows). Never translated: your tasks, notes and list names, the
+list format, the AI connector and the instructions for an AI app, command-line output and logs.
+
+- Notifications from your sync service come in the language of your phone: it saves it as a synced setting (`lang`)
+  when notifications are on and its language changes; a shared list used in the browser gets reminders in the
+  language of that browser (stored with its subscription, migration `0005_lang.sql`). The sync service must be
+  updated for this; until then reminders stay English.
+- Deadlines are still typed as before (`fri 14:00`, `25 oct`, `+3`, `25.10`, `14:00`); the hints show the forms that
+  work in every language.
+- Messages that come from elsewhere are shown in the app's language where the app knows them: the sync service's
+  errors (a wrong pairing code, a revoked share), and on Windows and in the Linux/macOS window the sync, update and
+  Claude Desktop messages. The command line and the logs stay English.
+- Georgian text renders on Windows also without the bundled font (Sylfaen is now in the fallback); a browser without
+  Georgian date data (some WebViews) gets the weekday and month names from the language file. A Settings row keeps
+  its name whole and shortens its value instead (the Georgian and German names run long).
+- The Windows self-check (also run by setup on every install and update) stays in English whatever Windows' language,
+  and at its end draws every view in each language; the browser checks run in English.
+- For developers: one file per language, `worker/public/js/lang/<code>.js` (plain JSON inside, so Windows PowerShell
+  reads the same files), `js/i18n.js` and `desktop/i18n.ps1`; `worker/test/node/i18n.test.js` checks that every
+  language has exactly English's keys, placeholders and bold parts, that every key the code uses exists, and that no
+  English is left in the main UI files ([CONTRIBUTING.md](CONTRIBUTING.md#words-and-languages)).
+
 **A task you close on the phone waits for its strike-through.** Marking a task done, failed or abandoned in the
 phone app keeps its row in place while the line draws and for a beat after, then the row fades out into Completed;
 change it back meanwhile and it never moves. With "reduce motion" on, or when the change comes from sync, it moves

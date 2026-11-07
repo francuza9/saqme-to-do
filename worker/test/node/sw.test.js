@@ -18,6 +18,10 @@ describe('service worker', () => {
     for (const f of seen) expect(shell.has(f), `${f} in sw.js`).toBe(true);
     for (const [, href] of read('index.html').matchAll(/(?:href|src)="([^"#:]+\.(?:css|js))"/g)) expect(shell.has(href.replace(/^\.\//, '')), `${href} in sw.js`).toBe(true);
     expect(readdirSync(new URL('js/', pub)).filter((f) => f.endsWith('.js')).every((f) => shell.has(`js/${f}`))).toBe(true);
+    // the languages (js/i18n.js loads the one in use when the app starts: offline too)
+    const langs = readdirSync(new URL('js/lang/', pub)).filter((f) => f.endsWith('.js'));
+    expect(langs.length).toBe(5);
+    for (const f of langs) expect(shell.has(`js/lang/${f}`), `js/lang/${f} in sw.js`).toBe(true);
   });
 });
 

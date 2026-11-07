@@ -23,6 +23,7 @@
 // moved (and does not take it for revoked).
 import { cleanText } from '../public/js/markdown.js';
 import { normalizeTime, isValidTimeZone } from './merge.js';
+import { LANGS } from '../public/js/i18n.js';
 
 export const INVITE_TTL = 24 * 3600_000;
 export const MAX_SHARES_PER_PROJECT = 50;
@@ -206,17 +207,19 @@ export async function markRelayed(env, share, now = Date.now()) {
 
 // ---------------------------------------------------------------- reminders for someone without a Worker
 /**
- * POST /api/push/subscribe with a share's key: { subscription, tz, notifyAt } -> reminders of that one list, in
- * the person's own time zone and at their own summary time. The caller checked the endpoint (isPushService).
+ * POST /api/push/subscribe with a share's key: { subscription, tz, notifyAt, lang } -> reminders of that one list,
+ * in the person's own time zone, at their own summary time and in their app's language. The caller checked the
+ * endpoint (isPushService).
  */
 export async function subscribeSharePush(env, share, body, now = Date.now()) {
   const s = body.subscription;
   const tz = isValidTimeZone(body.tz) ? body.tz : 'UTC';
   const notifyAt = normalizeTime(body.notifyAt) ?? '10:00';
+  const lang = LANGS.includes(body.lang) ? body.lang : '';
   await env.DB.batch([
-    env.DB.prepare(`INSERT INTO share_push (share_id, endpoint, p256dh, auth, tz, notify_at, created_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
+    env.DB.prepare(`INSERT INTO share_push (share_id, endpoint, p256dh, auth, tz, notify_at, lang, created_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)
       ON CONFLICT(share_id, endpoint) DO UPDATE SET p256dh = excluded.p256dh, auth = excluded.auth, tz = excluded.tz,
-        notify_at = excluded.notify_at, failures = 0`).bind(share.id, s.endpoint, s.keys.p256dh, s.keys.auth, tz, notifyAt, now),
+        notify_at = excluded.notify_at, lang = excluded.lang, failures = 0`).bind(share.id, s.endpoint, s.keys.p256dh, s.keys.auth, tz, notifyAt, lang, now),
     // at most 10 browsers per share (a key cannot fill the table)
     env.DB.prepare('DELETE FROM share_push WHERE share_id = ?1 AND rowid NOT IN (SELECT rowid FROM share_push WHERE share_id = ?1 ORDER BY created_at DESC LIMIT 10)').bind(share.id),
   ]);

@@ -49,6 +49,18 @@ try {
 
 $dir = Split-Path -Parent $MyInvocation.MyCommand.Path      # app files (scripts, assets)
 . (Join-Path $dir 'sync-core.ps1')
+# The app's words (i18n.ps1: T, TN, from the phone app's lang files; this file has none of its own). The language is
+# the one chosen in Settings > General, '' = the system's: Windows' display language, or SAQME_LANG when set (tests,
+# renders). Until the settings are read (below), the system's.
+. (Join-Path $dir 'i18n.ps1')
+function Get-SystemLanguage { return (Get-PickedLanguage '' $(if ($env:SAQME_LANG) { $env:SAQME_LANG } else { [Globalization.CultureInfo]::CurrentUICulture.Name })) }
+function Set-WidgetLanguage([string]$choice) {
+  # (the self-check, which setup also runs, finds controls by their English names whatever Windows' language; at its
+  # end it draws every view in each language)
+  if ($SmokeTest) { return (Set-AppLanguage 'en') }
+  return (Set-AppLanguage $(if ($script:Langs -ccontains $choice) { $choice } else { Get-SystemLanguage }))
+}
+[void](Set-WidgetLanguage '')
 # the data folder; the self-check never touches real lists (a temp folder without -DataDir, see Resolve-WidgetDataDir)
 $where = Resolve-WidgetDataDir $DataDir -SmokeTest:$SmokeTest $dir $env:SAQME_DATA_DIR ([Environment]::GetFolderPath('ApplicationData')) ([IO.Path]::GetTempPath())
 if ($where.Refused) { Write-Output "SMOKE FAIL: $($where.Refused)"; exit 2 }
@@ -69,8 +81,8 @@ if (-not $SmokeTest -and ((Test-InAppData $DataDir) -or (Test-InAppData $dir))) 
     }
     $why = "Saqme was started from inside another app ($redirect). Windows would keep its changes to your lists in that app's private copy of AppData instead of your real lists folder, so it does not start this way.`n`nStart Saqme from the Start menu."
     Write-Output "REFUSED: $why"
-    # (a dialog for a person; a script that reads this output gets the line above instead)
-    if (-not [Console]::IsOutputRedirected) { try { [void][System.Windows.MessageBox]::Show($why, 'Saqme To Do', 'OK', 'Warning') } catch {} }
+    # (a dialog for a person, in their language; a script that reads this output gets the line above instead)
+    if (-not [Console]::IsOutputRedirected) { try { [void][System.Windows.MessageBox]::Show((T 'win.start.refused' @{ app = $redirect }), 'Saqme To Do', 'OK', 'Warning') } catch {} }
     exit 3
   }
 }
@@ -134,7 +146,7 @@ if (-not (Get-ChildItem -LiteralPath $listsDir -Filter *.md -File)) {
 [void](New-ListsBackup $DataDir 'start')
 
 # ---------------------------------------------------------------- settings + open/closed state
-$script:cfg = @{ showCompleted = '0'; active = ''; width = ''; height = ''; theme = 'auto'; notifyAt = '10:00'; autoUpdate = '1'; updatedSeen = '' }
+$script:cfg = @{ showCompleted = '0'; active = ''; width = ''; height = ''; theme = 'auto'; notifyAt = '10:00'; autoUpdate = '1'; updatedSeen = ''; lang = '' }
 foreach ($l in (Read-Lines $cfgFile)) { if ($l -match '^(\w+)=(.*)$') { $script:cfg[$matches[1]] = $matches[2] } }
 function Save-Settings {
   $t = ($script:cfg.GetEnumerator() | ForEach-Object { "$($_.Key)=$($_.Value)" }) -join "`n"
@@ -156,6 +168,22 @@ function Save-State {
 # $Tokens and $Themes come from tokens.ps1, generated from design/tokens.json (docs/design.md)
 . (Join-Path $dir 'tokens.ps1')
 . (Join-Path $dir 'rules.ps1')
+# the language chosen in Settings > General ('' = the system's; Set-Language changes it while the app runs)
+if (-not ($script:Langs -ccontains $script:cfg.lang)) { $script:cfg.lang = '' }
+[void](Set-WidgetLanguage $script:cfg.lang)
+# Words that tables and controls built once take (Settings' page names, the shortcuts, the header's buttons, the tray
+# menu, ...): each block that sets them is registered here and runs at once, and again when the language changes
+# (Update-Words). Everything else asks T when it is drawn.
+$script:wordBlocks = New-Object System.Collections.ArrayList
+function Register-Words([scriptblock]$block) { [void]$script:wordBlocks.Add($block); & $block }
+function Update-Words { foreach ($b in @($script:wordBlocks)) { & $b } }
+# a date or time for people: English as the app always wrote it (the invariant culture's English names, as Due-Label),
+# the other languages in their own culture (German puts a dot after the day: "17. Okt")
+function Format-UiDate([datetime]$d, [string]$fmt) {
+  if ($script:Lang -ceq 'en' -or -not $script:LangCulture) { return $d.ToString($fmt, $CI) }
+  if ($script:Lang -ceq 'de') { $fmt = $fmt.Replace('d MMM', 'd. MMM') }
+  return $d.ToString($fmt, $script:LangCulture)
+}
 . (Join-Path $dir 'claude-desktop.ps1')
 $TypeSize = @{}; foreach ($k in $Tokens.Type.Keys) { $TypeSize[$k] = [double]$Tokens.Type[$k].Size }
 function Resolve-Theme([string]$pref) {
@@ -385,14 +413,15 @@ function Set-Palette([string]$name) {
   $script:themeName = $name
   $script:T = $Themes[$name]
   $T = $script:T
+  # (Key: the status' name is T "status.<Key>", the phone app's model.js STATUSES[].key; Update-Words renames them)
   $script:Statuses = @(
-    [pscustomobject]@{ Mark=' '; Name='To do';             Chip='#00000000';    Edge=$T.S_todo_edge;  Text=$T.S_todo_text;  Glyph='';           Strike=$false; Half=$false; Italic=$false }
-    [pscustomobject]@{ Mark='/'; Name='In progress';       Chip=$T.S_prog_chip; Edge=$T.S_prog_chip;  Text=$T.S_prog_text;  Glyph='';           Strike=$false; Half=$true;  Italic=$false }
-    [pscustomobject]@{ Mark='x'; Name='Done';              Chip=$T.S_done_chip; Edge=$T.S_done_chip;  Text=$T.S_done_text;  Glyph=(G 0xE73E); GlyphInk=$T.S_done_glyph;  Strike=$true;  Half=$false; Italic=$false }
-    [pscustomobject]@{ Mark='>'; Name='Postponed';         Chip=$T.S_post_chip; Edge=$T.S_post_chip;  Text=$T.S_post_text;  Glyph=(G 0xE823); GlyphInk=$T.S_post_glyph;  Strike=$false; Half=$false; Italic=$true  }
-    [pscustomobject]@{ Mark='!'; Name='Blocked / waiting'; Chip=$T.S_block_chip; Edge=$T.S_block_chip; Text=$T.S_block_text; Glyph=(G 0xE8C9); GlyphInk=$T.S_block_glyph; Strike=$false; Half=$false; Italic=$false }
-    [pscustomobject]@{ Mark='-'; Name='Failed / rejected'; Chip=$T.S_rej_chip;  Edge=$T.S_rej_chip;   Text=$T.S_rej_text;   Glyph=(G 0xE711); GlyphInk=$T.S_rej_glyph;   Strike=$true;  Half=$false; Italic=$false }
-    [pscustomobject]@{ Mark='~'; Name='Abandoned';         Chip=$T.S_aband_chip; Edge=$T.S_aband_chip; Text=$T.S_aband_text; Glyph=(G 0xE738); GlyphInk=$T.S_aband_glyph; Strike=$true;  Half=$false; Italic=$true  }
+    [pscustomobject]@{ Mark=' '; Key='todo';  Name=(T 'status.todo');  Chip='#00000000';    Edge=$T.S_todo_edge;  Text=$T.S_todo_text;  Glyph='';           Strike=$false; Half=$false; Italic=$false }
+    [pscustomobject]@{ Mark='/'; Key='prog';  Name=(T 'status.prog');  Chip=$T.S_prog_chip; Edge=$T.S_prog_chip;  Text=$T.S_prog_text;  Glyph='';           Strike=$false; Half=$true;  Italic=$false }
+    [pscustomobject]@{ Mark='x'; Key='done';  Name=(T 'status.done');  Chip=$T.S_done_chip; Edge=$T.S_done_chip;  Text=$T.S_done_text;  Glyph=(G 0xE73E); GlyphInk=$T.S_done_glyph;  Strike=$true;  Half=$false; Italic=$false }
+    [pscustomobject]@{ Mark='>'; Key='post';  Name=(T 'status.post');  Chip=$T.S_post_chip; Edge=$T.S_post_chip;  Text=$T.S_post_text;  Glyph=(G 0xE823); GlyphInk=$T.S_post_glyph;  Strike=$false; Half=$false; Italic=$true  }
+    [pscustomobject]@{ Mark='!'; Key='block'; Name=(T 'status.block'); Chip=$T.S_block_chip; Edge=$T.S_block_chip; Text=$T.S_block_text; Glyph=(G 0xE8C9); GlyphInk=$T.S_block_glyph; Strike=$false; Half=$false; Italic=$false }
+    [pscustomobject]@{ Mark='-'; Key='rej';   Name=(T 'status.rej');   Chip=$T.S_rej_chip;  Edge=$T.S_rej_chip;   Text=$T.S_rej_text;   Glyph=(G 0xE711); GlyphInk=$T.S_rej_glyph;   Strike=$true;  Half=$false; Italic=$false }
+    [pscustomobject]@{ Mark='~'; Key='aband'; Name=(T 'status.aband'); Chip=$T.S_aband_chip; Edge=$T.S_aband_chip; Text=$T.S_aband_text; Glyph=(G 0xE738); GlyphInk=$T.S_aband_glyph; Strike=$true;  Half=$false; Italic=$true  }
   )
 
   foreach ($pair in @(
@@ -496,14 +525,17 @@ function Update-ReadOnly {
   $script:readOnly = [bool]($b -and [string]$b['access'] -ne 'edit')
 }
 function Get-ShareHost($b) { try { return ([Uri][string]$b['server']).Host } catch { return [string]$b['server'] } }
-$script:AccessText = @{
-  edit = @('Can edit', 'They can add, change, check off and delete tasks in this list.')
-  view = @('Can view', 'They see the list and its updates, but can''t change anything.')
+Register-Words {
+  # @(label, what it means, the label inside a sentence: "from nuca.workers.dev, can edit")
+  $script:AccessText = @{
+    edit = @((T 'win.share.canEdit'), (T 'win.share.canEditHelp'), (T 'win.share.canEditInline'))
+    view = @((T 'win.share.canView'), (T 'win.share.canViewHelp'), (T 'win.share.canViewInline'))
+  }
+  $script:ShareNeedsSync = T 'win.share.needsSync'
+  $script:WorkerTooOld = T 'win.share.workerTooOld'
 }
-$script:ShareNeedsSync = 'Sharing needs sync with your own Cloudflare account (Settings > Sync & sharing): a shared list lives on your sync service, where the people you share it with sync it from.'
 # a Worker below this API has no shared lists (worker/src/version.js SHARING_API; the phone app's store.js says the same)
 $script:SharingApi = 2
-$script:WorkerTooOld = 'Your sync service runs an older version, without shared lists yet. It is updated together with this app (Settings > Updates); then try again.'
 # from this API on the Worker can update itself, given a token (worker/src/version.js SELF_UPDATE_API; store.js too)
 $script:SelfUpdateApi = 4
 # from this API on the Worker has the AI connector (worker/src/version.js CONNECTOR_API; store.js too)
@@ -593,7 +625,7 @@ function Defer-Save([string]$why = '') {
   $script:saveFailed = $true
   if (-not $script:saveWarned -and ((Get-Date) - $script:saveFailedSince).TotalSeconds -ge 5) {
     $script:saveWarned = $true
-    Show-Toast 'Saqme To Do' "'$($script:proj)' is busy in another program$(if ($why) { " ($why)" }). Your changes are kept and saved as soon as it is free." $script:proj
+    Show-Toast 'Saqme To Do' $(if ($why) { T 'win.toast.busyWhy' @{ list = $script:proj; why = $why } } else { T 'win.toast.busy' @{ list = $script:proj } }) $script:proj
   }
 }
 
@@ -605,7 +637,7 @@ function Save-Recovery {
     if (-not (Test-Path -LiteralPath $dir)) { [void](New-Item -ItemType Directory -Path $dir) }
     $name = '{0}-{1}.md' -f $script:proj, (Get-Date -Format 'yyyyMMdd-HHmmss')
     Write-TextFileAtomic (Join-Path $dir $name) (ConvertTo-MarkdownText $script:items 0 "`n")
-    Show-Toast 'Saqme To Do' "'$($script:proj)' could not be saved. Your changes are in lists\.recovery\$name." $script:proj
+    Show-Toast 'Saqme To Do' (T 'win.toast.recovered' @{ list = $script:proj; file = "lists\.recovery\$name" }) $script:proj
   } catch {}
   $script:saveFailed = $false; $script:saveWarned = $false
 }
@@ -617,7 +649,7 @@ function Save-Items {
     # things are not there; this catches anything that slips through)
     $script:allowRemove.Clear(); $script:undoExtra = $null
     [void](Use-Loaded (Load-Items)); Render
-    Show-Notice "'$($script:proj)' is view-only: only its owner can change it."
+    Show-Notice (T 'win.notice.viewOnly' @{ list = $script:proj })
     return
   }
   $text = ConvertTo-MarkdownText $script:items 0 $(if ($script:eol) { $script:eol } else { "`n" })
@@ -674,11 +706,10 @@ $script:refusedSaves = 0
 # for): nothing is written, the list is shown as it is on disk, and the user is told.
 function Refuse-Save($lost) {
   $script:refusedSaves++
-  $names = @((Read-Items $script:loadedText) | Where-Object { $_.Kind -eq 'task' -and $lost -contains $_.Id } | ForEach-Object { "'$($_.Text)'" })
+  $names = @((Read-Items $script:loadedText) | Where-Object { $_.Kind -eq 'task' -and $lost -contains $_.Id } | ForEach-Object { [string]$_.Text })
   $script:allowRemove.Clear(); $script:undoExtra = $null
   [void](Use-Loaded (Load-Items)); Render
-  $what = $(if ($names.Count -eq 1) { $names[0] } elseif ($names.Count) { "$($names.Count) tasks" } else { 'tasks' })
-  Show-Notice "Not saved: that change would have removed $what. The list is as it was."
+  Show-Notice $(if ($names.Count -eq 1) { T 'win.notice.refusedOne' @{ task = $names[0] } } elseif ($names.Count) { TN 'win.notice.refusedN' $names.Count } else { T 'win.notice.refused' })
 }
 # a menu or popup holds references to task objects: never swap the list under it
 function Test-PopupOpen { return ($null -ne $script:openPopup -and $script:openPopup.IsOpen) }
@@ -786,15 +817,16 @@ function New-DuePill($it) {
   $d = [datetime]::ParseExact($it.Due, 'yyyy-MM-dd', $CI)
   $tone = Get-DueTone $it.Due $it.DueTime ((Rank $it.Mark) -eq 2)
   $over = ($tone -eq 'over')
-  $label = (Due-Label $d) + $(if ($it.DueTime) { ' ' + $it.DueTime } else { '' })
+  # (the label in the app's language, Get-DueText: i18n.ps1; English is rules.ps1's Due-Label)
+  $label = (Get-DueText $d) + $(if ($it.DueTime) { ' ' + $it.DueTime } else { '' })
   $late = $over -and (Rank $it.Mark) -ne 2
-  $b = New-Control 'button' ("Deadline: $label" + $(if ($late) { ', overdue' } else { '' })) 'Change the deadline' { param($s, $e) Show-DuePopup $s.Tag $s }
+  $b = New-Control 'button' $(if ($late) { T 'win.a11y.deadlineLate' @{ date = $label } } else { T 'win.a11y.deadline' @{ date = $label } }) (T 'win.a11y.changeDeadline') { param($s, $e) Show-DuePopup $s.Tag $s }
   [System.Windows.Input.KeyboardNavigation]::SetIsTabStop($b, $false)   # in the list, Ctrl+D does this
   $b.CornerRadius = New-Object System.Windows.CornerRadius($Tokens.Radius.control); $b.Padding = '0,1,0,1'; $b.Margin = '10,0,0,0'
   $b.Cursor = 'Hand'; $b.VerticalAlignment = 'Center'; $b.Tag = $it
-  $b.ToolTip = 'Deadline: ' + $d.ToString('dddd, d MMMM yyyy', $CI) + $(if ($it.DueTime) { ', ' + $it.DueTime } else { '' })
+  $b.ToolTip = T 'win.a11y.deadline' @{ date = (Get-DueLongText $d $it.DueTime) }
   $t = New-Object System.Windows.Controls.TextBlock
-  $t.Text = (Due-Label $d) + $(if ($it.DueTime) { ' ' + $it.DueTime } else { '' }); $t.FontFamily = $UI; $t.FontSize = $TypeSize.meta
+  $t.Text = $label; $t.FontFamily = $UI; $t.FontSize = $TypeSize.meta
   Set-Tabular $t
   $b.Background = $Clear; $t.Foreground = $Faint
   if ($tone -eq 'over' -or $tone -eq 'soon') {
@@ -815,17 +847,19 @@ function Toggle-RowOpen($chev) {
 function Row-Summary($node, $st) {
   $it = $node.Item
   $parts = New-Object System.Collections.ArrayList
-  [void]$parts.Add($(if ($it.Text) { $it.Text } else { 'Untitled' })); [void]$parts.Add($st.Name)
+  [void]$parts.Add($(if ($it.Text) { $it.Text } else { T 'win.a11y.untitled' })); [void]$parts.Add($st.Name)
   if ($it.Due) {
     try {
       $d = [datetime]::ParseExact($it.Due, 'yyyy-MM-dd', $CI)
       $late = (Get-DueTone $it.Due $it.DueTime ((Rank $it.Mark) -eq 2)) -eq 'over'
-      [void]$parts.Add('deadline ' + $d.ToString('dddd d MMMM', $CI) + $(if ($it.DueTime) { ' ' + $it.DueTime } else { '' }) + $(if ($late) { ', overdue' } else { '' }))
+      # (English: "Friday 17 October"; the other languages their culture's long date)
+      $when = $(if ($script:Lang -ceq 'en') { Format-UiDate $d 'dddd d MMMM' } else { Get-DueLongText $d }) + $(if ($it.DueTime) { ' ' + $it.DueTime } else { '' })
+      [void]$parts.Add($(if ($late) { T 'win.a11y.rowDueLate' @{ date = $when } } else { T 'win.a11y.rowDue' @{ date = $when } }))
     } catch {}
   }
-  if ($node.Kids.Count) { $dn = @($node.Kids | Where-Object { (Rank $_.Item.Mark) -eq 2 }).Count; [void]$parts.Add("$dn of $($node.Kids.Count) subtasks closed") }
-  if ($it.Notes) { [void]$parts.Add('has notes') }
-  return ($parts -join ', ')
+  if ($node.Kids.Count) { $dn = @($node.Kids | Where-Object { (Rank $_.Item.Mark) -eq 2 }).Count; [void]$parts.Add((TN 'win.a11y.subtasksClosed' $node.Kids.Count @{ done = $dn })) }
+  if ($it.Notes) { [void]$parts.Add((T 'win.a11y.hasNotes')) }
+  return ($parts -join (T 'win.a11y.sep'))
 }
 
 # (For Today lists tasks of every level flat, at the left edge)
@@ -836,7 +870,7 @@ function New-Row($node) {
   $ro = $script:readOnly -or [bool]$node.ReadOnly   # a view-only shared list: read, never changed (no editing, menus, drag or hover actions)
   $hasKids = $node.Kids.Count -gt 0
   $open = Is-Open $node
-  $row = New-Control 'listitem' (Row-Summary $node $st) 'Enter edits, Space marks it done, Ctrl+M for more' { param($s, $e) Set-Sel $s.Tag -Focus }
+  $row = New-Control 'listitem' (Row-Summary $node $st) (T 'win.a11y.rowHelp') { param($s, $e) Set-Sel $s.Tag -Focus }
   if ($script:HasA11y) { $row.IsSelected = ($it -eq $script:sel) }
   [System.Windows.Input.KeyboardNavigation]::SetIsTabStop($row, ($it -eq $script:sel))   # one Tab stop for the list (the selected task)
   $row.Add_GotKeyboardFocus({ param($s, $e) if ($e.NewFocus -eq $s -and $script:sel -ne $s.Tag) { Set-Sel $s.Tag } })
@@ -863,10 +897,10 @@ function New-Row($node) {
   $chevGlyph = New-Object System.Windows.Controls.TextBlock
   $chevGlyph.FontFamily = $MDL2; $chevGlyph.FontSize = 8; $chevGlyph.Foreground = $Faint; $chevGlyph.TextAlignment = 'Center'
   if ($hasKids -or $it.Notes) {
-    $chev = New-Control 'button' $(if ($open) { 'Collapse subtasks and notes' } else { 'Expand subtasks and notes' }) '' { param($s, $e) Toggle-RowOpen $s }
+    $chev = New-Control 'button' $(if ($open) { T 'win.a11y.collapseRow' } else { T 'win.a11y.expandRow' }) '' { param($s, $e) Toggle-RowOpen $s }
     [System.Windows.Input.KeyboardNavigation]::SetIsTabStop($chev, $false)   # Right / Left on the row
     $chevGlyph.Text = $(if ($open) { G 0xE70D } else { G 0xE76C })
-    $chev.Cursor = 'Hand'; $chev.ToolTip = $(if ($open) { 'Collapse' } else { 'Expand' })
+    $chev.Cursor = 'Hand'; $chev.ToolTip = $(if ($open) { T 'win.row.collapse' } else { T 'win.row.expand' })
     $chev.Tag = @{ Item = $it; Open = $open }
     $chev.Add_MouseLeftButtonUp({ param($s, $e) $e.Handled = $true; Toggle-RowOpen $s })
     $chev.Child = $chevGlyph; $chev.CornerRadius = New-Object System.Windows.CornerRadius($Tokens.Radius.chip); Set-Press $chev 0.9 $GroupPress
@@ -875,7 +909,7 @@ function New-Row($node) {
   [System.Windows.Controls.Grid]::SetColumn($chev, 1); [void]$g.Children.Add($chev)
 
   # 1: status chip
-  $chip = New-Control 'button' "Status: $($st.Name)" 'Change the status' { param($s, $e) Show-StatusMenu $s }
+  $chip = New-Control 'button' (T 'win.a11y.status' @{ status = $st.Name }) (T 'win.a11y.changeStatus') { param($s, $e) Show-StatusMenu $s }
   [System.Windows.Input.KeyboardNavigation]::SetIsTabStop($chip, $false)   # Ctrl+M > Change status on the row
   $chip.Child = (New-Chip $st 17); $chip.Background = $Clear
   $chip.Margin = "0,2,$($Tokens.Row.chipGap),0"; $chip.VerticalAlignment = 'Top'; $chip.Cursor = $(if ($ro) { 'Arrow' } else { 'Hand' })
@@ -904,7 +938,7 @@ function New-Row($node) {
     $ln = New-Object System.Windows.Controls.TextBlock
     $ln.Text = $node.List; $ln.FontFamily = $UI; $ln.FontSize = $TypeSize.meta; $ln.Foreground = $Faint; $ln.Margin = '10,0,0,0'
     $ln.MaxWidth = 130; $ln.TextTrimming = 'CharacterEllipsis'; $ln.TextWrapping = 'NoWrap'; $ln.VerticalAlignment = 'Center'; $ln.Cursor = 'Hand'
-    $ln.ToolTip = "Show in $($node.List)"; $ln.Tag = $it; Set-Name $ln "In $($node.List). Click to show the task there"
+    $ln.ToolTip = T 'win.row.showIn' @{ list = $node.List }; $ln.Tag = $it; Set-Name $ln (T 'win.a11y.inList' @{ list = $node.List })
     $ln.Add_MouseEnter({ param($s, $e) $s.Foreground = $Accent; $s.TextDecorations = [System.Windows.TextDecorations]::Underline })
     $ln.Add_MouseLeave({ param($s, $e) $s.Foreground = $Faint; $s.TextDecorations = $null })
     $ln.Add_MouseLeftButtonUp({ param($s, $e) $e.Handled = $true; Show-TaskInList $s.Tag })
@@ -913,15 +947,15 @@ function New-Row($node) {
   if ($it.Notes -and -not $open) {
     $n = New-Object System.Windows.Controls.TextBlock
     $n.Text = G 0xE71B; $n.FontFamily = $MDL2; $n.FontSize = 11; $n.Foreground = $Faint; $n.Margin = '10,1,0,0'
-    $n.ToolTip = 'Has notes or links'; $n.VerticalAlignment = 'Center'; Set-Name $n 'Has notes or links'
+    $n.ToolTip = T 'win.row.hasNotes'; $n.VerticalAlignment = 'Center'; Set-Name $n (T 'win.row.hasNotes')
     [void]$meta.Children.Add($n)
   }
   if ($hasKids) {
     $dn = @($node.Kids | Where-Object { (Rank $_.Item.Mark) -eq 2 }).Count
     $p = New-Object System.Windows.Controls.TextBlock
     $p.Text = "$dn/$($node.Kids.Count)"; $p.FontFamily = $UI; $p.FontSize = $TypeSize.meta; $p.Foreground = $Faint; $p.Margin = '10,0,0,0'
-    $p.ToolTip = "$dn of $($node.Kids.Count) subtasks closed"; $p.VerticalAlignment = 'Center'
-    Set-Name $p "$dn of $($node.Kids.Count) subtasks closed"
+    $p.ToolTip = TN 'win.row.subtasksClosed' $node.Kids.Count @{ done = $dn }; $p.VerticalAlignment = 'Center'
+    Set-Name $p $p.ToolTip
     Set-Tabular $p
     [void]$meta.Children.Add($p)
   }
@@ -938,13 +972,13 @@ function New-Row($node) {
   $acts.Orientation = 'Horizontal'; $acts.Visibility = 'Collapsed'; $acts.Opacity = 0.85; $acts.VerticalAlignment = 'Top'
   $acts.HorizontalAlignment = 'Right'; $acts.Background = $GroupHover; $acts.Margin = '6,1,0,0'
   # (shown on mouse hover; the same actions are in the row menu, Ctrl+M, for keyboards and screen readers)
-  $cal = New-IconButton 0xE787 'Deadline' { param($s, $e) Show-DuePopup $s.Tag $s }; $cal.Tag = $it
+  $cal = New-IconButton 0xE787 (T 'win.row.deadline') { param($s, $e) Show-DuePopup $s.Tag $s }; $cal.Tag = $it
   $cal.Add_MouseLeftButtonUp({ param($s, $e) $e.Handled = $true; Show-DuePopup $s.Tag $s })
-  $nt = New-IconButton 0xE70B 'Notes / links' { param($s, $e) Begin-Notes $s.Tag }; $nt.Tag = $it
+  $nt = New-IconButton 0xE70B (T 'win.row.notes') { param($s, $e) Begin-Notes $s.Tag }; $nt.Tag = $it
   $nt.Add_MouseLeftButtonUp({ param($s, $e) $e.Handled = $true; Begin-Notes $s.Tag })
-  $add = New-IconButton 0xE710 'Add subtask' { param($s, $e) Add-Subtask $s.Tag }; $add.Tag = $it
+  $add = New-IconButton 0xE710 (T 'win.row.addSubtask') { param($s, $e) Add-Subtask $s.Tag }; $add.Tag = $it
   $add.Add_MouseLeftButtonUp({ param($s, $e) $e.Handled = $true; Add-Subtask $s.Tag })
-  $del = New-IconButton 0xE711 'Delete (with subtasks)' { param($s, $e) Delete-Task $s.Tag }; $del.Tag = $it
+  $del = New-IconButton 0xE711 (T 'win.row.delete') { param($s, $e) Delete-Task $s.Tag }; $del.Tag = $it
   $del.Add_MouseLeftButtonUp({ param($s, $e) $e.Handled = $true; Delete-Task $s.Tag })
   foreach ($x in @($cal, $nt, $add, $del)) { [System.Windows.Input.KeyboardNavigation]::SetIsTabStop($x, $false) }
   if (-not $ro) { foreach ($x in @($cal, $nt, $add, $del)) { if ($x -eq $add -and $node.List) { continue }; [void]$acts.Children.Add($x) } }   # (a subtask would not be due: it is added in the list)
@@ -961,7 +995,7 @@ function New-Row($node) {
       $el = New-Object System.Windows.Shapes.Ellipse; $el.Width = 2.6; $el.Height = 2.6; $el.Fill = $Faint
       [void]$dots.Children.Add($el)
     }
-    $grip.Child = $dots; $grip.Opacity = 0.35; $grip.Cursor = 'SizeAll'; $grip.ToolTip = 'Drag to reorder (Alt+Up / Alt+Down)'
+    $grip.Child = $dots; $grip.Opacity = 0.35; $grip.Cursor = 'SizeAll'; $grip.ToolTip = T 'win.row.drag'
     $grip.Tag = $it
     $grip.Add_MouseLeftButtonDown({ param($s, $e) $e.Handled = $true; Start-Drag $s })
     $grip.Add_MouseMove({ param($s, $e) if ($script:drag) { Drag-Move $e } })
@@ -1062,19 +1096,19 @@ function Delete-Task($it) {
   $name = $it.Text
   Remove-Subtree $it; Save-Items; Render
   if ($script:saveFailed) { return }
-  Show-Notice ("Deleted '$name'" + $(if ($n -gt 2) { " and its $($n - 1) subtasks" } elseif ($n -eq 2) { ' and its subtask' } else { '' }) + '.') -Undo
+  Show-Notice $(if ($n -ge 2) { TN 'win.notice.deletedWith' ($n - 1) @{ task = $name } } else { T 'win.notice.deleted' @{ task = $name } }) -Undo
 }
 
 # Ctrl+Z: puts back the files of the last change to a list (a move, a delete, an edit; a move to another list
 # puts back both lists), as long as nothing else has changed them since (sync, an editor, an AI assistant).
 function Undo-Last {
   Commit-Edit
-  if (-not $script:undo.Count) { Show-Notice 'Nothing to undo.'; return }
+  if (-not $script:undo.Count) { Show-Notice (T 'win.notice.nothingToUndo'); return }
   $u = $script:undo[$script:undo.Count - 1]
   $script:undo.RemoveAt($script:undo.Count - 1)
   foreach ($f in $u.Files) {
     $cur = $(if (Test-Path -LiteralPath $f.Path) { Read-TextFile $f.Path } else { $null })
-    if ($cur -cne $f.After) { $script:undo.Clear(); Show-Notice 'Could not undo: the list has changed since (sync or another program).'; return }
+    if ($cur -cne $f.After) { $script:undo.Clear(); Show-Notice (T 'win.notice.undoChanged'); return }
   }
   if ($u.Proj -ne $script:proj) { Switch-Project $u.Proj }
   $script:view = 'list'
@@ -1099,7 +1133,7 @@ function Undo-Last {
     try { Save-Items } finally { $script:undoing = $false }
   }
   Render
-  if (-not $script:saveFailed) { Show-Notice 'Undone.' }
+  if (-not $script:saveFailed) { Show-Notice (T 'win.notice.undone') }
 }
 
 # ---------------------------------------------------------------- recently deleted
@@ -1197,7 +1231,7 @@ function Restore-Deleted($en) {
   $target = $(if ($en.List -and $names -contains $en.List) { $en.List } else { $script:proj })
   if ($target -ne $script:proj) { Switch-Project $target }
   $script:view = 'list'
-  if ($script:listBusy) { Render; Show-Notice "'$target' is busy in another program. Try again in a moment."; return }
+  if ($script:listBusy) { Render; Show-Notice (T 'win.notice.busyTryAgain' @{ list = $target }); return }
   $present = Get-AllListIds
   $block = @((Read-Items $en.Text) | Where-Object { $_.Kind -eq 'task' -and $_.Text -ne '' -and -not $present.Contains([string]$_.Id) })
   if ($block.Count) {
@@ -1217,31 +1251,32 @@ function Restore-Deleted($en) {
   }
   if (-not $en.Key.StartsWith('sync:')) { Save-DeletedJournal @(Read-DeletedJournal | Where-Object { [string]$_['key'] -ne $en.Key }) }
   Render
-  if ($block.Count) { Show-Notice "Restored '$($en.First)' to $target." -Undo } else { Show-Notice "'$($en.First)' is already back." }
+  if ($block.Count) { Show-Notice (T 'win.notice.restored' @{ task = $en.First; list = $target }) -Undo } else { Show-Notice (T 'win.notice.alreadyBack' @{ task = $en.First }) }
 }
 function Format-Deleted([long]$ms) {
   $t = [DateTimeOffset]::FromUnixTimeMilliseconds($ms).LocalDateTime
-  if ($t.Date -eq (Get-Date).Date) { return 'today ' + $t.ToString('H:mm', $CI) }
-  if ($t.Date -eq (Get-Date).Date.AddDays(-1)) { return 'yesterday ' + $t.ToString('H:mm', $CI) }
-  return $t.ToString('d MMM H:mm', $CI)
+  if ($t.Date -eq (Get-Date).Date) { return (T 'win.trash.today' @{ time = (Format-UiDate $t 'H:mm') }) }
+  if ($t.Date -eq (Get-Date).Date.AddDays(-1)) { return (T 'win.trash.yesterday' @{ time = (Format-UiDate $t 'H:mm') }) }
+  return (Format-UiDate $t 'd MMM H:mm')
 }
 # one card per list, newest first; a row is the task (with its subtasks), when it was deleted, and Restore
 function Render-TrashView {
-  [void]$list.Children.Add((New-SettingsHeader 'Recently deleted'))
+  [void]$list.Children.Add((New-SettingsHeader (T 'win.trash.title')))
   $entries = @(Get-DeletedEntries)
-  $about = 'Deleted tasks stay here for 30 days' + $(if (Read-SyncConfigUi) { ', also those deleted on your other devices' } else { '' }) + '. Right after a change, Ctrl+Z undoes it.'
-  if (-not $entries.Count) { Add-Note 'Nothing deleted in the last 30 days.' $Ink; Add-Note $about; return }
+  $about = $(if (Read-SyncConfigUi) { T 'win.trash.aboutSync' } else { T 'win.trash.about' })
+  if (-not $entries.Count) { Add-Note (T 'win.trash.empty') $Ink; Add-Note $about; return }
   $lists = New-Object System.Collections.ArrayList
   foreach ($en in $entries) { if (-not $lists.Contains($en.List)) { [void]$lists.Add($en.List) } }
   foreach ($ln in $lists) {
-    Add-Heading $(if ($ln) { $ln } else { 'Other lists' })
+    Add-Heading $(if ($ln) { $ln } else { T 'win.trash.otherLists' })
     foreach ($en in @($entries | Where-Object { $_.List -eq $ln })) {
-      $more = $(if ($en.Count -eq 2) { ', with its subtask' } elseif ($en.Count -gt 2) { ", with $($en.Count - 1) subtasks" } else { '' })
       $when = Format-Deleted $en.At
-      $b = New-TextButton 'Restore' { param($x) Restore-Deleted $x } $Accent $en
-      Set-Name $b "Restore $($en.First)" ("From $(if ($en.List) { $en.List } else { 'a list that is gone' }), deleted $when$more")
-      $label = $en.First + $(if ($en.Count -gt 1) { " (+$($en.Count - 1))" } else { '' })
-      Add-CardRow (New-InfoRow $label $when $b -Tip "$($en.First)$more. Deleted $when$(if ($en.List) { " from $($en.List)" })")
+      $v = @{ task = $en.First; when = $when; list = $(if ($en.List) { $en.List } else { T 'win.trash.goneList' }) }
+      $b = New-TextButton (T 'win.trash.restore') { param($x) Restore-Deleted $x } $Accent $en
+      Set-Name $b (T 'win.trash.restoreName' @{ task = $en.First }) $(if ($en.Count -gt 1) { TN 'win.trash.helpWith' ($en.Count - 1) $v } else { T 'win.trash.help' $v })
+      $label = $(if ($en.Count -gt 1) { TN 'win.trash.label' ($en.Count - 1) @{ task = $en.First } } else { $en.First })
+      $tip = $(if ($en.Count -gt 1) { TN $(if ($en.List) { 'win.trash.tipWithFrom' } else { 'win.trash.tipWith' }) ($en.Count - 1) $v } else { T $(if ($en.List) { 'win.trash.tipFrom' } else { 'win.trash.tip' }) $v })
+      Add-CardRow (New-InfoRow $label $when $b -Tip $tip)
     }
   }
   Add-Footnote $about
@@ -1262,28 +1297,28 @@ function Show-RowMenu($target, $it) {
   if ($script:readOnly) { return }   # a view-only shared list: nothing to change
   $m = New-Menu
   if ($script:todayView) {
-    $e00 = New-MenuItem "Show in $($script:proj)"; $e00.Tag = $it; $e00.Add_Click({ param($s, $e) Show-TaskInList $s.Tag })
+    $e00 = New-MenuItem (T 'win.row.showIn' @{ list = $script:proj }); $e00.Tag = $it; $e00.Add_Click({ param($s, $e) Show-TaskInList $s.Tag })
     [void]$m.Items.Add($e00)
   }
-  $e0 = New-MenuItem 'Change status...'; $e0.Tag = $target
+  $e0 = New-MenuItem (T 'win.menu.changeStatus'); $e0.Tag = $target
   $e0.Add_Click({ param($s, $e) if (Is-TaskRow $s.Tag) { Show-StatusMenu $s.Tag.Child.Children[1] } })
   [void]$m.Items.Add($e0)
-  $e1 = New-MenuItem 'Edit'; $e1.Tag = $it; $e1.Add_Click({ param($s, $e) Edit-Item $s.Tag })
-  $e2 = New-MenuItem 'Deadline...'; $e2.Tag = @{ It = $it; T = $target }; $e2.Add_Click({ param($s, $e) Show-DuePopup $s.Tag.It $s.Tag.T })
-  $e3 = New-MenuItem 'Notes / links'; $e3.Tag = $it; $e3.Add_Click({ param($s, $e) Begin-Notes $s.Tag })
-  $e4 = New-MenuItem 'Add subtask'; $e4.Tag = $it; $e4.Add_Click({ param($s, $e) Add-Subtask $s.Tag })
+  $e1 = New-MenuItem (T 'win.menu.edit'); $e1.Tag = $it; $e1.Add_Click({ param($s, $e) Edit-Item $s.Tag })
+  $e2 = New-MenuItem (T 'win.menu.deadline'); $e2.Tag = @{ It = $it; T = $target }; $e2.Add_Click({ param($s, $e) Show-DuePopup $s.Tag.It $s.Tag.T })
+  $e3 = New-MenuItem (T 'win.row.notes'); $e3.Tag = $it; $e3.Add_Click({ param($s, $e) Begin-Notes $s.Tag })
+  $e4 = New-MenuItem (T 'win.row.addSubtask'); $e4.Tag = $it; $e4.Add_Click({ param($s, $e) Add-Subtask $s.Tag })
   foreach ($x in @($e1, $e2, $e3, $e4)) { if ($x -eq $e4 -and $script:todayView) { continue }; [void]$m.Items.Add($x) }   # (a subtask would not be due: it is added in the list)
   # (not into a view-only shared list; into or out of an editable one it is a copy there and a delete here, which
   # each list's sync sends to its own server)
   $others = @(Get-ProjectNames | Where-Object { $_ -ne $script:proj } | Where-Object { $sb = Get-ShareOf $_; -not ($sb -and [string]$sb['access'] -ne 'edit') })
   if ($others.Count) {
     [void]$m.Items.Add((New-Separator))
-    $mv = New-MenuItem 'Move to list...'; $mv.Tag = @{ It = $it; T = $target; Others = $others }
+    $mv = New-MenuItem (T 'win.menu.moveToList'); $mv.Tag = @{ It = $it; T = $target; Others = $others }
     $mv.Add_Click({ param($s, $e) Show-MoveMenu $s.Tag.T $s.Tag.It $s.Tag.Others })
     [void]$m.Items.Add($mv)
   }
   [void]$m.Items.Add((New-Separator))
-  $del = New-MenuItem 'Delete'; $del.Tag = $it; $del.Add_Click({ param($s, $e) Delete-Task $s.Tag })
+  $del = New-MenuItem (T 'win.menu.delete'); $del.Tag = $it; $del.Add_Click({ param($s, $e) Delete-Task $s.Tag })
   [void]$m.Items.Add($del)
   $m.PlacementTarget = $target; $m.Placement = 'MousePoint'
   if ($target -ne $null -and -not $target.IsMouseOver) { $m.Placement = 'Bottom' }
@@ -1335,7 +1370,7 @@ function Show-StatusMenu($chip) {
     if ($st.Mark -eq $it.Mark) { $tx.FontWeight = 'SemiBold' }
     [void]$sp.Children.Add($c); [void]$sp.Children.Add($tx)
     $mi = New-MenuItem $sp
-    Set-Name $mi ($st.Name + $(if ($st.Mark -eq $it.Mark) { ' (current)' } else { '' }))
+    Set-Name $mi $(if ($st.Mark -eq $it.Mark) { T 'win.a11y.current' @{ name = $st.Name } } else { $st.Name })
     $mi.Tag = @{ Item = $it; Mark = $st.Mark }
     $mi.Add_Click({ param($s, $e) $s.Tag.Item.Mark = $s.Tag.Mark; Save-Items; Render })
     [void]$m.Items.Add($mi)
@@ -1346,7 +1381,7 @@ function Show-StatusMenu($chip) {
 
 # ---------------------------------------------------------------- deadline popup
 function New-PopupItem([string]$text, [string]$hint, [scriptblock]$onActivate = $null) {
-  $b = New-Control 'button' $(if ($hint) { "$text, $hint" } else { $text }) '' $onActivate
+  $b = New-Control 'button' $(if ($hint) { $text + (T 'win.a11y.sep') + $hint } else { $text }) '' $onActivate
   $b.CornerRadius = New-Object System.Windows.CornerRadius($Tokens.Radius.control); $b.Padding = '12,8,12,8'; $b.Cursor = 'Hand'; $b.Background = $Clear
   $g = New-Object System.Windows.Controls.Grid
   foreach ($wd in @('*', 'Auto')) { $cd = New-Object System.Windows.Controls.ColumnDefinition; $cd.Width = $wd; $g.ColumnDefinitions.Add($cd) }
@@ -1399,9 +1434,9 @@ function Show-DuePopup($it, $target) {
   $sp = New-Object System.Windows.Controls.StackPanel; $sp.Width = 250
   $today = (Get-Date).Date
   $nextMon = $today.AddDays(1); while ($nextMon.DayOfWeek -ne 'Monday') { $nextMon = $nextMon.AddDays(1) }
-  $opts = @(@('Today', $today), @('Tomorrow', $today.AddDays(1)), @('Next Monday', $nextMon), @('In a week', $today.AddDays(7)))
+  $opts = @(@((T 'date.today'), $today), @((T 'date.tomorrow'), $today.AddDays(1)), @((T 'date.nextMonday'), $nextMon), @((T 'date.inAWeek'), $today.AddDays(7)))
   foreach ($o in $opts) {
-    $row = New-PopupItem $o[0] ($o[1].ToString('ddd d MMM', $CI)) { param($s, $e) $s.Tag.Item.Due = $s.Tag.Date.ToString('yyyy-MM-dd'); $s.Tag.Popup.IsOpen = $false; Save-Items; Render }
+    $row = New-PopupItem $o[0] (Format-UiDate $o[1] 'ddd d MMM') { param($s, $e) $s.Tag.Item.Due = $s.Tag.Date.ToString('yyyy-MM-dd'); $s.Tag.Popup.IsOpen = $false; Save-Items; Render }
     $row.Tag = @{ Item = $it; Date = $o[1]; Popup = $p }
     $row.Add_MouseLeftButtonUp({ param($s, $e)
       $s.Tag.Item.Due = $s.Tag.Date.ToString('yyyy-MM-dd'); $s.Tag.Popup.IsOpen = $false; Save-Items; Render })
@@ -1410,11 +1445,11 @@ function Show-DuePopup($it, $target) {
   # free-form date entry
   $tg = New-Object System.Windows.Controls.Grid; $tg.Margin = '6,4,6,4'
   $box = New-Object System.Windows.Controls.TextBox
-  Set-Name $box 'Deadline' 'Type a date: fri 14:00, 25 oct, +3, 9:30. Enter saves'
+  Set-Name $box (T 'win.row.deadline') (T 'win.due.boxHelp')
   $box.FontFamily = $UI; $box.FontSize = $TypeSize.label; $box.Background = $Clear; $box.Foreground = $Ink; $box.CaretBrush = $Accent
   $box.BorderThickness = '0,0,0,1.5'; $box.BorderBrush = $Line; $box.Padding = '4,4,4,4'
   $hint = New-Object System.Windows.Controls.TextBlock
-  $hint.Text = 'Type: fri 14:00, 25 oct, +3, 9:30'; $hint.FontFamily = $UI; $hint.FontSize = $TypeSize.meta; $hint.Foreground = $Faint
+  $hint.Text = T 'win.due.hint'; $hint.FontFamily = $UI; $hint.FontSize = $TypeSize.meta; $hint.Foreground = $Faint
   $hint.Margin = '5,3,0,0'; $hint.IsHitTestVisible = $false
   $box.Tag = @{ Item = $it; Popup = $p; Hint = $hint }
   $box.Add_TextChanged({ param($s, $e) $s.Tag.Hint.Visibility = $(if ($s.Text) { 'Collapsed' } else { 'Visible' }); $s.BorderBrush = $Line })
@@ -1430,7 +1465,7 @@ function Show-DuePopup($it, $target) {
   if ($it.Due) {
     $sep = New-Object System.Windows.Controls.Border; $sep.Height = 1; $sep.Background = $Line; $sep.Margin = '8,4'
     [void]$sp.Children.Add($sep)
-    $clr = New-PopupItem 'Remove deadline' '' { param($s, $e) $s.Tag.Item.Due = ''; $s.Tag.Item.DueTime = ''; $s.Tag.Popup.IsOpen = $false; Save-Items; Render }
+    $clr = New-PopupItem (T 'win.due.remove') '' { param($s, $e) $s.Tag.Item.Due = ''; $s.Tag.Item.DueTime = ''; $s.Tag.Popup.IsOpen = $false; Save-Items; Render }
     $clr.Tag = @{ Item = $it; Popup = $p }
     $clr.Add_MouseLeftButtonUp({ param($s, $e) $s.Tag.Item.Due = ''; $s.Tag.Item.DueTime = ''; $s.Tag.Popup.IsOpen = $false; Save-Items; Render })
     [void]$sp.Children.Add($clr)
@@ -1452,12 +1487,12 @@ function New-Notes($it) {
   if ($script:notesEditing -eq $it) {
     $gr = New-Object System.Windows.Controls.Grid
     $box = New-Object System.Windows.Controls.TextBox
-    Set-Name $box 'Notes and links' 'Ctrl+Enter saves, Esc cancels'
+    Set-Name $box (T 'win.notes.name') (T 'win.notes.help')
     $box.Text = $it.Notes; $box.Tag = $it; $box.AcceptsReturn = $true; $box.TextWrapping = 'Wrap'
     $box.FontFamily = $UI; $box.FontSize = $TypeSize.meta; $box.Background = $Clear; $box.Foreground = $Ink
     $box.BorderThickness = '0,0,0,1.5'; $box.BorderBrush = $Accent; $box.CaretBrush = $Accent; $box.MinHeight = 20; $box.Padding = '0,0,0,2'
     $hint = New-Object System.Windows.Controls.TextBlock
-    $hint.Text = 'Links, notes, context (Ctrl+Enter saves)'; $hint.FontFamily = $UI; $hint.FontSize = $TypeSize.meta
+    $hint.Text = T 'win.notes.hint'; $hint.FontFamily = $UI; $hint.FontSize = $TypeSize.meta
     $hint.Foreground = $Faint; $hint.IsHitTestVisible = $false; $hint.Margin = '2,0,0,0'
     if ($it.Notes) { $hint.Visibility = 'Collapsed' }
     $box.Add_TextChanged({ param($s, $e) $s.Parent.Children[1].Visibility = $(if ($s.Text) { 'Collapsed' } else { 'Visible' }) })
@@ -1533,7 +1568,7 @@ function Begin-Edit($tb) {
   $it = $tb.Tag; $grid = $tb.Parent
   if (-not $grid) { return }
   $box = New-Object System.Windows.Controls.TextBox
-  Set-Name $box 'Task text' 'Enter saves and adds a task below, Shift+Enter a subtask, Esc cancels'
+  Set-Name $box (T 'win.edit.name') (T 'win.edit.help')
   $box.Text = $it.Text; $box.Tag = $it; $box.FontFamily = $UI; $box.FontSize = $TypeSize.body
   $box.TextWrapping = 'Wrap'; $box.Background = $Clear; $box.Foreground = $Ink
   $box.BorderThickness = '0,0,0,1.5'; $box.BorderBrush = $Accent; $box.Padding = '0'; $box.CaretBrush = $Accent
@@ -1626,7 +1661,7 @@ function Commit-Edit([switch]$Cancel) {
     Save-Items
   }
   Render
-  if ($erased -and -not $script:saveFailed) { Show-Notice "Deleted '$erased'." -Undo }
+  if ($erased -and -not $script:saveFailed) { Show-Notice (T 'win.notice.deleted' @{ task = $erased }) -Undo }
   if (-not [System.Windows.Input.Keyboard]::FocusedElement) { [void]$w.Focus() }
 }
 
@@ -1797,26 +1832,26 @@ function New-ShareBadge([string]$name, $ink) {
   $bd = New-Object System.Windows.Controls.TextBlock
   $bd.Text = $(if ($share -and [string]$share['access'] -ne 'edit') { G 0xE7B3 } else { G 0xE716 }); $bd.FontFamily = $MDL2; $bd.FontSize = 10.5
   $bd.Foreground = $ink; $bd.VerticalAlignment = 'Center'
-  $what = $(if ($share) { "Shared with you from $(Get-ShareHost $share): $($script:AccessText[[string]$share['access']][0].ToLower())" } else { 'Shared with others' })
-  $bd.ToolTip = $what; $bd.Tag = $what
+  $bd.ToolTip = $(if ($share) { T 'win.share.badgeFrom' @{ host = (Get-ShareHost $share); access = $script:AccessText[[string]$share['access']][2] } } else { T 'win.share.badgeByMe' })
+  $bd.Tag = $(if ($share) { T 'win.a11y.sharedFrom' @{ host = (Get-ShareHost $share) } } else { T 'win.a11y.sharedByMe' })
   return $bd
 }
 
 function New-TitleButton {
-  $name = $(if ($script:todayView) { 'For Today' } else { [string]$script:proj })
+  $name = $(if ($script:todayView) { T 'today.title' } else { [string]$script:proj })
   $open = [bool]($script:listsPopup -and $script:listsPopup.IsOpen)
   $other = @($script:listNames | Where-Object { -not $script:todayView -and $_ -ne $name -and $script:listInfo[$_] -and $script:listInfo[$_].Due -gt 0 })
-  $b = New-Control 'disclosure' $name 'Shows your lists' { param($s, $e) Toggle-ListsMenu }
+  $b = New-Control 'disclosure' $name (T 'win.title.help') { param($s, $e) Toggle-ListsMenu }
   if ($script:HasA11y) { $b.IsExpanded = $open }
   $b.CornerRadius = New-Object System.Windows.CornerRadius($Tokens.Radius.control); $b.Padding = '8,4,8,4'; $b.Cursor = 'Hand'; $b.Background = $Clear
   $dp = New-Object System.Windows.Controls.DockPanel
   # (docked to the right, so the first one added is the rightmost: the violet dot, then the chevron, then the badge;
   # the phone reads name, badge, chevron, dot)
-  $tip = $name; $help = 'Shows your lists'
+  $tip = $name; $help = T 'win.title.help'
   if ($other.Count) {
     $dot = New-Object System.Windows.Shapes.Ellipse; $dot.Width = 7; $dot.Height = 7; $dot.Fill = $Accent; $dot.VerticalAlignment = 'Center'; $dot.Margin = '8,2,0,0'
     [System.Windows.Controls.DockPanel]::SetDock($dot, 'Right'); [void]$dp.Children.Add($dot)
-    $tip += "`nDue today or earlier in: " + ($other -join ', '); $help = 'Shows your lists. Something is due in ' + ($other -join ', ')
+    $tip += "`n" + (T 'win.title.dueIn' @{ lists = ($other -join (T 'win.a11y.sep')) }); $help = T 'win.title.helpDue' @{ lists = ($other -join (T 'win.a11y.sep')) }
   }
   $chev = New-Object System.Windows.Controls.TextBlock
   $chev.Text = G 0xE70D; $chev.FontFamily = $MDL2; $chev.FontSize = 9; $chev.Foreground = $TabInk; $chev.VerticalAlignment = 'Center'; $chev.Margin = '8,2,0,0'
@@ -1826,7 +1861,7 @@ function New-TitleButton {
   $script:titleChev = $chev
   $label = $name
   $bd = $(if ($script:todayView) { $null } else { New-ShareBadge $name $Faint })
-  if ($bd) { $bd.Margin = '8,2,0,0'; [System.Windows.Controls.DockPanel]::SetDock($bd, 'Right'); [void]$dp.Children.Add($bd); $label += ', ' + ([string]$bd.Tag).Split(':')[0].ToLower() }
+  if ($bd) { $bd.Margin = '8,2,0,0'; [System.Windows.Controls.DockPanel]::SetDock($bd, 'Right'); [void]$dp.Children.Add($bd); $label += (T 'win.a11y.sep') + [string]$bd.Tag }
   $t = New-Object System.Windows.Controls.TextBlock
   $t.Text = $name; $t.FontFamily = $UI; $t.FontSize = $TypeSize.title; $t.FontWeight = 'SemiBold'; $t.Foreground = $Ink
   $t.TextTrimming = 'CharacterEllipsis'; $t.TextWrapping = 'NoWrap'; $t.VerticalAlignment = 'Center'
@@ -1855,8 +1890,8 @@ function Move-List([string]$name, [int]$by) {
 }
 function New-MoveItems([string]$name) {
   $names = @(Get-ProjectNames); $i = [array]::IndexOf($names, $name); $out = @()
-  if ($i -gt 0) { $u = New-MenuItem 'Move up'; $u.Tag = $name; $u.Add_Click({ param($s, $e) Move-List $s.Tag -1 }); $out += $u }
-  if ($i -ge 0 -and $i -lt $names.Count - 1) { $d = New-MenuItem 'Move down'; $d.Tag = $name; $d.Add_Click({ param($s, $e) Move-List $s.Tag 1 }); $out += $d }
+  if ($i -gt 0) { $u = New-MenuItem (T 'win.menu.moveUp'); $u.Tag = $name; $u.Add_Click({ param($s, $e) Move-List $s.Tag -1 }); $out += $u }
+  if ($i -ge 0 -and $i -lt $names.Count - 1) { $d = New-MenuItem (T 'win.menu.moveDown'); $d.Tag = $name; $d.Add_Click({ param($s, $e) Move-List $s.Tag 1 }); $out += $d }
   return $out
 }
 
@@ -1867,19 +1902,19 @@ function New-ListContextMenu([string]$name) {
   $m = New-Menu
   if ($share) {
     # someone else's list: its name and its deletion are theirs; leaving takes it off this PC only
-    $info = New-MenuItem "Shared from $(Get-ShareHost $share) - $($script:AccessText[[string]$share['access']][0].ToLower())"; $info.IsEnabled = $false
-    $mi1 = New-MenuItem 'Rename'; $mi1.IsEnabled = $false; $mi1.ToolTip = 'Only its owner can rename it'
+    $info = New-MenuItem (T 'win.menu.sharedFrom' @{ host = (Get-ShareHost $share); access = $script:AccessText[[string]$share['access']][2] }); $info.IsEnabled = $false
+    $mi1 = New-MenuItem (T 'win.menu.rename'); $mi1.IsEnabled = $false; $mi1.ToolTip = T 'win.menu.renameOwner'
     [System.Windows.Controls.ToolTipService]::SetShowOnDisabled($mi1, $true)
-    $mi2 = New-MenuItem 'Leave this list'; $mi2.Tag = $name
+    $mi2 = New-MenuItem (T 'win.menu.leave'); $mi2.Tag = $name
     $mi2.Add_Click({ param($s, $e) Leave-SharedList $s.Tag })
     foreach ($x in @($info, (New-Separator), $mi1) + @(New-MoveItems $name) + @($mi2)) { [void]$m.Items.Add($x) }
   } else {
-    $mi0 = New-MenuItem 'Share...'; $mi0.Tag = $name
+    $mi0 = New-MenuItem (T 'win.menu.share'); $mi0.Tag = $name
     $mi0.Add_Click({ param($s, $e) Show-Share $s.Tag })
     if (-not $script:ownSync) { $mi0.IsEnabled = $false; $mi0.ToolTip = $script:ShareNeedsSync; [System.Windows.Controls.ToolTipService]::SetShowOnDisabled($mi0, $true) }
-    $mi1 = New-MenuItem 'Rename'; $mi1.Tag = $name
+    $mi1 = New-MenuItem (T 'win.menu.rename'); $mi1.Tag = $name
     $mi1.Add_Click({ param($s, $e) Begin-TabEdit $s.Tag })
-    $mi2 = New-MenuItem 'Delete list'; $mi2.Tag = $name
+    $mi2 = New-MenuItem (T 'win.menu.deleteList'); $mi2.Tag = $name
     $mi2.Add_Click({ param($s, $e) Delete-Project $s.Tag })
     foreach ($x in @($mi0, $mi1) + @(New-MoveItems $name) + @($mi2)) { [void]$m.Items.Add($x) }
   }
@@ -1921,10 +1956,10 @@ function Choose-Today {
 function New-TodayRow {
   $rows = @((Get-TodayData).Rows)
   $over = @($rows | Where-Object { $_.Bucket -ceq 'over' }).Count
-  $b = New-Control 'radio' 'For Today' '' { param($s, $e) Choose-Today }
+  $b = New-Control 'radio' (T 'today.title') '' { param($s, $e) Choose-Today }
   if ($script:HasA11y) { $b.IsSelected = $script:todayView }
   $b.CornerRadius = New-Object System.Windows.CornerRadius($Tokens.Radius.control); $b.Padding = '10,9,12,9'; $b.Cursor = 'Hand'; $b.Background = $Clear
-  $b.ToolTip = 'Open tasks of every list that are overdue, due today or in the next 3 days'
+  $b.ToolTip = T 'win.lists.todayTip'
   $g = New-Object System.Windows.Controls.Grid
   foreach ($wd in @('22', '*', 'Auto')) { $cd = New-Object System.Windows.Controls.ColumnDefinition; $cd.Width = $wd; $g.ColumnDefinitions.Add($cd) }
   if ($script:todayView) {
@@ -1933,16 +1968,16 @@ function New-TodayRow {
     [void]$g.Children.Add($ck)
   }
   $t = New-Object System.Windows.Controls.TextBlock
-  $t.Text = 'For Today'; $t.FontFamily = $UI; $t.FontSize = $TypeSize.label; $t.Foreground = $Ink; $t.TextWrapping = 'Wrap'
+  $t.Text = T 'today.title'; $t.FontFamily = $UI; $t.FontSize = $TypeSize.label; $t.Foreground = $Ink; $t.TextWrapping = 'Wrap'
   if ($script:todayView) { $t.FontWeight = 'SemiBold' }
   [System.Windows.Controls.Grid]::SetColumn($t, 1); [void]$g.Children.Add($t)
-  $label = 'For Today'
+  $label = T 'today.title'
   if ($rows.Count) {
     $vt = New-Object System.Windows.Controls.TextBlock
     $vt.Text = [string]$rows.Count; $vt.FontFamily = $UI; $vt.FontSize = $TypeSize.meta; $vt.Margin = '12,2,0,0'; $vt.VerticalAlignment = 'Top'; Set-Tabular $vt
     $vt.Foreground = $(if ($over) { $Red } else { $Faint })
     [System.Windows.Controls.Grid]::SetColumn($vt, 2); [void]$g.Children.Add($vt)
-    $label += ", $($rows.Count) due soon" + $(if ($over) { ", $over overdue" } else { '' })
+    $label += (T 'win.a11y.sep') + (TN 'win.a11y.nDueSoon' $rows.Count) + $(if ($over) { (T 'win.a11y.sep') + (TN 'win.a11y.nOverdue' $over) } else { '' })
   }
   $b.Child = $g; Set-Name $b $label; Set-Press $b 1 $GroupPress
   $b.Add_MouseEnter({ param($s, $e) $s.Background = $MenuHover })
@@ -1972,13 +2007,13 @@ function New-ListRow([string]$name) {
   $bd = New-ShareBadge $name $Faint
   if ($bd) {
     $bd.Margin = '8,4,0,0'; $bd.VerticalAlignment = 'Top'; [System.Windows.Controls.Grid]::SetColumn($bd, 2); [void]$g.Children.Add($bd)
-    $label += ', ' + ([string]$bd.Tag).Split(':')[0].ToLower()
+    $label += (T 'win.a11y.sep') + [string]$bd.Tag
   }
   $v = $null
   if ($info.Due -gt 0) {
-    $v = "$($info.Due) due"; $ink = $(if ($info.Over -gt 0) { $Red } else { $Amber })
-    $label += ", $($info.Due) due" + $(if ($info.Over -gt 0) { ", $($info.Over) overdue" })
-  } elseif ($info.Open -gt 0) { $v = "$($info.Open)"; $ink = $Faint; $label += ", $($info.Open) open" }
+    $v = TN 'win.lists.nDue' $info.Due; $ink = $(if ($info.Over -gt 0) { $Red } else { $Amber })
+    $label += (T 'win.a11y.sep') + (TN 'win.a11y.nDue' $info.Due) + $(if ($info.Over -gt 0) { (T 'win.a11y.sep') + (TN 'win.a11y.nOverdue' $info.Over) })
+  } elseif ($info.Open -gt 0) { $v = "$($info.Open)"; $ink = $Faint; $label += (T 'win.a11y.sep') + (TN 'win.a11y.nOpen' $info.Open) }
   if ($v) {
     $vt = New-Object System.Windows.Controls.TextBlock
     $vt.Text = $v; $vt.FontFamily = $UI; $vt.FontSize = $TypeSize.meta; $vt.Foreground = $ink; $vt.Margin = '12,2,0,0'; $vt.VerticalAlignment = 'Top'; Set-Tabular $vt
@@ -2026,11 +2061,11 @@ function Show-ListsMenu {
   $card.Background = $GroupBg; $card.CornerRadius = New-Object System.Windows.CornerRadius($CardRadius); $card.Padding = '2'; $card.Child = $sv
   [void]$col.Children.Add($card)
   # New list: a card of its own after a small gap, in the accent colour
-  $nb = New-Control 'button' 'New list' '' { param($s, $e) Close-ListsMenu $false; Begin-TabEdit $null }
+  $nb = New-Control 'button' (T 'win.lists.new') '' { param($s, $e) Close-ListsMenu $false; Begin-TabEdit $null }
   $nb.CornerRadius = New-Object System.Windows.CornerRadius($Tokens.Radius.control); $nb.Padding = '10,9,12,9'; $nb.Cursor = 'Hand'; $nb.Background = $Clear
   $ng = New-Object System.Windows.Controls.StackPanel; $ng.Orientation = 'Horizontal'
   $np = New-Object System.Windows.Controls.TextBlock; $np.Text = G 0xE710; $np.FontFamily = $MDL2; $np.FontSize = 11; $np.Foreground = $Accent; $np.Width = 22; $np.VerticalAlignment = 'Center'
-  $nt = New-Object System.Windows.Controls.TextBlock; $nt.Text = 'New list'; $nt.FontFamily = $UI; $nt.FontSize = $TypeSize.label; $nt.FontWeight = 'Medium'; $nt.Foreground = $Accent; $nt.VerticalAlignment = 'Center'
+  $nt = New-Object System.Windows.Controls.TextBlock; $nt.Text = T 'win.lists.new'; $nt.FontFamily = $UI; $nt.FontSize = $TypeSize.label; $nt.FontWeight = 'Medium'; $nt.Foreground = $Accent; $nt.VerticalAlignment = 'Center'
   [void]$ng.Children.Add($np); [void]$ng.Children.Add($nt); $nb.Child = $ng; Set-Press $nb 1 $GroupPress
   $nb.Add_MouseEnter({ param($s, $e) $s.Background = $MenuHover })
   $nb.Add_MouseLeave({ param($s, $e) $s.Background = $Clear })
@@ -2089,16 +2124,16 @@ function Cycle-Project([int]$dir) {
 function Begin-TabEdit($name) {   # a list's name (rename), or $null for a new list
   Commit-Edit
   if ($script:tabEditing) { return }
-  if ($name -and (Get-ShareOf ([string]$name))) { Show-Notice 'Only its owner can rename a shared list.'; return }
+  if ($name -and (Get-ShareOf ([string]$name))) { Show-Notice (T 'win.notice.renameShared'); return }
   $script:tabEditing = $true
   $box = New-Object System.Windows.Controls.TextBox
-  Set-Name $box $(if ($name) { 'List name' } else { 'New list name' }) 'Enter saves, Esc cancels'
+  Set-Name $box $(if ($name) { T 'win.lists.nameBox' } else { T 'win.lists.newNameBox' }) (T 'win.lists.nameHelp')
   $box.FontFamily = $UI; $box.FontSize = $TypeSize.label; $box.MinWidth = 160; $box.Padding = '4,3,4,3'
   $box.VerticalAlignment = 'Center'; $box.Background = $StripBg; $box.Foreground = $Ink
   $box.BorderThickness = '0,0,0,1.5'; $box.BorderBrush = $Accent; $box.CaretBrush = $Accent
   $old = [string]$name; $box.Text = $old; $box.Tag = $old
   $hint = New-Object System.Windows.Controls.TextBlock
-  $hint.Text = 'New list'; $hint.FontFamily = $UI; $hint.FontSize = $TypeSize.label; $hint.Foreground = $Faint; $hint.IsHitTestVisible = $false
+  $hint.Text = T 'win.lists.new'; $hint.FontFamily = $UI; $hint.FontSize = $TypeSize.label; $hint.Foreground = $Faint; $hint.IsHitTestVisible = $false
   $hint.VerticalAlignment = 'Center'; $hint.Margin = '5,0,0,0'; $hint.Visibility = $(if ($old) { 'Collapsed' } else { 'Visible' })
   $script:tabHint = $hint
   $box.Add_TextChanged({ param($s, $e) $script:tabHint.Visibility = $(if ($s.Text) { 'Collapsed' } else { 'Visible' }) })
@@ -2144,7 +2179,7 @@ function Delete-Project([string]$name) {
   if (Get-ShareOf $name) { Leave-SharedList $name; return }   # someone else's list: leave it instead
   $names = @(Get-ProjectNames)
   if ($names.Count -le 1) { return }
-  $r = [System.Windows.MessageBox]::Show($w, "Delete list '$name'?`nIt is moved to lists\.trash, not erased.", 'Saqme To Do', 'YesNo', 'Warning')
+  $r = [System.Windows.MessageBox]::Show($w, (T 'win.ask.deleteList' @{ list = $name }), 'Saqme To Do', 'YesNo', 'Warning')
   if ("$r" -ne 'Yes') { return }
   $trash = Join-Path $listsDir '.trash'
   if (-not (Test-Path -LiteralPath $trash)) { [void](New-Item -ItemType Directory -Path $trash) }
@@ -2208,10 +2243,11 @@ $menuPath.Width = 24; $menuPath.Height = 24; $menuPath.Fill = $Clear
 $menuBox = New-Object System.Windows.Controls.Viewbox
 $menuBox.Width = 21; $menuBox.Height = 21; $menuBox.Child = $menuPath
 # (a toggle button: pressed while Settings is open, and then it closes them; Update-Header)
-$logo = New-Control 'togglebutton' 'Settings' 'Ctrl+comma' { param($s, $e) Toggle-Settings }
+$logo = New-Control 'togglebutton' '' '' { param($s, $e) Toggle-Settings }
 $logo.Child = $menuBox; $logo.Background = $Clear; $logo.Margin = '3,0,9,6'; $logo.VerticalAlignment = 'Center'
 $logo.Padding = '3'; $logo.CornerRadius = New-Object System.Windows.CornerRadius($Tokens.Radius.control)
-$logo.ToolTip = 'Settings'; $logo.Cursor = 'Hand'; Set-Press $logo 0.92
+$logo.Cursor = 'Hand'; Set-Press $logo 0.92
+Register-Words { Set-Name $script:logo (T 'win.header.settings') (T 'win.header.settingsKeys'); $script:logo.ToolTip = T 'win.header.settings' }
 if ($script:HasA11y) { $logo.IsChecked = $false }
 [System.Windows.Shell.WindowChrome]::SetIsHitTestVisibleInChrome($logo, $true)
 $logo.Add_MouseLeftButtonDown({ param($s, $e) $e.Handled = $true; Toggle-Settings })
@@ -2233,15 +2269,20 @@ $countText.Visibility = 'Collapsed'   # per-tab counts already show open tasks
 # sync status (hidden while sync is off) and a badge when edits on two devices collided
 $syncBox = New-Object System.Windows.Controls.StackPanel
 $syncBox.Orientation = 'Horizontal'; $syncBox.VerticalAlignment = 'Center'; $syncBox.Margin = '4,0,2,5'
-$conflictBadge = New-Control 'button' 'Conflicts' 'Changed on two devices at once - choose which version to keep' { param($s, $e) Show-View 'conflicts' }
+$conflictBadge = New-Control 'button' '' '' { param($s, $e) Show-View 'conflicts' }
 $conflictBadge.CornerRadius = New-Object System.Windows.CornerRadius($Tokens.Radius.control); $conflictBadge.Padding = '8,2,8,3'; $conflictBadge.Cursor = 'Hand'
 $conflictBadge.Background = $AmberSoft; $conflictBadge.Visibility = 'Collapsed'; $conflictBadge.Margin = '0,0,3,0'; $conflictBadge.VerticalAlignment = 'Center'
-$conflictBadge.ToolTip = 'Changed on two devices at once - click to choose'
+Register-Words {
+  # (its name is how many there are, once there are any: Update-SyncIndicator)
+  Set-Name $script:conflictBadge (T 'win.conflicts.title') (T 'win.header.conflictsHelp'); $script:conflictBadge.ToolTip = T 'win.header.conflictsTip'
+}
 $cbText = New-Object System.Windows.Controls.TextBlock; $cbText.FontFamily = $UI; $cbText.FontSize = $TypeSize.small; $cbText.FontWeight = 'Medium'; $cbText.Foreground = $Amber
 $conflictBadge.Child = $cbText; Set-Press $conflictBadge 0.94
 $conflictBadge.Add_MouseLeftButtonDown({ param($s, $e) $e.Handled = $true; Show-View 'conflicts' })
 # the cloud glyph is a button whose name says the sync state in words (the glyph and its colour are extra)
-$syncButton = New-Control 'button' 'Sync' 'Opens Settings, Sync & sharing' { param($s, $e) Request-Sync; Show-View 'sync' }
+$syncButton = New-Control 'button' '' '' { param($s, $e) Request-Sync; Show-View 'sync' }
+# (its name is the sync state in words, its tooltip too: Update-SyncIndicator)
+Register-Words { Set-Name $script:syncButton (T 'win.header.sync') (T 'win.header.syncHelp') }
 $syncGlyph = New-Object System.Windows.Controls.TextBlock
 $syncGlyph.FontFamily = $MDL2; $syncGlyph.FontSize = 13
 $syncButton.Child = $syncGlyph; $syncButton.Padding = '5,4,5,3'; $syncButton.Cursor = 'Hand'; Set-Press $syncButton 0.92
@@ -2264,10 +2305,16 @@ function New-WinButton([int]$code, [string]$tip, [bool]$danger, [scriptblock]$on
   $b.Add_MouseLeave({ param($s, $e) $s.Background = $Clear; $s.Child.Foreground = $TabInk })
   return $b
 }
-$menuBtn = New-WinButton 0xE712 'Options' $false { param($s, $e) Show-AppMenu $s }
-$minBtn  = New-WinButton 0xE921 'Minimize' $false { param($s, $e) Commit-Edit; $w.WindowState = 'Minimized' }
-$maxBtn  = New-WinButton 0xE922 'Fullscreen' $false { param($s, $e) Commit-Edit; Toggle-Max }
-$clsBtn  = New-WinButton 0xE8BB 'Close (keeps running in the tray)' $true { param($s, $e) Commit-Edit; $w.Close() }
+$menuBtn = New-WinButton 0xE712 '' $false { param($s, $e) Show-AppMenu $s }
+$minBtn  = New-WinButton 0xE921 '' $false { param($s, $e) Commit-Edit; $w.WindowState = 'Minimized' }
+$maxBtn  = New-WinButton 0xE922 '' $false { param($s, $e) Commit-Edit; Toggle-Max }
+$clsBtn  = New-WinButton 0xE8BB '' $true { param($s, $e) Commit-Edit; $w.Close() }
+Register-Words {
+  foreach ($x in @(@($script:menuBtn, 'win.header.options'), @($script:minBtn, 'win.header.minimize'), @($script:maxBtn, 'win.header.fullscreen'), @($script:clsBtn, 'win.header.close'))) {
+    $words = T $x[1]; Set-Name $x[0] $words; $x[0].ToolTip = $words
+  }
+  if ($script:maxed) { $script:maxBtn.ToolTip = T 'win.header.restore' }
+}
 $col = 3
 foreach ($x in @($menuBtn, $minBtn, $maxBtn, $clsBtn)) { [System.Windows.Controls.Grid]::SetColumn($x, $col); [void]$stripGrid.Children.Add($x); $col++ }
 $strip.Child = $stripGrid
@@ -2288,12 +2335,12 @@ function Toggle-Max {
     $script:restore = @{ L = $w.Left; T = $w.Top; W = $w.ActualWidth; H = $w.ActualHeight; S = $w.SizeToContent }
     $w.SizeToContent = 'Manual'
     $w.Left = $wa.Left - 7; $w.Top = $wa.Top - 7; $w.Width = $wa.Width + 14; $w.Height = $wa.Height + 14
-    $script:maxed = $true; $maxBtn.Child.Text = G 0xE923; $maxBtn.ToolTip = 'Restore'
+    $script:maxed = $true; $maxBtn.Child.Text = G 0xE923; $maxBtn.ToolTip = T 'win.header.restore'
   } else {
     $r = $script:restore
     $w.Left = $r.L; $w.Top = $r.T; $w.Width = $r.W
     if ($r.S -eq 'Height') { $w.SizeToContent = 'Height' } else { $w.Height = $r.H }
-    $script:maxed = $false; $maxBtn.Child.Text = G 0xE922; $maxBtn.ToolTip = 'Fullscreen'
+    $script:maxed = $false; $maxBtn.Child.Text = G 0xE922; $maxBtn.ToolTip = T 'win.header.fullscreen'
   }
 }
 # double-clicking the title bar maximizes natively; route that to our own fullscreen toggle
@@ -2315,23 +2362,23 @@ $menuBtn.Add_MouseLeftButtonDown({ param($s, $e) $e.Handled = $true; Show-AppMen
 function Show-AppMenu($s) {
   Commit-Edit
   $m = New-Menu
-  $open = New-MenuItem 'Open this list in Notepad'
+  $open = New-MenuItem (T 'win.app.notepad')
   $open.Add_Click({ Start-Process notepad.exe -ArgumentList "`"$($script:todo)`"" })
-  $folder = New-MenuItem 'Open lists folder'
+  $folder = New-MenuItem (T 'win.app.folder')
   $folder.Add_Click({ Start-Process explorer.exe -ArgumentList "`"$listsDir`"" })
-  $fit = New-MenuItem 'Fit height to content'
+  $fit = New-MenuItem (T 'win.app.fit')
   $fit.Add_Click({ if ($script:maxed) { Toggle-Max }; $w.SizeToContent = 'Height'; $w.UpdateLayout(); $fh = [math]::Min($w.ActualHeight, $wa.Height * 0.85); $w.SizeToContent = 'Manual'; $w.Height = $fh; $script:sizeDirty = $true })
-  $theme = New-MenuItem 'Settings'
+  $theme = New-MenuItem (T 'win.header.settings')
   $theme.Add_Click({ Toggle-Settings })
-  $test = New-MenuItem 'Send a test notification'
-  $test.Add_Click({ Show-Toast 'Saqme To Do' 'Notifications are working.' $script:proj })
-  $reload = New-MenuItem 'Reload'
+  $test = New-MenuItem (T 'win.notif.test')
+  $test.Add_Click({ Show-Toast 'Saqme To Do' (T 'remind.test') $script:proj })
+  $reload = New-MenuItem (T 'win.app.reload')
   $reload.Add_Click({ [void](Use-Loaded (Load-Items)); Render })
-  $trashItem = New-MenuItem 'Recently deleted'
+  $trashItem = New-MenuItem (T 'win.trash.title')
   $trashItem.Add_Click({ Show-View 'trash' })
   foreach ($x in @($theme, $trashItem, $open, $folder, $fit, $test, $reload)) { [void]$m.Items.Add($x) }
   if ($script:sync) {
-    $sn = New-MenuItem 'Sync now'
+    $sn = New-MenuItem (T 'win.sync.now')
     $sn.Add_Click({ Request-Sync })
     [void]$m.Items.Insert(1, $sn)
   }
@@ -2344,16 +2391,17 @@ $addBorder = New-Object System.Windows.Controls.Border
 $addBorder.Background = $GroupBg; $addBorder.CornerRadius = New-Object System.Windows.CornerRadius($CardRadius)
 $addBorder.Padding = '0,10,8,10'; $addBorder.Margin = "$CardInset,8,$CardInset,$CardInset"
 $addBox = New-Object System.Windows.Controls.TextBox
-Set-Name $addBox 'Add a task' 'Enter adds it at the end of the list'
+Register-Words { Set-Name $script:addBox (T 'win.add.name') (T 'win.add.help') }
 $addBox.FontFamily = $UI; $addBox.FontSize = $TypeSize.body; $addBox.Background = $Clear; $addBox.Foreground = $Ink
 $addBox.BorderThickness = '0'; $addBox.Padding = "$($RowTextX - 2),0,0,0"; $addBox.CaretBrush = $Accent
 $ph = New-Object System.Windows.Controls.TextBlock
 $ph.Text = (G 0xE710); $ph.FontFamily = $MDL2; $ph.FontSize = 11; $ph.Foreground = $Accent
 $ph.IsHitTestVisible = $false; $ph.VerticalAlignment = 'Center'; $ph.Margin = "$(2 + $RowChipX + 3),0,0,0"
 $phText = New-Object System.Windows.Controls.TextBlock
-$phText.Text = 'Add a task'; $phText.FontFamily = $UI; $phText.FontSize = $TypeSize.body; $phText.Foreground = $Faint
+$phText.FontFamily = $UI; $phText.FontSize = $TypeSize.body; $phText.Foreground = $Faint
 $phText.IsHitTestVisible = $false; $phText.VerticalAlignment = 'Center'; $phText.Margin = "$RowTextX,0,0,0"
 [void]$addGrid.Children.Add($addBox); [void]$addGrid.Children.Add((Hide-Decoration $ph)); [void]$addGrid.Children.Add((Hide-Decoration $phText))
+Register-Words { $script:phText.Text = T 'win.add.name' }
 $addBorder.Child = $addGrid
 [System.Windows.Controls.DockPanel]::SetDock($addBorder, 'Bottom'); [void]$dock.Children.Add($addBorder)
 # the Settings views' bottom line, where the add-task line is in the list: the version (Update-VersionDisplay)
@@ -2384,7 +2432,7 @@ function Show-Notice([string]$text, [switch]$Undo) {
   $noticeText.Text = $text
   if ($noticeGrid.Children.Count -gt 1) { $noticeGrid.Children.RemoveAt(1) }
   if ($Undo) {
-    $b = New-TextButton 'Undo' { $notice.Visibility = 'Collapsed'; Undo-Last }
+    $b = New-TextButton (T 'win.notice.undo') { $notice.Visibility = 'Collapsed'; Undo-Last }
     $b.ToolTip = 'Ctrl+Z'; $b.Margin = '8,-4,0,-4'; [System.Windows.Controls.Grid]::SetColumn($b, 1); [void]$noticeGrid.Children.Add($b)
   }
   Update-NoticeColors
@@ -2421,7 +2469,7 @@ $scroll.Template = [Windows.Markup.XamlReader]::Parse(@'
   </Grid>
 </ControlTemplate>
 '@)
-$list = New-AccessibleList 'list' 'Tasks'
+$list = New-AccessibleList 'list' ''   # (named by Render: the list's tasks, or the Settings view)
 $list.Margin = "$CardInset,0,$CardInset,4"
 $list.UseLayoutRounding = $true   # (the hairlines stay one crisp pixel)
 $scroll.Content = $list
@@ -2612,13 +2660,13 @@ function Toggle-Completed {
 }
 # the Completed heading: "Completed · 2" with a chevron at the right end; it shows or hides the card under it
 function New-CompletedHeading([int]$count, [bool]$show) {
-  $h = New-Control 'disclosure' ("Completed, $count " + $(if ($count -eq 1) { 'task' } else { 'tasks' })) 'Shows or hides the completed tasks' { param($s, $e) Toggle-Completed }
+  $h = New-Control 'disclosure' (TN 'win.list.completedName' $count) (T 'win.list.completedHelp') { param($s, $e) Toggle-Completed }
   if ($script:HasA11y) { $h.IsExpanded = $show }
   $h.Padding = "$ListHeadX,3,$($CardPad - 2),3"; $h.Cursor = 'Hand'; $h.Background = $Clear
   $h.CornerRadius = New-Object System.Windows.CornerRadius($Tokens.Radius.control)
   $g = New-Object System.Windows.Controls.Grid
   foreach ($wd in @('Auto', 'Auto', '*', 'Auto')) { $cd = New-Object System.Windows.Controls.ColumnDefinition; $cd.Width = $wd; $g.ColumnDefinitions.Add($cd) }
-  $lbl = New-Text 'Completed' $TypeSize.small $Faint; $lbl.FontWeight = 'Medium'; $lbl.VerticalAlignment = 'Center'
+  $lbl = New-Text (T 'win.list.completed') $TypeSize.small $Faint; $lbl.FontWeight = 'Medium'; $lbl.VerticalAlignment = 'Center'
   $num = New-Text " $([char]0x00B7) $count" $TypeSize.small $Faint; $num.VerticalAlignment = 'Center'; Set-Tabular $num
   $chev = New-Text $(if ($show) { G 0xE70D } else { G 0xE76C }) 9 $Faint; $chev.FontFamily = $MDL2; $chev.VerticalAlignment = 'Center'
   [System.Windows.Controls.Grid]::SetColumn($num, 1); [System.Windows.Controls.Grid]::SetColumn($chev, 3)
@@ -2638,11 +2686,11 @@ $MetaBelowW = 380; $script:metaBelow = $false
 
 # For Today (see its section above): Overdue, Today and Next 3 days, a card each, every row with its list's name
 function Render-Today([bool]$fromSettings, [bool]$hadFocus) {
-  Set-Name $list 'For Today tasks'
+  Set-Name $list (T 'win.today.listName')
   $data = Get-TodayData
   $script:todayLists = $data.Lists
   $script:visible = New-Object System.Collections.ArrayList; $script:rows = New-Object System.Collections.ArrayList
-  $heads = @{ over = 'Overdue'; today = 'Today'; soon = 'Next 3 days' }
+  $heads = @{ over = (T 'today.over'); today = (T 'today.today'); soon = (T 'today.soon') }
   foreach ($bucket in 'over', 'today', 'soon') {
     $in = @($data.Rows | Where-Object { $_.Bucket -ceq $bucket })
     if (-not $in.Count) { continue }
@@ -2659,7 +2707,7 @@ function Render-Today([bool]$fromSettings, [bool]$hadFocus) {
   }
   Close-Card
   if (-not $script:visible.Count) {
-    $e = New-Text 'Nothing overdue, due today or in the next 3 days.' $TypeSize.body $Faint
+    $e = New-Text (T 'win.today.empty') $TypeSize.body $Faint
     $e.Margin = "$ListHeadX,24,$CardPad,8"
     [void]$list.Children.Add($e)
   }
@@ -2683,14 +2731,14 @@ function Render {
   Clear-View; Reset-Groups
   if ($script:HasA11y) { $list.Role = 'list' }
   if ($script:todayView) { Render-Today $fromSettings $hadFocus; return }
-  Set-Name $list "$($script:proj) tasks"
+  Set-Name $list (T 'win.list.name' @{ list = $script:proj })
   $share = Get-ShareOf $script:proj
   if ($share) {
     # a list someone shares with this PC: where it comes from; for a view-only one also that it can't be changed
     $sst = $(if ($script:sync -and $script:sync.Shares) { @($script:sync.Shares | Where-Object { $_.Id -eq [string]$share['id'] })[0] } else { $null })
-    $trouble = $(if ($sst -and @('offline', 'error') -contains $sst.State) { " Not synced right now: $($sst.Message)" } else { '' })
+    $trouble = $(if ($sst -and @('offline', 'error') -contains $sst.State) { T 'win.list.notSynced' @{ why = (Convert-KnownText $sst.Message) } } else { '' })
     if ($script:readOnly -or $trouble) {
-      $txt = $(if ($script:readOnly) { "View only. Shared with you from $(Get-ShareHost $share): you see the changes as they are made, but can't change it." } else { "Shared with you from $(Get-ShareHost $share)." }) + $trouble
+      $txt = $(if ($script:readOnly) { T 'win.list.viewOnly' @{ host = (Get-ShareHost $share) } } else { T 'win.list.sharedFrom' @{ host = (Get-ShareHost $share) } }) + $(if ($trouble) { ' ' + $trouble } else { '' })
       $note = New-Text $txt $TypeSize.meta $(if ($trouble) { $Ink } else { $Faint }); $note.Margin = "$ListHeadX,2,$CardPad,2"
       [void]$list.Children.Add($note)
     }
@@ -2719,7 +2767,7 @@ function Render {
   }
 
   if ($postponed.Count) {
-    Add-Heading 'Postponed' $ListHeadX
+    Add-Heading (T 'win.list.postponed') $ListHeadX
     $script:renderSection = 'postponed'; foreach ($n in $postponed) { Render-Node $n }
   }
 
@@ -2732,9 +2780,9 @@ function Render {
 
   if ($script:listBusy) { $addBorder.Visibility = 'Collapsed' }
   if ($list.Children.Count -eq $before) {   # (nothing but the shared-list note)
-    $e = New-Text $(if ($script:listBusy) { "'$($script:proj)' is busy: another program is writing it. It shows here as soon as it is free." }
-                    elseif ($share -and -not (Test-Path -LiteralPath $script:todo)) { 'Getting the list from its owner...' }
-                    elseif ($script:readOnly) { 'No tasks here yet.' } else { 'No tasks here yet. Add one below.' }) $TypeSize.body $Faint
+    $e = New-Text $(if ($script:listBusy) { T 'win.list.busy' @{ list = $script:proj } }
+                    elseif ($share -and -not (Test-Path -LiteralPath $script:todo)) { T 'win.list.gettingIt' }
+                    elseif ($script:readOnly) { T 'win.list.emptyViewOnly' } else { T 'win.list.empty' }) $TypeSize.body $Faint
     $e.Margin = "$ListHeadX,24,$CardPad,8"
     [void]$list.Children.Add($e)
   }
@@ -2756,11 +2804,20 @@ function Render {
 # an update needs a look (it opens Updates); the tray icon's tooltip says it too.
 $script:view = 'list'
 # (in this order; the last two are a card of their own, "App")
-$script:SettingsPages = [ordered]@{ general = 'General'; notifications = 'Notifications'; sync = 'Sync & sharing'; yourlists = 'Your lists'; ai = 'Use with AI'; updates = 'Updates'; about = 'About' }
+# (their names: Register-Words below)
+$script:SettingsPages = [ordered]@{ general = ''; notifications = ''; sync = ''; yourlists = ''; ai = ''; updates = ''; about = '' }
 # where Back (the header, Esc) goes from each view
-$script:ViewParent = @{ settings = 'list'; share = 'list'; keys = 'general'; pair = 'sync'; conflicts = 'sync'; trash = 'yourlists'; backups = 'yourlists' }
-$script:ViewTitles = @{ list = 'the list'; settings = 'Settings'; keys = 'Keyboard shortcuts'; pair = 'Pair phone'; conflicts = 'Conflicts'; trash = 'Recently deleted'; backups = 'Backups'; share = 'Share' }
-foreach ($k in $script:SettingsPages.Keys) { $script:ViewParent[$k] = 'settings'; $script:ViewTitles[$k] = $script:SettingsPages[$k] }
+$script:ViewParent = @{ settings = 'list'; share = 'list'; keys = 'general'; language = 'general'; pair = 'sync'; conflicts = 'sync'; trash = 'yourlists'; backups = 'yourlists' }
+foreach ($k in @($script:SettingsPages.Keys)) { $script:ViewParent[$k] = 'settings' }
+Register-Words {
+  $p = $script:SettingsPages
+  $p.general = T 'win.settings.general'; $p.notifications = T 'win.settings.notifications'; $p.sync = T 'win.settings.sync'; $p.yourlists = T 'win.settings.yourlists'
+  $p.ai = T 'win.settings.ai'; $p.updates = T 'win.settings.updates'; $p.about = T 'win.settings.about'
+  # (list: "General - back to the list" is what a screen reader hears on a view's header)
+  $script:ViewTitles = @{ list = (T 'win.view.list'); settings = (T 'win.header.settings'); keys = (T 'win.keys.title'); language = (T 'language.title'); pair = (T 'win.pair.title')
+                          conflicts = (T 'win.conflicts.title'); trash = (T 'win.trash.title'); backups = (T 'win.backups.title'); share = (T 'win.share.title') }
+  foreach ($k in @($p.Keys)) { $script:ViewTitles[$k] = $p[$k] }
+}
 $script:advancedOpen = $false; $script:focusKey = ''; $script:renderedView = 'list'
 function Get-ViewParent([string]$v) { if ($script:ViewParent.ContainsKey($v)) { return $script:ViewParent[$v] }; return 'settings' }
 # opens a view; keyboard focus goes to the control whose key (Get-FocusKey) is $focus, else to the view's header
@@ -2812,41 +2869,45 @@ function Set-StartWithWindows([bool]$on) {
     $l.Save()
   } elseif (Test-Path -LiteralPath $startupLnk) { Remove-Item -LiteralPath $startupLnk -Force }
 }
-# Keyboard shortcuts: @('', heading) starts a card, @(keys, what it does) is a row, @('#', text) the card's footnote
-$script:Keybinds = @(
-  @('', 'Tasks'),
-  @('Up / Down', 'Previous / next task'),
-  @('Enter', 'Edit the task'),
-  @('Space', 'Done / not done'),
-  @('Right / Left', 'Open / close a task'),
-  @('Alt+Up / Alt+Down', 'Move the task'),
-  @('Ctrl+Z', 'Undo'),
-  @('Ctrl+D', 'Deadline'),
-  @('Ctrl+I', 'Notes / links'),
-  @('Ctrl+M', 'Task menu'),
-  @('Ctrl+N', 'New task'),
-  @('Esc', 'Clear the selection'),
-  @('#', 'A screen reader reads the selected task. Left on a subtask goes to its parent. Ctrl+Z undoes the last change: a move, a delete, an edit. The task menu has the status, deadline, move and delete.'),
-  @('', 'While editing a task'),
-  @('Enter', 'Save, new task below'),
-  @('Shift+Enter', 'Save, new subtask'),
-  @('Enter', 'Stop (on an empty line)'),
-  @('Up / Down', 'Edit the previous / next'),
-  @('Tab / Shift+Tab', 'Subtask / back out'),
-  @('Esc', 'Cancel'),
-  @('Ctrl+Enter', 'Save the notes'),
-  @('', 'Lists and app'),
-  @('Tab / Shift+Tab', 'Move around the window'),
-  @('Left / Right', 'Switch lists (on the title)'),
-  @('Down', 'Open the lists menu (on the title)'),
-  @('Enter / Space', 'Use the focused button'),
-  @('Shift+F10', 'Menu of the list or task'),
-  @('Ctrl+Tab / Ctrl+Shift+Tab', 'Next / previous list'),
-  @('Up / Down / Home / End', 'Move in the lists menu (Enter chooses, Esc closes)'),
-  @('Ctrl+,', 'Settings, and back'),
-  @('Esc', 'Back one level'),
-  @('#', 'Tab goes through the title, the window buttons, the list (one stop: the selected task) and the new-task box. Esc goes from a Settings page to Settings, and from Settings to the list.')
-)
+# Keyboard shortcuts: @('', heading) starts a card, @(keys, what it does) is a row, @('#', text) the card's footnote. The
+# keys as printed on them (Enter, Esc, Ctrl...); the arrows' names are words (Up, Down, Left, Right: win.key.*)
+Register-Words {
+  $arrows = { param([string]$keys) foreach ($a in 'Up', 'Down', 'Left', 'Right') { $keys = $keys -creplace "\b$a\b", (T "win.key.$($a.ToLowerInvariant())") }; $keys }
+  $script:Keybinds = @(
+    @('', (T 'win.keys.tasks')),
+    @((& $arrows 'Up / Down'), (T 'win.keys.prevNext')),
+    @('Enter', (T 'win.keys.edit')),
+    @('Space', (T 'win.keys.done')),
+    @((& $arrows 'Right / Left'), (T 'win.keys.openClose')),
+    @((& $arrows 'Alt+Up / Alt+Down'), (T 'win.keys.move')),
+    @('Ctrl+Z', (T 'win.keys.undo')),
+    @('Ctrl+D', (T 'win.row.deadline')),
+    @('Ctrl+I', (T 'win.row.notes')),
+    @('Ctrl+M', (T 'win.keys.taskMenu')),
+    @('Ctrl+N', (T 'win.keys.newTask')),
+    @('Esc', (T 'win.keys.clearSel')),
+    @('#', (T 'win.keys.tasksNote')),
+    @('', (T 'win.keys.editing')),
+    @('Enter', (T 'win.keys.saveNew')),
+    @('Shift+Enter', (T 'win.keys.saveSub')),
+    @('Enter', (T 'win.keys.stop')),
+    @((& $arrows 'Up / Down'), (T 'win.keys.editPrevNext')),
+    @('Tab / Shift+Tab', (T 'win.keys.indent')),
+    @('Esc', (T 'win.keys.cancel')),
+    @('Ctrl+Enter', (T 'win.keys.saveNotes')),
+    @('', (T 'win.keys.app')),
+    @('Tab / Shift+Tab', (T 'win.keys.moveAround')),
+    @((& $arrows 'Left / Right'), (T 'win.keys.switchLists')),
+    @((& $arrows 'Down'), (T 'win.keys.openMenu')),
+    @('Enter / Space', (T 'win.keys.useButton')),
+    @('Shift+F10', (T 'win.keys.menu')),
+    @('Ctrl+Tab / Ctrl+Shift+Tab', (T 'win.keys.nextList')),
+    @((& $arrows 'Up / Down / Home / End'), (T 'win.keys.moveInMenu')),
+    @('Ctrl+,', (T 'win.keys.settings')),
+    @('Esc', (T 'win.keys.back')),
+    @('#', (T 'win.keys.appNote'))
+  )
+}
 
 function Toggle-Settings {
   Show-View $(if ($script:view -eq 'list') { 'settings' } else { 'list' })
@@ -2966,7 +3027,7 @@ function New-RowGrid([string]$label, [string]$value = '', $trailing = $null, [sw
   [System.Windows.Controls.Grid]::SetColumn($l, 1); [void]$g.Children.Add($l)
   if ($value -or $Dot) {
     # (a long value fills the room left of the trailing part, right-aligned, and is the one cut short)
-    if ($LongValue) { $vp = New-Object System.Windows.Controls.DockPanel; $vp.LastChildFill = $true }
+    if ($LongValue) { $vp = New-Object System.Windows.Controls.DockPanel; $vp.LastChildFill = $true; $vp.HorizontalAlignment = 'Right' }   # (its dot stays next to it)
     else { $vp = New-Object System.Windows.Controls.StackPanel; $vp.Orientation = 'Horizontal' }
     $vp.VerticalAlignment = 'Center'; $vp.Margin = '12,0,0,0'
     if ($Dot) { $d = New-Dot; $d.VerticalAlignment = 'Center'; $d.Margin = '0,1,8,0'; [void]$vp.Children.Add($d) }
@@ -3013,7 +3074,8 @@ function New-Chevron { $c = New-Text (G 0xE76C) 11 $TabInk; $c.FontFamily = $MDL
 # a row that opens another view (a Settings page, Keyboard shortcuts, Pair phone, ...): label, value, chevron. Its key
 # is "open-<view>", so Back puts keyboard focus on it again. -Name / -Help: what a screen reader says (and the tooltip)
 function New-LinkRow([string]$label, [string]$value, [string]$view, [switch]$Dot, [string]$Name = '', [string]$Help = '', [int]$Icon = 0) {
-  $g = New-RowGrid $label $value (New-Chevron) -Dot:$Dot -Icon $Icon
+  # (the page's name stays whole and its status is the one cut short: Georgian and German names run long)
+  $g = New-RowGrid $label $value (New-Chevron) -Dot:$Dot -Icon $Icon -LongValue
   return (New-RowButton $(if ($Name) { $Name } else { $label }) $Help $g { param($v) Show-View $v } $view "open-$view")
 }
 # a row that does something: its label in violet, or red when it is risky (-Danger). -Name: when the label alone
@@ -3096,7 +3158,7 @@ function New-Toggle([bool]$on, [scriptblock]$onToggle, [string]$name = '') {
 }
 # a view's title, which is also its Back button (to where Get-ViewParent says)
 function New-SettingsHeader([string]$title) {
-  $h = New-Control 'button' "$title - back to $($script:ViewTitles[(Get-ViewParent $script:view)])" 'Esc goes back too' { param($s, $e) Go-Back }
+  $h = New-Control 'button' (T 'win.header.backName' @{ title = $title; parent = $script:ViewTitles[(Get-ViewParent $script:view)] }) (T 'win.header.escBack') { param($s, $e) Go-Back }
   [System.Windows.Automation.AutomationProperties]::SetAutomationId($h, 'back')
   $h.Padding = '6,4,8,6'; $h.Margin = '0,0,0,2'; $h.Cursor = 'Hand'; $h.Background = $Clear; $h.HorizontalAlignment = 'Left'
   $h.CornerRadius = New-Object System.Windows.CornerRadius($Tokens.Radius.control)
@@ -3144,10 +3206,11 @@ function Render-SettingsView {
     'backups' { Render-BackupsView; return }
     'conflicts' { Render-ConflictsView; return }
     'keys' { Render-KeysView; return }
+    'language' { Render-LanguageView; return }
     'general' { Render-GeneralPage; return }
     'notifications' { Render-NotificationsPage; return }
     'sync' { Render-SyncPage; return }
-    'updates' { [void]$list.Children.Add((New-SettingsHeader 'Updates')); Render-UpdateSettings; return }
+    'updates' { [void]$list.Children.Add((New-SettingsHeader $script:SettingsPages.updates)); Render-UpdateSettings; return }
     'yourlists' { Render-YourListsPage; return }
     'ai' { Render-AiPage; return }
     'about' { Render-AboutPage; return }
@@ -3157,7 +3220,7 @@ function Render-SettingsView {
 }
 # what it does on the left, its keys on the right (each a small key cap)
 function Render-KeysView {
-  [void]$list.Children.Add((New-SettingsHeader 'Keyboard shortcuts'))
+  [void]$list.Children.Add((New-SettingsHeader (T 'win.keys.title')))
   foreach ($kb in $script:Keybinds) {
     if (-not $kb[0]) { Add-Heading $kb[1]; continue }
     if ($kb[0] -eq '#') { Add-Footnote $kb[1]; continue }
@@ -3168,71 +3231,100 @@ function Render-KeysView {
       $chip.Child = (New-Text $part $TypeSize.small $Ink); $chip.Child.TextWrapping = 'NoWrap'
       [void]$keys.Children.Add($chip)
     }
-    Add-CardRow (New-InfoRow $kb[1] '' $keys -Tip "$($kb[1]): $($kb[0])")
+    Add-CardRow (New-InfoRow $kb[1] '' $keys -Tip (T 'win.keys.tip' @{ what = $kb[1]; keys = $kb[0] }))
   }
   Close-Card
 }
 
 # Settings: two cards of pages (the app's own things last), each row with what it stands at on the right
 function Render-SettingsHome {
-  [void]$list.Children.Add((New-SettingsHeader 'Settings'))
+  [void]$list.Children.Add((New-SettingsHeader (T 'win.header.settings')))
   $page = {
     param([string]$id, [string]$value, [string]$name, [string]$help, [int]$icon, [bool]$dot = $false)
-    Add-CardRow (New-LinkRow $script:SettingsPages[$id] $value $id -Dot:$dot -Name "$($script:SettingsPages[$id]), $name" -Help $help -Icon $icon) ($CardPad + 28)
+    Add-CardRow (New-LinkRow $script:SettingsPages[$id] $value $id -Dot:$dot -Name ($script:SettingsPages[$id] + (T 'win.a11y.sep') + $name) -Help $help -Icon $icon) ($CardPad + 28)
   }
-  $theme = (Get-Culture).TextInfo.ToTitleCase($script:cfg.theme)
-  & $page 'general' $theme "$($theme.ToLower()) theme" 'Theme, start with Windows, keyboard shortcuts' 0xE713
-  & $page 'notifications' $script:cfg.notifyAt "daily summary at $($script:cfg.notifyAt)" 'Daily summary, test notification' 0xEA8F
+  $th = [string]$script:cfg.theme
+  & $page 'general' (T "win.theme.$th") (T "win.settings.theme.$th") (T 'win.settings.generalHelp') 0xE713
+  & $page 'notifications' $script:cfg.notifyAt (T 'win.settings.summaryAt' @{ time = $script:cfg.notifyAt }) (T 'win.settings.notificationsHelp') 0xEA8F
   $sync = Get-SyncSummary
-  & $page 'sync' $sync.Short $sync.Text 'Set up sync or how it stands, pair phone, conflicts, shared lists' 0xE753 $sync.Dot
-  $n = @(Get-ProjectNames).Count
-  $nl = $(if ($n -eq 1) { '1 list' } else { "$n lists" })
-  & $page 'yourlists' $nl $nl 'Lists folder, recently deleted' 0xE8FD
+  & $page 'sync' $sync.Short $sync.Text (T 'win.settings.syncHelp') 0xE753 $sync.Dot
+  $nl = TN 'win.settings.nLists' @(Get-ProjectNames).Count
+  & $page 'yourlists' $nl $nl (T 'win.settings.yourlistsHelp') 0xE8FD
   $ai = Get-AiSummary
-  & $page 'ai' $ai.Short $ai.Text 'Connect Claude, ChatGPT or another AI app to your lists' 0xE8F2
-  Add-Heading 'App'
+  & $page 'ai' $ai.Short $ai.Text (T 'win.settings.aiHelp') 0xE8F2
+  Add-Heading (T 'win.settings.app')
   $badge = Get-UpdateBadge
   $upd = $(if ($badge) { $badge } else { Get-UpdateSummary })
-  & $page 'updates' $upd.Short $upd.Text 'The version, checking and installing updates' 0xE777 ([bool]($badge -and $badge.Dot))
-  & $page 'about' $script:Release.Version "version $($script:Release.Version)" 'Version, where the app and your data are' 0xE946
+  & $page 'updates' $upd.Short $upd.Text (T 'win.settings.updatesHelp') 0xE777 ([bool]($badge -and $badge.Dot))
+  & $page 'about' $script:Release.Version (T 'win.settings.version' @{ version = $script:Release.Version }) (T 'win.settings.aboutHelp') 0xE946
 }
 # the Sync & sharing row: own sync (off, setting up, its state), conflicts, lists shared with this PC, paused deletes.
 # Text says all of it (for screen readers); Short is the value on the right, what needs a look first
 function Get-SyncSummary {
   $parts = New-Object System.Collections.ArrayList
   $own = Read-SyncConfigUi
-  if ($script:setupRun) { [void]$parts.Add('Setting up sync...') }
+  if ($script:setupRun) { [void]$parts.Add((T 'win.sync.settingUpSync')) }
   elseif ($own) { [void]$parts.Add((Get-SyncStatusLine)) }
-  else { [void]$parts.Add('Sync is off') }
+  else { [void]$parts.Add((T 'win.sync.isOff')) }
   $n = @(Get-OpenConflictList).Count + @(Get-NoticeList).Count
-  $nc = $(if ($n -eq 1) { '1 conflict' } else { "$n conflicts" })
+  $nc = TN 'win.sync.nConflicts' $n
   if ($n) { [void]$parts.Add($nc) }
   $sh = @($script:bindings).Count
-  $ns = $(if ($sh -eq 1) { '1 shared list' } else { "$sh shared lists" })
+  $ns = TN 'win.sync.nShared' $sh
   if ($sh) { [void]$parts.Add($ns) }
   $guarded = $script:sync -and $script:sync.Guarded
-  if ($guarded) { [void]$parts.Add('deletions paused') }
-  $short = $(if ($n) { $nc } elseif ($guarded) { 'Deletions paused' } elseif ($script:setupRun) { 'Setting up...' }
-             elseif ($own) { Get-SyncStatusLine } elseif ($sh) { $ns } else { 'Off' })
-  return @{ Text = ($parts -join ', '); Short = $short; Dot = [bool]($n -or $guarded) }
+  if ($guarded) { [void]$parts.Add((T 'win.sync.pausedInline')) }
+  $short = $(if ($n) { $nc } elseif ($guarded) { T 'win.sync.paused' } elseif ($script:setupRun) { T 'win.sync.settingUp' }
+             elseif ($own) { Get-SyncStatusLine } elseif ($sh) { $ns } else { T 'win.value.off' })
+  return @{ Text = ($parts -join (T 'win.a11y.sep')); Short = $short; Dot = [bool]($n -or $guarded) }
 }
 
 function Render-GeneralPage {
-  [void]$list.Children.Add((New-SettingsHeader 'General'))
-  $seg = New-Segmented @(@('dark', 'Dark'), @('light', 'Light'), @('auto', 'Auto', 'Follows the Windows light or dark setting')) $script:cfg.theme { param($v) Set-Theme $v } 'Theme'
-  Add-CardRow (New-InfoRow 'Theme' '' $seg)
-  Add-CardRow (New-SwitchRow 'Start with Windows' (Test-Path -LiteralPath $startupLnk) {
+  [void]$list.Children.Add((New-SettingsHeader $script:SettingsPages.general))
+  $seg = New-Segmented @(@('dark', (T 'win.theme.dark')), @('light', (T 'win.theme.light')), @('auto', (T 'win.theme.auto'), (T 'win.theme.autoHelp'))) $script:cfg.theme { param($v) Set-Theme $v } (T 'win.theme.title')
+  Add-CardRow (New-InfoRow (T 'win.theme.title') '' $seg)
+  # the language: a row with the one in use, which opens the list of them (Render-LanguageView)
+  $ln = Get-LanguageChoiceName $script:cfg.lang
+  Add-CardRow (New-LinkRow (T 'language.title') $ln 'language' -Name ((T 'language.title') + (T 'win.a11y.sep') + $ln) -Help (T 'win.general.languageHelp'))
+  Add-CardRow (New-SwitchRow (T 'win.general.startWithWindows') (Test-Path -LiteralPath $startupLnk) {
     param($on)
     try { Set-StartWithWindows $on } catch {}
     Render
-  } 'Saqme opens when you sign in to Windows')
-  Add-CardRow (New-LinkRow 'Keyboard shortcuts' '' 'keys' -Help 'Everything you can do without the mouse')
+  } (T 'win.general.startHelp'))
+  Add-CardRow (New-LinkRow (T 'win.keys.title') '' 'keys' -Help (T 'win.general.keysHelp'))
+}
+# '' (System: the language Windows shows, in brackets) or a language's code -> how the language picker names it
+function Get-LanguageChoiceName([string]$code) {
+  if ($script:Langs -ccontains $code) { return (Get-LanguageName $code) }
+  return (T 'language.system' @{ name = (Get-LanguageName (Get-SystemLanguage)) })
+}
+# Settings > General > Language: System, then each language by its own name; the one in use has the check mark
+function Render-LanguageView {
+  [void]$list.Children.Add((New-SettingsHeader (T 'language.title')))
+  foreach ($code in @('') + @($script:Langs)) {
+    $name = Get-LanguageChoiceName $code
+    $cur = ([string]$script:cfg.lang -ceq $code)
+    $ck = $null
+    if ($cur) { $ck = New-Text (G 0xE73E) 12 $Accent; $ck.FontFamily = $MDL2; $ck.TextWrapping = 'NoWrap'; $ck.Margin = '0,1,0,0'; $ck = Hide-Decoration $ck }
+    $r = New-RowButton $name '' (New-RowGrid $name '' $ck) { param($c) Set-Language $c } $code "lang-$(if ($code) { $code } else { 'system' })" 'radio'
+    if ($script:HasA11y) { $r.IsSelected = $cur }
+    Add-CardRow $r
+  }
+  Add-Footnote (T 'language.help')
+}
+# a language picked in Settings: saved like the theme, and every word on screen changes at once (Update-Words, Render)
+function Set-Language([string]$code) {
+  if (-not ($script:Langs -ccontains $code)) { $code = '' }
+  $script:cfg.lang = $code; Save-Settings
+  [void](Set-WidgetLanguage $code)
+  Update-Words
+  Render
 }
 
 function Render-NotificationsPage {
-  [void]$list.Children.Add((New-SettingsHeader 'Notifications'))
+  [void]$list.Children.Add((New-SettingsHeader $script:SettingsPages.notifications))
   $tb = New-Object System.Windows.Controls.TextBox
-  Set-Name $tb 'Daily summary time' 'Hours and minutes, for example 9:30'
+  Set-Name $tb (T 'win.notif.timeName') (T 'win.notif.timeHelp')
   $tb.Text = $script:cfg.notifyAt; $tb.Width = 58; $tb.FontFamily = $UI; $tb.FontSize = $TypeSize.body; $tb.TextAlignment = 'Center'; Set-Tabular $tb
   $tb.Background = $Clear; $tb.Foreground = $Ink; $tb.CaretBrush = $Accent; $tb.BorderThickness = '0'; $tb.BorderBrush = $Red; $tb.Padding = '0,2,0,2'
   $save = {
@@ -3248,25 +3340,24 @@ function Render-NotificationsPage {
   # the time sits in a small pill, like a value you can change
   $pill = New-Object System.Windows.Controls.Border
   $pill.Background = $GroupPress; $pill.CornerRadius = New-Object System.Windows.CornerRadius($Tokens.Radius.control); $pill.Padding = '4,1,4,1'; $pill.Child = $tb
-  Add-CardRow (New-InfoRow 'Daily summary' '' $pill)
-  Add-Footnote 'One notification with what is due today or overdue; your phone uses the same time. A task with a deadline time also reminds you 15 minutes before it and at the time.'
-  Add-CardRow (New-ActionRow 'Send a test notification' { Show-Toast 'Saqme To Do' 'Notifications are working.' $script:proj })
-  Add-Footnote 'Nothing shows up? Turn off Do Not Disturb, or make Saqme a priority app.'
+  Add-CardRow (New-InfoRow (T 'win.notif.summary') '' $pill)
+  Add-Footnote (T 'win.notif.summaryNote')
+  Add-CardRow (New-ActionRow (T 'win.notif.test') { Show-Toast 'Saqme To Do' (T 'remind.test') $script:proj })
+  Add-Footnote (T 'win.notif.testNote')
 }
 
 function Render-SyncPage {
-  [void]$list.Children.Add((New-SettingsHeader 'Sync & sharing'))
+  [void]$list.Children.Add((New-SettingsHeader $script:SettingsPages.sync))
   Render-SyncSettings
   Render-SharedListSettings
   # a pending decision: shown whenever it is there, below the everyday rows
   if ($script:sync -and $script:sync.Guarded) {
     $g = $script:sync.Guarded
-    $msg = $(if (Read-SyncConfigUi) { "$g tasks vanished from the lists folder at once, so deleting them on your other devices is paused in case that was an accident. Restore them puts them back into their lists, as they were when they last synced. Delete them deletes them on your other devices too." }
-             else { "$g tasks vanished from a shared list's file at once, so deleting them for its owner is paused in case that was an accident. Restore them puts them back into the list, as they were when they last synced. Delete them deletes them for its owner too." })
-    Add-Heading 'Deletions paused'
-    Add-CardRow (New-InfoRow 'Waiting for you' $(if ($script:sync.RestoreHeld) { 'Restoring...' } else { "$g tasks" }) -Dot -Tip $msg)
-    Add-CardRow (New-ActionRow 'Restore them' { $script:sync.AllowMassDelete = $false; $script:sync.RestoreHeld = $true; Request-Sync; Render } -Help 'Puts the tasks back into their lists, as they were when they last synced')
-    Add-CardRow (New-ActionRow 'Delete them' { [void](New-ListsBackup $DataDir 'delete'); $script:sync.RestoreHeld = $false; $script:sync.AllowMassDelete = $true; Request-Sync; Render } -Danger -Help 'Confirms the paused deletions: the tasks are deleted on your other devices too')
+    $msg = $(if (Read-SyncConfigUi) { TN 'win.sync.pausedOwn' $g } else { TN 'win.sync.pausedShared' $g })
+    Add-Heading (T 'win.sync.paused')
+    Add-CardRow (New-InfoRow (T 'win.sync.waiting') $(if ($script:sync.RestoreHeld) { T 'win.sync.restoring' } else { TN 'win.sync.nTasks' $g }) -Dot -Tip $msg)
+    Add-CardRow (New-ActionRow (T 'win.sync.restoreThem') { $script:sync.AllowMassDelete = $false; $script:sync.RestoreHeld = $true; Request-Sync; Render } -Help (T 'win.sync.restoreThemHelp'))
+    Add-CardRow (New-ActionRow (T 'win.sync.deleteThem') { [void](New-ListsBackup $DataDir 'delete'); $script:sync.RestoreHeld = $false; $script:sync.AllowMassDelete = $true; Request-Sync; Render } -Danger -Help (T 'win.sync.deleteThemHelp'))
     Add-Footnote $msg
   }
   if ($script:rewritten.Count) { Render-RewrittenLists }
@@ -3275,12 +3366,12 @@ function Render-SyncPage {
 # Lists whose file vanished from the lists folder without being deleted in an app (another program, a sync client, a
 # copy of the folder in another app's private storage): the sync wrote them again from the last sync (docs/sync.md)
 function Render-RewrittenLists {
-  Add-Heading 'Lists written again'
+  Add-Heading (T 'win.sync.rewritten')
   foreach ($x in $script:rewritten) {
-    Add-CardRow (New-InfoRow ([string]$x.Name) ("$($x.Count) $(if ($x.Count -eq 1) { 'task' } else { 'tasks' }), $($x.At.ToString('HH:mm', $CI))"))
+    Add-CardRow (New-InfoRow ([string]$x.Name) (TN 'win.sync.rewrittenValue' $x.Count @{ time = (Format-UiDate $x.At 'HH:mm') }))
   }
-  Add-CardRow (New-ActionRow 'OK' { $script:rewritten.Clear(); Render } -Name 'Dismiss: lists written again' -Help 'Clears this list')
-  Add-Footnote 'Their files vanished from the lists folder without being deleted in the app, so Saqme wrote them again from the last sync instead of deleting anything. To delete a list, use Delete list in its menu.'
+  Add-CardRow (New-ActionRow (T 'win.sync.ok') { $script:rewritten.Clear(); Render } -Name (T 'win.sync.rewrittenDismiss') -Help (T 'win.sync.rewrittenDismissHelp'))
+  Add-Footnote (T 'win.sync.rewrittenNote')
 }
 # Sync & sharing > Advanced: turning sync off, a new key, the sync log (a row that opens the rest of its card)
 function Render-SyncAdvanced {
@@ -3288,25 +3379,23 @@ function Render-SyncAdvanced {
   $log = Join-Path $syncDir 'sync.log'
   $hasLog = Test-Path -LiteralPath $log
   if (-not $own -and -not $hasLog) { return }
-  $inside = @()
-  if ($own) { $inside += 'Turn off sync', 'a new sync key' }
-  if ($hasLog) { $inside += $(if ($own) { 'the sync log' } else { 'The sync log' }) }
+  $inside = $(if ($own -and $hasLog) { T 'win.sync.advancedAll' } elseif ($own) { T 'win.sync.advancedOwn' } else { T 'win.sync.advancedLog' })
   $open = $script:advancedOpen
   $chev = New-Text $(if ($open) { G 0xE70D } else { G 0xE76C }) 11 $TabInk; $chev.FontFamily = $MDL2; $chev.TextWrapping = 'NoWrap'; $chev.Margin = '0,1,0,0'
-  $adv = New-RowButton 'Advanced' ($inside -join ', ') (New-RowGrid 'Advanced' '' (Hide-Decoration $chev)) { $script:advancedOpen = -not $script:advancedOpen; Render } $null 'advanced' 'disclosure'
+  $adv = New-RowButton (T 'win.sync.advanced') $inside (New-RowGrid (T 'win.sync.advanced') '' (Hide-Decoration $chev)) { $script:advancedOpen = -not $script:advancedOpen; Render } $null 'advanced' 'disclosure'
   if ($script:HasA11y) { $adv.IsExpanded = $open }
   Add-CardRow $adv
   if (-not $open) { return }
   $notes = @()
   if ($own) {
-    Add-CardRow (New-ActionRow 'Turn off sync' {
-            $r = [System.Windows.MessageBox]::Show($w, "Turn off sync on this PC?`n`n$($script:TurnOffHelp)", 'Saqme To Do', 'YesNo', 'Question')
+    Add-CardRow (New-ActionRow (T 'win.sync.turnOff') {
+            $r = [System.Windows.MessageBox]::Show($w, (T 'win.ask.turnOff' @{ help = $script:TurnOffHelp }), 'Saqme To Do', 'YesNo', 'Question')
             if ("$r" -eq 'Yes') { Disable-Sync; Render } } -Danger -Help $script:TurnOffHelp)
-    $notes += $script:TurnOffHelp, "A new sync key, if a pairing link got out: run setup again with $([char]0x2011)RotateToken. The old key stops working; pair your devices again."
+    $notes += $script:TurnOffHelp, (T 'win.sync.newKeyNote' @{ flag = "$([char]0x2011)RotateToken" })
   }
   if ($hasLog) {
-    Add-CardRow (New-ActionRow 'Open the sync log' { Start-Process notepad.exe -ArgumentList "`"$(Join-Path $syncDir 'sync.log')`"" } -Help 'In Notepad')
-    $notes += 'The sync log says what sync did, for a bug report (sync\sync.log in your data folder).'
+    Add-CardRow (New-ActionRow (T 'win.sync.openLog') { Start-Process notepad.exe -ArgumentList "`"$(Join-Path $syncDir 'sync.log')`"" } -Help (T 'win.sync.openLogHelp'))
+    $notes += (T 'win.sync.logNote' @{ file = 'sync\sync.log' })
   }
   Add-Footnote ($notes -join ' ')
 }
@@ -3314,24 +3403,24 @@ function Render-SyncAdvanced {
 # "Use with AI": the instructions for an AI assistant (Get-AiPrompt, rules.ps1) with this PC's real lists folder
 function Get-ThisAiPrompt { return (Get-AiPrompt ([IO.Path]::GetFullPath($listsDir))) }
 function Copy-AiPrompt {
-  try { [System.Windows.Clipboard]::SetText((Get-ThisAiPrompt)); Show-Notice 'Instructions copied. Paste them into your AI assistant.' }
-  catch { Show-Notice 'Could not copy: another program is using the clipboard.' }
+  try { [System.Windows.Clipboard]::SetText((Get-ThisAiPrompt)); Show-Notice (T 'win.ai.copied') }
+  catch { Show-Notice (T 'win.notice.clipboardBusy') }
 }
 # writes the instructions to $path (UTF-8). Returns why not, or '' when saved. Not into the lists folder: the app would show the file as a list
 function Save-AiPromptFile([string]$path) {
   $full = [IO.Path]::GetFullPath($path)
   $in = ([IO.Path]::GetFullPath($listsDir)).TrimEnd('\') + '\'
-  if (([IO.Path]::GetDirectoryName($full) + '\').StartsWith($in, [StringComparison]::OrdinalIgnoreCase)) { return 'Not in the lists folder: the app would show that file as a list. Choose another folder.' }
-  try { Write-TextFileAtomic $full (Get-ThisAiPrompt) } catch { return "Could not save it: $($_.Exception.Message)" }
+  if (([IO.Path]::GetDirectoryName($full) + '\').StartsWith($in, [StringComparison]::OrdinalIgnoreCase)) { return (T 'win.ai.notInLists') }
+  try { Write-TextFileAtomic $full (Get-ThisAiPrompt) } catch { return (T 'win.ai.saveFailed' @{ why = $_.Exception.Message }) }
   return ''
 }
 function Save-AiPromptAs {
   $dlg = New-Object Microsoft.Win32.SaveFileDialog
-  $dlg.Title = 'Save the instructions for your AI'; $dlg.FileName = 'SAQME.md'; $dlg.DefaultExt = '.md'
-  $dlg.Filter = 'Markdown (*.md)|*.md|All files (*.*)|*.*'; $dlg.InitialDirectory = [Environment]::GetFolderPath('MyDocuments')
+  $dlg.Title = T 'win.ai.saveTitle'; $dlg.FileName = 'SAQME.md'; $dlg.DefaultExt = '.md'
+  $dlg.Filter = "$(T 'win.ai.filterMd')|*.md|$(T 'win.ai.filterAll')|*.*"; $dlg.InitialDirectory = [Environment]::GetFolderPath('MyDocuments')
   if ($dlg.ShowDialog($w) -ne $true) { return }
   $err = Save-AiPromptFile $dlg.FileName
-  Show-Notice $(if ($err) { $err } else { "Saved $([IO.Path]::GetFileName($dlg.FileName))." })
+  Show-Notice $(if ($err) { $err } else { T 'win.ai.saved' @{ file = [IO.Path]::GetFileName($dlg.FileName) } })
 }
 
 # Another app's private copy of the data folder (sync-core.ps1 Find-PrivateCopies: the app ran inside that app's container
@@ -3346,23 +3435,23 @@ function Update-CopyFindings {
   $script:copyFindings = $found
 }
 function Render-CopyFindings {
-  Add-Heading 'In another app''s copy of your data'
+  Add-Heading (T 'win.copies.heading')
   foreach ($c in $script:copyFindings) {
-    Add-CardRow (New-ActionRow "Bring back from $($c.Name)" { param($x) if (Restore-Missing $x.Path "$($x.Name)'s copy") { Update-CopyFindings; Render } } $c -Value (Format-Missing $c) -Help (Format-Missing $c))
-    Add-CardRow (New-ActionRow "Open $($c.Name)'s copy" { param($x) Start-Process explorer.exe -ArgumentList "`"$($x.Path)`"" } $c -Help (Format-Path $c.Path))
+    Add-CardRow (New-ActionRow (T 'win.copies.bringBack' @{ app = $c.Name }) { param($x) if (Restore-Missing $x.Path (T 'win.copies.source' @{ app = $x.Name })) { Update-CopyFindings; Render } } $c -Value (Format-Missing $c) -Help (Format-Missing $c))
+    Add-CardRow (New-ActionRow (T 'win.copies.open' @{ app = $c.Name }) { param($x) Start-Process explorer.exe -ArgumentList "`"$($x.Path)`"" } $c -Help (Format-Path $c.Path))
   }
-  Add-Footnote "A program started from inside another app (an AI assistant's shell in a Store app) worked on that app's private copy of your data folder, so these lists or tasks are not in your real one. Bringing them back adds what is missing and changes nothing else. Saqme never changes that copy; once nothing is missing, you can delete it (keep its cloud.json, if there is one: setup's keys)."
+  Add-Footnote (T 'win.copies.note' @{ file = 'cloud.json' })
 }
 
 function Render-YourListsPage {
-  [void]$list.Children.Add((New-SettingsHeader 'Your lists'))
+  [void]$list.Children.Add((New-SettingsHeader $script:SettingsPages.yourlists))
   if ($script:view -eq 'yourlists' -and -not $SmokeTest) { Update-CopyFindings }
   if ($script:copyFindings.Count) { Render-CopyFindings }
-  Add-Heading 'Lists'
-  Add-CardRow (New-ActionRow 'Open the lists folder' { Start-Process explorer.exe -ArgumentList "`"$listsDir`"" } -Help (Format-Path $listsDir))
-  Add-CardRow (New-LinkRow 'Recently deleted' '' 'trash' -Help 'Deleted tasks, ready to restore for 30 days')
-  Add-CardRow (New-LinkRow 'Backups' '' 'backups' -Help 'Copies of your lists, made by themselves: bring back what is missing')
-  Add-Footnote "Plain markdown files, one per list, in $(Format-Path $listsDir). Editors and AI assistants can change them too; the app picks up their changes by itself."
+  Add-Heading (T 'win.yourlists.lists')
+  Add-CardRow (New-ActionRow (T 'win.yourlists.openFolder') { Start-Process explorer.exe -ArgumentList "`"$listsDir`"" } -Help (Format-Path $listsDir))
+  Add-CardRow (New-LinkRow (T 'win.trash.title') '' 'trash' -Help (T 'win.yourlists.trashHelp'))
+  Add-CardRow (New-LinkRow (T 'win.backups.title') '' 'backups' -Help (T 'win.yourlists.backupsHelp'))
+  Add-Footnote (T 'win.yourlists.note' @{ path = (Format-Path $listsDir) })
 }
 
 # ---------------------------------------------------------------- Settings > Use with AI
@@ -3396,51 +3485,41 @@ function Send-Connector([string]$kind, [string]$done) {
   Start-OwnApi 'POST' "connector/$kind" @{} {
     param($r)
     $c = $script:conn; $c.Busy = $false; $c.At = Get-NowMs
-    if ($r.Status -eq 200 -and $r.Data) { $c.Status = $r.Data; $c.Error = ''; Show-Notice $c.Done } else { Show-Notice "Not done: $(Get-ApiError $r)" }
+    if ($r.Status -eq 200 -and $r.Data) { $c.Status = $r.Data; $c.Error = ''; Show-Notice $c.Done } else { Show-Notice (T 'win.notice.notDone' @{ why = (Get-ApiError $r) }) }
     if ($script:view -eq 'ai') { Render }
   }
 }
-function Copy-ConnectorUrl([string]$done = 'Link copied. Now paste it into your AI app.') {
+function Copy-ConnectorUrl([string]$done = '') {
+  if (-not $done) { $done = T 'win.ai.linkCopied' }
   try { [System.Windows.Clipboard]::SetText([string]$script:conn.Status['url']); Show-Notice $done; return $true }
-  catch { Show-Notice 'Could not copy: another program is using the clipboard.'; return $false }
+  catch { Show-Notice (T 'win.notice.clipboardBusy'); return $false }
 }
 # Connect Claude / Connect ChatGPT: the link on the clipboard, and the place to paste it open in the browser
 function Connect-Assistant([string]$app) {
-  if (-not (Copy-ConnectorUrl "Link copied. Paste it in the page that opened ($app's steps are below).")) { return }
-  if (-not $SmokeTest) { try { Start-Process $script:AiLinks[$app] } catch { Show-Notice "Link copied. Open $($script:AiLinks[$app]) and paste it there." } }
+  if (-not (Copy-ConnectorUrl (T 'win.ai.linkCopiedPage' @{ app = $app }))) { return }
+  if (-not $SmokeTest) { try { Start-Process $script:AiLinks[$app] } catch { Show-Notice (T 'win.ai.linkCopiedOpen' @{ url = $script:AiLinks[$app] }) } }
 }
 function Get-AiSummary {
   $desk = ($script:desk.Status -and $script:desk.Status.State -eq 'connected')
   if (-not (Read-SyncConfigUi)) {
-    if ($desk) { return @{ Short = 'On'; Text = 'Claude Desktop has your lists' } }
-    return @{ Short = ''; Text = 'connect Claude Desktop, no sync needed' }
+    if ($desk) { return @{ Short = (T 'win.value.on'); Text = (T 'win.ai.sumDesk') } }
+    return @{ Short = ''; Text = (T 'win.ai.sumNoSync') }
   }
   $s = $script:conn.Status
-  if (-not $s -or (Test-ConnectorTooOld)) { return @{ Short = ''; Text = 'connect Claude, ChatGPT or another AI app' } }
-  if ($s['enabled']) { return @{ Short = 'On'; Text = 'your AI link is on' } }
-  if ($desk) { return @{ Short = 'On'; Text = 'Claude Desktop has your lists' } }
-  return @{ Short = 'Off'; Text = 'your AI link is off' }
+  if (-not $s -or (Test-ConnectorTooOld)) { return @{ Short = ''; Text = (T 'win.ai.sumConnect') } }
+  if ($s['enabled']) { return @{ Short = (T 'win.value.on'); Text = (T 'win.ai.sumOn') } }
+  if ($desk) { return @{ Short = (T 'win.value.on'); Text = (T 'win.ai.sumDesk') } }
+  return @{ Short = (T 'win.value.off'); Text = (T 'win.ai.sumOff') }
 }
 # what to do in the page the Connect button opened, in the same plain words as docs/ai.md and the phone app
-$script:AiSteps = [ordered]@{
-  Claude  = @(
-    'In the page Connect Claude opened:',
-    '1. Click Add custom connector (sign in first if Claude asks).',
-    '2. Type Saqme as the name, paste the link into the URL box, and click Add. If Claude asks how to sign in, choose No sign-in.',
-    '3. In a new chat, click + under the message box, open Connectors, switch Saqme on and ask "What''s due this week?"',
-    'Click Allow when Claude asks to use Saqme. It then works in the Claude apps on your phone and computer too. If no page opened: claude.ai > Customize > Connectors.')
-  ChatGPT = @(
-    'In the page Connect ChatGPT opened (ChatGPT''s settings, Apps & Connectors):',
-    '1. Open Advanced settings and switch on Developer mode.',
-    '2. Back in Apps & Connectors, click Create. Type Saqme as the name and paste the link into the URL box.',
-    '3. Choose No authentication, tick I trust this application and click Create.',
-    '4. In a new chat, click +, then More > Developer mode, pick Saqme and ask "What''s due this week?"',
-    'Developer mode needs a paid ChatGPT plan, on chatgpt.com in a browser. If the settings did not open: Settings > Apps & Connectors (called Apps in newer versions).')
+# (Claude's and ChatGPT's own button names in them are as those apps show them)
+Register-Words {
+  $script:AiSteps = [ordered]@{
+    Claude  = @((T 'win.ai.claude0'), (T 'win.ai.claude1'), (T 'win.ai.claude2'), (T 'win.ai.claude3'), (T 'win.ai.claude4'))
+    ChatGPT = @((T 'win.ai.gpt0'), (T 'win.ai.gpt1'), (T 'win.ai.gpt2'), (T 'win.ai.gpt3'), (T 'win.ai.gpt4'), (T 'win.ai.gpt5'))
+  }
+  $script:DeskSteps = @((T 'win.ai.desk1'), (T 'win.ai.desk2'), (T 'win.ai.desk3'))
 }
-$script:DeskSteps = @(
-  '1. Quit Claude Desktop completely: in its menu, File > Exit, or right-click its icon next to the clock and choose Quit. Closing its window is not enough.',
-  '2. Open Claude Desktop again.',
-  '3. In any chat, ask "What''s due this week?" When Claude asks to use Saqme, click Allow.')
 
 # Claude Desktop on this PC: what its settings run for Saqme (the launcher next to versions\ when installed, which
 # follows updates), whether it is there and has it
@@ -3455,14 +3534,14 @@ function Update-ClaudeDesktopStatus {
 function Connect-ClaudeDesktopUi([switch]$Off) {
   $r = $(if ($Off) { Disconnect-ClaudeDesktop $script:claudeRoots.AppData $script:claudeRoots.Local } else { Connect-ClaudeDesktop (Get-ThisClaudeEntry) $script:claudeRoots.AppData $script:claudeRoots.Local })
   Update-ClaudeDesktopStatus
-  if (-not $r.Ok) { Show-Notice "Not done: $($r.Error)" }
-  elseif ($Off) { Show-Notice $(if ($r.Changed) { 'Saqme is out of Claude Desktop. Quit it and open it again to finish.' } else { 'Claude Desktop did not have Saqme.' }) }
-  else { Show-Notice 'Claude Desktop is connected. Now quit it completely and open it again (the steps are below).' }
+  if (-not $r.Ok) { Show-Notice (T 'win.notice.notDone' @{ why = (Convert-KnownText $r.Error) }) }
+  elseif ($Off) { Show-Notice $(if ($r.Changed) { T 'win.ai.deskOut' } else { T 'win.ai.deskHadNot' }) }
+  else { Show-Notice (T 'win.ai.deskConnected') }
   Render
 }
 
 function Render-AiPage {
-  [void]$list.Children.Add((New-SettingsHeader 'Use with AI'))
+  [void]$list.Children.Add((New-SettingsHeader $script:SettingsPages.ai))
   if ($script:view -eq 'ai' -and -not $SmokeTest) { Step-ConnectorStatus }
   if ($script:view -eq 'ai' -and ((Get-NowMs) - $script:desk.At -gt 5000 -or -not $script:desk.Status)) { Update-ClaudeDesktopStatus }
   $order = @(Get-AiOptions ([bool](Read-SyncConfigUi)))
@@ -3471,63 +3550,63 @@ function Render-AiPage {
   }
 }
 function Render-AiLink {
-  Add-Heading 'Connect your AI'
+  Add-Heading (T 'win.ai.connectYour')
   $c = $script:conn; $s = $c.Status
   if (-not (Read-SyncConfigUi)) {
-    Add-CardRow (New-InfoRow 'Connect your AI' 'Needs sync')
-    Add-CardRow (New-LinkRow 'Sync & sharing' 'Off' 'sync' -Help 'Set up sync')
-    Add-Footnote 'For Claude and ChatGPT on the web and your phone, turn on sync first (free): Settings > Sync & sharing > Set up sync.'
+    Add-CardRow (New-InfoRow (T 'win.ai.connectYour') (T 'win.ai.needsSync'))
+    Add-CardRow (New-LinkRow $script:SettingsPages.sync (T 'win.value.off') 'sync' -Help (T 'win.sync.setUp'))
+    Add-Footnote (T 'win.ai.needsSyncNote')
   } elseif (Test-ConnectorTooOld) {
-    Add-CardRow (New-InfoRow 'Connect your AI' 'Not yet')
-    Add-Footnote 'Your sync needs an update first. It gets it with the next update (Settings > Updates); then come back here.'
+    Add-CardRow (New-InfoRow (T 'win.ai.connectYour') (T 'win.ai.notYet'))
+    Add-Footnote (T 'win.ai.tooOldNote')
   } elseif (-not $s) {
-    Add-CardRow (New-InfoRow 'Connect your AI' $(if ($c.Error) { 'Not reachable' } else { 'Checking...' }))
-    if ($c.Error) { Add-Footnote "Could not reach your sync: $($c.Error)" $Red }
+    Add-CardRow (New-InfoRow (T 'win.ai.connectYour') $(if ($c.Error) { T 'win.ai.notReachable' } else { T 'win.value.checking' }))
+    if ($c.Error) { Add-Footnote (T 'win.ai.reachFailed' @{ why = $c.Error }) $Red }
   } elseif (-not $s['enabled']) {
-    Add-CardRow (New-ActionRow 'Connect your AI' { Send-Connector 'rotate' 'Connected. Now click Connect Claude or Connect ChatGPT.' } -Help 'Makes a new link for Claude, ChatGPT or another AI app')
-    Add-Footnote 'Off: no AI app can see your lists. Connect your AI makes a new link.'
+    Add-CardRow (New-ActionRow (T 'win.ai.connectYour') { Send-Connector 'rotate' (T 'win.ai.connected') } -Help (T 'win.ai.connectYourHelp'))
+    Add-Footnote (T 'win.ai.offNote')
   } else {
-    Add-CardRow (New-ActionRow 'Connect Claude' { Connect-Assistant 'Claude' } -Help 'Copies your link and opens Claude, where you paste it')
-    Add-CardRow (New-ActionRow 'Connect ChatGPT' { Connect-Assistant 'ChatGPT' } -Help 'Copies your link and opens ChatGPT, where you paste it')
-    Add-CardRow (New-ActionRow 'Copy link' { [void](Copy-ConnectorUrl) } -Name 'Copy link for your AI app' -Help 'For another AI app: paste it where it adds a connector')
-    Add-Footnote 'Click Connect Claude or Connect ChatGPT: Saqme copies your link and opens the page to paste it in. Then ask things like "What''s due this week?" or "Add milk to Groceries", on the web and your phone. Your AI can''t delete a list, and what it deletes waits in Recently deleted for 30 days.'
+    Add-CardRow (New-ActionRow (T 'win.ai.connectApp' @{ app = 'Claude' }) { Connect-Assistant 'Claude' } -Help (T 'win.ai.connectAppHelp' @{ app = 'Claude' }))
+    Add-CardRow (New-ActionRow (T 'win.ai.connectApp' @{ app = 'ChatGPT' }) { Connect-Assistant 'ChatGPT' } -Help (T 'win.ai.connectAppHelp' @{ app = 'ChatGPT' }))
+    Add-CardRow (New-ActionRow (T 'win.ai.copyLink') { [void](Copy-ConnectorUrl) } -Name (T 'win.ai.copyLinkName') -Help (T 'win.ai.copyLinkHelp'))
+    Add-Footnote (T 'win.ai.onNote')
     foreach ($app in $script:AiSteps.Keys) {
-      Add-Heading "Connect $app"
+      Add-Heading (T 'win.ai.connectApp' @{ app = $app })
       Add-Footnote ($script:AiSteps[$app] -join "`n")
     }
-    Add-Heading 'Your link'
-    Add-CardRow (New-ActionRow 'Make a new link' {
-        $q = [System.Windows.MessageBox]::Show($w, "Make a new link?`n`nThe link your AI apps have now stops working. Paste the new link into each AI app you still want to use.", 'Saqme To Do', 'YesNo', 'Question')
-        if ("$q" -eq 'Yes') { Send-Connector 'rotate' 'New link made. The old one no longer works.' } } -Help 'The old link stops working')
-    Add-CardRow (New-ActionRow 'Disconnect' {
-        $q = [System.Windows.MessageBox]::Show($w, "Disconnect your AI?`n`nNo AI app can see or change your lists any more. You can connect again any time, with a new link.", 'Saqme To Do', 'YesNo', 'Question')
-        if ("$q" -eq 'Yes') { Send-Connector 'disconnect' 'Disconnected. No AI app can see your lists now.' } } -Danger -Name 'Disconnect your AI' -Help 'No AI app can see your lists until you connect again')
-    Add-Footnote 'Keep the link private, like a password: anyone who has it can see and change your lists. If it got out, make a new link; the old one stops working at once.'
+    Add-Heading (T 'win.ai.yourLink')
+    Add-CardRow (New-ActionRow (T 'win.ai.newLink') {
+        $q = [System.Windows.MessageBox]::Show($w, (T 'win.ask.newLink'), 'Saqme To Do', 'YesNo', 'Question')
+        if ("$q" -eq 'Yes') { Send-Connector 'rotate' (T 'win.ai.newLinkDone') } } -Help (T 'win.ai.newLinkHelp'))
+    Add-CardRow (New-ActionRow (T 'win.ai.disconnect') {
+        $q = [System.Windows.MessageBox]::Show($w, (T 'win.ask.disconnect'), 'Saqme To Do', 'YesNo', 'Question')
+        if ("$q" -eq 'Yes') { Send-Connector 'disconnect' (T 'win.ai.disconnected') } } -Danger -Name (T 'win.ai.disconnectName') -Help (T 'win.ai.disconnectHelp'))
+    Add-Footnote (T 'win.ai.privateNote')
   }
 }
 function Render-AiDesktop([bool]$first) {
-  Add-Heading 'Claude Desktop on this PC'
+  Add-Heading (T 'win.ai.deskHeading')
   $d = $script:desk.Status
   if (-not $d.Installed) {
-    Add-CardRow (New-ActionRow 'Install Claude Desktop' { Start-Process $script:AiLinks.Download } -Help 'Claude''s free app for your computer, from claude.ai')
-    Add-Footnote "Install Claude Desktop and sign in, then come back here and click Connect Claude Desktop.$(if ($first) { ' It works with your lists without sync.' })"
+    Add-CardRow (New-ActionRow (T 'win.ai.deskInstall') { Start-Process $script:AiLinks.Download } -Help (T 'win.ai.deskInstallHelp'))
+    Add-Footnote $(if ($first) { T 'win.ai.deskInstallNoteFirst' } else { T 'win.ai.deskInstallNote' })
   } elseif ($d.State -eq 'connected') {
-    Add-CardRow (New-InfoRow 'Claude Desktop' 'Connected')
-    Add-CardRow (New-ActionRow 'Disconnect Claude Desktop' { Connect-ClaudeDesktopUi -Off } -Danger -Help 'Takes Saqme out of Claude Desktop')
-    Add-Footnote ((@('Just connected? Then:') + $script:DeskSteps) -join "`n")
+    Add-CardRow (New-InfoRow 'Claude Desktop' (T 'win.ai.deskIsConnected'))
+    Add-CardRow (New-ActionRow (T 'win.ai.deskDisconnect') { Connect-ClaudeDesktopUi -Off } -Danger -Help (T 'win.ai.deskDisconnectHelp'))
+    Add-Footnote ((@((T 'win.ai.deskJustConnected')) + $script:DeskSteps) -join "`n")
   } elseif ($d.State -eq 'unreadable') {
-    Add-CardRow (New-InfoRow 'Claude Desktop' 'Not connected')
-    Add-Footnote $d.Error $Red
+    Add-CardRow (New-InfoRow 'Claude Desktop' (T 'win.ai.deskNotConnected'))
+    Add-Footnote (Convert-KnownText $d.Error) $Red
   } else {
-    Add-CardRow (New-ActionRow 'Connect Claude Desktop' { Connect-ClaudeDesktopUi } -Help 'Claude Desktop gets your lists in every chat, no sync needed')
-    Add-Footnote 'One click: Claude Desktop on this PC then sees your lists in every chat and can change them, without sync and with nothing to paste. It can''t delete a list, and what it deletes waits in Recently deleted.'
+    Add-CardRow (New-ActionRow (T 'win.ai.deskConnect') { Connect-ClaudeDesktopUi } -Help (T 'win.ai.deskConnectHelp'))
+    Add-Footnote (T 'win.ai.deskConnectNote')
   }
 }
 function Render-AiFiles {
-  Add-Heading 'Other ways'
-  Add-CardRow (New-ActionRow 'Copy instructions for your AI' { Copy-AiPrompt } -Help 'Where your list files are and how to edit them, for Claude Code, Codex, Cursor...')
-  Add-CardRow (New-ActionRow 'Save them as a file...' { Save-AiPromptAs } -Name 'Save the instructions for your AI as a file' -Help 'SAQME.md, to add to an AI app''s instructions or a skill')
-  Add-Footnote 'For AI apps that work with files on this PC (Claude Code, Codex, Cursor), also without sync: your lists are files, and these instructions tell the AI where they are and how to edit them safely.'
+  Add-Heading (T 'win.ai.otherWays')
+  Add-CardRow (New-ActionRow (T 'win.ai.copyInstructions') { Copy-AiPrompt } -Help (T 'win.ai.copyInstructionsHelp'))
+  Add-CardRow (New-ActionRow (T 'win.ai.saveFile') { Save-AiPromptAs } -Name (T 'win.ai.saveFileName') -Help (T 'win.ai.saveFileHelp' @{ file = 'SAQME.md' }))
+  Add-Footnote (T 'win.ai.filesNote')
 }
 
 # ---------------------------------------------------------------- Settings > Your lists > Backups (sync-core.ps1 New-ListsBackup)
@@ -3535,65 +3614,64 @@ function Render-AiFiles {
 # confirms); bringing one back only adds what is missing now (Get-BackupRestorePlan) and changes nothing else.
 $backupsDir = Join-Path $DataDir 'backups'
 function Format-BackupReason([string]$r) {
-  switch ($r) { 'start' { return 'when the app started' } 'daily' { return 'daily' } 'update' { return 'before an update' } 'delete' { return 'before confirmed deletions' } 'restore' { return 'before a restore' } }
+  if (@('start', 'daily', 'update', 'delete', 'restore') -ccontains $r) { return (T "win.backups.reason.$r") }
   return $r
 }
 function Render-BackupsView {
-  [void]$list.Children.Add((New-SettingsHeader 'Backups'))
+  [void]$list.Children.Add((New-SettingsHeader (T 'win.backups.title')))
   $all = @((Get-ListsBackups $DataDir) | Select-Object -First 20)
-  $about = "Saqme copies your lists by itself when it starts, once a day, before an update and before deletions you confirm (only when they changed; the last 10 and one a day for 30 days are kept). Bringing one back adds what is missing now, whole lists or tasks, and changes nothing else."
-  if (-not $all.Count) { Add-Note 'No backups yet: one is made the next time the app starts.' $Ink }
+  $about = T 'win.backups.about'
+  if (-not $all.Count) { Add-Note (T 'win.backups.none') $Ink }
   else {
-    Add-Heading 'Bring back what is missing from'
+    Add-Heading (T 'win.backups.heading')
     foreach ($b in $all) {
-      $when = $b.At.ToString('d MMM H:mm', $CI)
-      $what = "$($b.Lists) $(if ($b.Lists -eq 1) { 'list' } else { 'lists' }), $(Format-BackupReason $b.Reason)"
-      Add-CardRow (New-ActionRow $when { param($x) [void](Restore-Backup $x) } $b -Value $what -Name "Bring back from the backup of $when" -Help $what)
+      $when = Format-UiDate $b.At 'd MMM H:mm'
+      $what = TN 'win.backups.value' $b.Lists @{ reason = (Format-BackupReason $b.Reason) }
+      Add-CardRow (New-ActionRow $when { param($x) [void](Restore-Backup $x) } $b -Value $what -Name (T 'win.backups.bringBack' @{ when = $when }) -Help $what)
     }
   }
   Add-Footnote $about
-  Add-CardRow (New-ActionRow 'Open the backups folder' { if (-not (Test-Path -LiteralPath $backupsDir)) { [void](New-Item -ItemType Directory -Path $backupsDir -Force) }; Start-Process explorer.exe -ArgumentList "`"$backupsDir`"" } -Help (Format-Path $backupsDir))
+  Add-CardRow (New-ActionRow (T 'win.backups.openFolder') { if (-not (Test-Path -LiteralPath $backupsDir)) { [void](New-Item -ItemType Directory -Path $backupsDir -Force) }; Start-Process explorer.exe -ArgumentList "`"$backupsDir`"" } -Help (Format-Path $backupsDir))
 }
 # what a backup has that the lists lack now comes back, after a yes (-Confirmed: the self-check); -> what was done ('' = nothing)
-function Restore-Backup($b, [switch]$Confirmed) { return (Restore-Missing $b.Path "the backup of $($b.At.ToString('d MMM H:mm', $CI))" -Confirmed:$Confirmed) }
+function Restore-Backup($b, [switch]$Confirmed) { return (Restore-Missing $b.Path (T 'win.backups.source' @{ when = (Format-UiDate $b.At 'd MMM H:mm') }) -Confirmed:$Confirmed) }
 # "the list(s) X, N tasks in all"
 function Format-Missing($r) {
-  $parts = @()
-  if (@($r.Lists).Count) { $parts += "the $(if (@($r.Lists).Count -eq 1) { 'list' } else { 'lists' }) $(@($r.Lists) -join ', ')" }
-  $parts += "$($r.Tasks) $(if ($r.Tasks -eq 1) { 'task' } else { 'tasks' }) in all"
-  return ($parts -join ', ')
+  $tasks = TN 'win.missing.tasks' $r.Tasks
+  if (-not @($r.Lists).Count) { return $tasks }
+  return (T 'win.missing.both' @{ lists = (TN 'win.missing.lists' @($r.Lists).Count @{ names = (@($r.Lists) -join (T 'win.a11y.sep')) }); tasks = $tasks })
 }
 # what the lists folder $source has (a backup, another app's copy) and the lists lack now comes back (Get-BackupRestorePlan)
 function Restore-Missing([string]$source, [string]$from, [switch]$Confirmed) {
   Commit-Edit
   if ($script:saveFailed) { Save-Items }
   $r = Get-BackupRestorePlan (Read-LocalLists $listsDir 1500) $source $listsDir (Get-SharedFileSet $listsDir)
-  if (-not $r.Plan) { Show-Notice 'A list is being written right now. Try again in a moment.'; return '' }
-  if (-not $r.Plan.Ops.Count) { Show-Notice "Nothing is missing: everything in $from is in your lists."; return '' }
+  if (-not $r.Plan) { Show-Notice (T 'win.notice.listBeingWritten'); return '' }
+  if (-not $r.Plan.Ops.Count) { Show-Notice (T 'win.notice.nothingMissing' @{ from = $from }); return '' }
   $what = Format-Missing $r
   if (-not $Confirmed) {
-    $ans = [System.Windows.MessageBox]::Show($w, "Bring back from $($from): $what?`n`nNothing in your lists is removed or changed.", 'Saqme To Do', 'OKCancel', 'Question')
+    $ans = [System.Windows.MessageBox]::Show($w, (T 'win.ask.bringBack' @{ from = $from; what = $what }), 'Saqme To Do', 'OKCancel', 'Question')
     if ("$ans" -ne 'OK') { return '' }
   }
   [void](New-ListsBackup $DataDir 'restore')
   $done = $(try { Invoke-PlanOps $r.Plan.Ops $listsDir } catch { -1 })
-  if ($done -ne @($r.Plan.Ops).Count) { Show-Notice 'Could not bring it back: a list changed meanwhile. Try again.'; return '' }
+  if ($done -ne @($r.Plan.Ops).Count) { Show-Notice (T 'win.notice.bringBackFailed'); return '' }
   if ($script:sync) { Request-Sync }
   [void](Use-Loaded (Load-Items)); Render
-  Show-Notice "Brought back $what."
+  Show-Notice (T 'win.notice.broughtBack' @{ what = $what })
   return $what
 }
 
 function Render-AboutPage {
-  [void]$list.Children.Add((New-SettingsHeader 'About'))
-  Add-CardRow (New-InfoRow 'Version' $script:Release.Version -Tip (Get-VersionText))
+  [void]$list.Children.Add((New-SettingsHeader $script:SettingsPages.about))
+  Add-CardRow (New-InfoRow (T 'win.about.version') $script:Release.Version -Tip (Get-VersionText))
   $badge = Get-UpdateBadge
-  if ($badge) { Add-CardRow (New-LinkRow 'Updates' $badge.Short 'updates' -Dot:$badge.Dot -Name "Updates, $($badge.Text)" -Help $badge.Text) }
-  Add-CardRow (New-ActionRow 'Open the data folder' { Start-Process explorer.exe -ArgumentList "`"$DataDir`"" } -Help (Format-Path $DataDir))
-  Add-Footnote ($(if ($InstallRoot) { "Installed in $(Format-Path $InstallRoot), and it updates itself." }
-                         else { "Runs from $(Format-Path $dir) and does not update itself (setup.cmd installs it)." }) +
-                       " Your lists, these settings and the sync keys are in $(Format-Path $DataDir).")
-  Add-Note 'Saqme To Do is free and open source (MIT license). Your lists are plain markdown files: this app, AI assistants and any editor can change them.'
+  if ($badge) { Add-CardRow (New-LinkRow $script:SettingsPages.updates $badge.Short 'updates' -Dot:$badge.Dot -Name ($script:SettingsPages.updates + (T 'win.a11y.sep') + $badge.Text) -Help $badge.Text) }
+  Add-CardRow (New-ActionRow (T 'win.about.openData') { Start-Process explorer.exe -ArgumentList "`"$DataDir`"" } -Help (Format-Path $DataDir))
+  Add-Footnote ($(if ($InstallRoot) { T 'win.about.installed' @{ path = (Format-Path $InstallRoot) } }
+                         else { T 'win.about.runsFrom' @{ path = (Format-Path $dir); setup = 'setup.cmd' } }) +
+                       ' ' + (T 'win.about.data' @{ path = (Format-Path $DataDir) }))
+  Add-Note (T 'win.about.note')
 }
 
 # ---------------------------------------------------------------- sync (cloud): UI side
@@ -3647,20 +3725,103 @@ function Read-SyncConfigUi {
   return $c
 }
 
-function Format-Ago([datetime]$t) {
-  $sec = ((Get-Date) - $t).TotalSeconds
-  if ($sec -lt 45) { return 'just now' }
-  if ($sec -lt 3600) { return "$([int][Math]::Round($sec / 60)) min ago" }
-  return 'at ' + $t.ToString('HH:mm', $CI)
+# Messages that come in English from the other scripts (the sync runspace and sync-core.ps1, update.ps1 / update-core.ps1
+# and setup.ps1's update results, claude-desktop.ps1), which keep them English for their logs and tests: shown in the
+# app's language when they are known (a pattern each; its named groups are the {placeholders}, and a group named
+# "why" is a message of its own, looked up too), else as they are (a server's words, Windows' own error texts).
+$script:KnownTexts = @(
+  # sync (sync-worker.ps1 Set-SyncStatus; the widget's own first state)
+  @('^Starting\.\.\.$', 'win.msg.starting'),
+  @('^Syncing\.\.\.$', 'win.sync.syncing'),
+  @('^Synced$', 'win.sync.synced'),
+  @('^(?<n>\d+) tasks disappeared from the lists folder at once\. Deleting them everywhere is paused: restore them or delete them in Settings > Sync & sharing\.$', 'win.msg.syncPaused'),
+  @('^The server refused a change \((?<why>.*)\)\. Details in sync\\sync\.log\.$', 'win.msg.syncRefused'),
+  @('^Offline - changes are kept and sent later \((?<why>.*)\)$', 'win.msg.syncOffline'),
+  @('^Sync failed: (?<why>.*)$', 'win.msg.syncFailed'),
+  # one sync cycle, a shared list's (sync-core.ps1 Invoke-SyncCycle, sync-worker.ps1 Invoke-ShareCycle)
+  @('^The owner stopped sharing this list\.$', 'win.msg.ownerStopped'),
+  @('^The server rejected the sync token\. Pair this PC again\.$', 'win.msg.tokenRejected'),
+  @('^Server error (?<status>\d+)$', 'win.msg.serverError'),
+  @('^no key for this shared list$', 'win.msg.noShareKey'),
+  # joining a shared list (sync-core.ps1 Join-SharedList, Invoke-ShareClaim)
+  @('^That is not an invite link \(it looks like https://\.\.\./join#code=\.\.\.\)\.$', 'win.msg.notInvite'),
+  @('^Could not reach (?<host>\S+)\. Try again when you are online\.$', 'win.msg.joinOffline'),
+  @('^The invite did not work \((?<status>\d+)\)\.$', 'win.msg.inviteFailed'),
+  @("^'(?<list>.*)' is already here\.$", 'win.msg.alreadyHere'),
+  # updates (update.ps1, update-core.ps1; setup.ps1 -Update / -WorkerUpdate: result.json's message and next)
+  @('^Could not check for updates: (?<why>.*)$', 'win.msg.updCheckFailed'),
+  @('^It is tried again later\.$', 'win.msg.updTriedLater'),
+  @('^The update to (?<version>\S+) did not install: (?<why>.*)$', 'win.msg.updNotInstalled'),
+  @('^Saqme (?<version>\S+) keeps running\. It is tried again later\.$', 'win.msg.updKeepsRunning'),
+  @('^The update stopped: (?<why>.*)$', 'win.msg.updStopped'),
+  @('^Saqme keeps running as it was\. It is tried again later\.$', 'win.msg.updKeepsAsItWas'),
+  @('^it is not the release it says it is$', 'win.msg.updWrongRelease'),
+  @('^its setup stopped without saying why$', 'win.msg.updSetupStopped'),
+  @('^it could not be unpacked \((?<why>.*)\)$', 'win.msg.updUnpack'),
+  @('^The download is missing\.$', 'win.msg.updNoDownload'),
+  @('^The download has (?<got>\d+) bytes; the release says (?<want>\d+)\.$', 'win.msg.updSize'),
+  @('^The download does not match the checksum of the release\.$', 'win.msg.updChecksum'),
+  @('^Could not download the update \((?<why>.*)\)\.$', 'win.msg.updDownload'),
+  @('^This copy does not say where it is published \(worker\\package\.json, "repository"\)\.$', 'win.msg.updNoRepo'),
+  @('^Could not reach GitHub \((?<why>.*)\)\.$', 'win.msg.updGitHubOffline'),
+  @('^GitHub answered (?<status>\d+)\.$', 'win.msg.updGitHubStatus'),
+  @('^The release on GitHub has no valid manifest\.$', 'win.msg.updNoManifest'),
+  @('^The check did not finish\.$', 'win.msg.updCheckUnfinished'),
+  @('^Sign in to Cloudflare to finish the update to (?<version>\S+): it needs your sync service updated first\.$', 'win.msg.updHeldLogin'),
+  @('^The update to (?<version>\S+) is waiting: it needs your sync service updated first, and that did not work \((?<why>.*)\)\.$', 'win.msg.updHeld'),
+  @('^no reason given$', 'win.msg.noReason'),
+  @('^Nothing changed\. It is tried again later, or now with Try again\.$', 'win.msg.updNothingChanged'),
+  @('^Version (?<version>\S+) did not start, so Saqme went back to (?<from>\S+)\.$', 'win.msg.updRolledBack'),
+  @('^Version (?<version>\S+) did not start, so Saqme went back to the version before\.$', 'win.msg.updRolledBackPrev'),
+  @("^Please report it \(the widget's log is in (?<path>.+)\)\.$", 'win.msg.updReport'),
+  @('^Updated to (?<version>\S+)\.$', 'win.msg.updated'),
+  @('^Updated to (?<version>\S+)\. Sign in to Cloudflare to finish: your sync service still runs the version before\.$', 'win.msg.updatedLogin'),
+  @('^Updated to (?<version>\S+)\. Your sync service could not be updated yet \((?<why>.*)\); it is tried again later\.$', 'win.msg.updatedWorkerLater'),
+  @('^Updated to (?<version>\S+), your sync service too\.$', 'win.msg.updatedBoth'),
+  @('^Sign in to Cloudflare to finish the update of your sync service\.$', 'win.msg.updWorkerLogin'),
+  @('^Your sync service could not be updated yet \((?<why>.*)\)\.$', 'win.msg.updWorkerFailed'),
+  @('^Sign in to Cloudflare to finish the update\.$', 'win.msg.updLogin'),
+  # Claude Desktop's settings file (claude-desktop.ps1)
+  @("^Claude Desktop's settings file is not plain JSON \(it may have a comment or a typo in it\), so Saqme left it alone\.$", 'win.msg.deskNotJson'),
+  @("^Claude Desktop's settings file does not look as expected, so Saqme left it alone\.$", 'win.msg.deskOdd'),
+  @("^Claude Desktop's settings file has an unexpected `"mcpServers`" part, so Saqme left it alone\.$", 'win.msg.deskServers'),
+  @("^Claude Desktop's settings file is in use by another program\. Try again in a moment\.$", 'win.msg.deskBusy'),
+  @('^Claude Desktop changed its settings at the same moment\. Try again\.$', 'win.msg.deskRace'),
+  @('^Claude Desktop is not installed on this PC\.$', 'win.msg.deskMissing'),
+  # (last: a shared list's message in the sync state, "Groceries: <one of the above>")
+  @('^(?<list>[^:]+): (?<why>.+)$', 'win.msg.inList', 'why')
+)
+function Convert-KnownText([string]$text) {
+  if (-not $text -or $script:Lang -ceq 'en') { return $text }   # (English: as it is)
+  foreach ($k in $script:KnownTexts) {
+    $m = [regex]::Match($text, $k[0])
+    if (-not $m.Success) { continue }
+    $vars = @{}
+    foreach ($name in ([regex]$k[0]).GetGroupNames()) {
+      if ($name -match '^\d+$') { continue }
+      $vars[$name] = $(if ($name -ceq 'why') { Convert-KnownText $m.Groups[$name].Value } else { $m.Groups[$name].Value })
+    }
+    # (a pattern with a 3rd part only counts when that part is a known message: "Groceries: <a known message>")
+    if ($k.Count -gt 2 -and $vars[$k[2]] -ceq $m.Groups[$k[2]].Value) { continue }
+    if ($vars.ContainsKey('n')) { return (TN $k[1] ([long]$vars['n']) $vars) }   # (a count: key.one / key.other)
+    return (T $k[1] $vars)
+  }
+  return $text
 }
 
 function Get-SyncStatusLine {
   $s = $script:sync
-  if (-not $s -or $s.Status -eq 'off') { return 'Sync is off' }
+  if (-not $s -or $s.Status -eq 'off') { return (T 'win.sync.isOff') }
   switch ($s.Status) {
-    'syncing' { return 'Syncing...' }
-    'synced' { return 'Synced' + $(if ($s.LastSync) { ' ' + (Format-Ago $s.LastSync) } else { '' }) }
-    default { return [string]$s.StatusText }
+    'syncing' { return (T 'win.sync.syncing') }
+    'synced' {
+      if (-not $s.LastSync) { return (T 'win.sync.synced') }
+      $sec = ((Get-Date) - $s.LastSync).TotalSeconds
+      if ($sec -lt 45) { return (T 'win.sync.syncedNow') }
+      if ($sec -lt 3600) { return (TN 'win.sync.syncedMin' ([int][Math]::Round($sec / 60))) }
+      return (T 'win.sync.syncedAt' @{ time = (Format-UiDate $s.LastSync 'HH:mm') })
+    }
+    default { return (Convert-KnownText ([string]$s.StatusText)) }
   }
 }
 
@@ -3679,7 +3840,7 @@ function Update-SyncIndicator([switch]$Force) {
   $s = $script:sync
   $status = $(if ($s) { [string]$s.Status } else { 'off' })
   $n = @(Get-OpenConflictList).Count + @(Get-NoticeList).Count
-  $sig = "$status|$(if ($s) { $s.StatusText })|$n|$(if ($s) { $s.Guarded })|$(if ($s -and $s.LastSync) { (Format-Ago $s.LastSync) })"
+  $sig = "$status|$(if ($s) { $s.StatusText })|$n|$(if ($s) { $s.Guarded })|$(Get-SyncStatusLine)"
   if (-not $Force -and $sig -eq $script:syncShown) { return $false }
   $script:syncShown = $sig
   if ($status -eq 'off') { $syncButton.Visibility = 'Collapsed' }
@@ -3691,9 +3852,9 @@ function Update-SyncIndicator([switch]$Force) {
       'offline' { $syncGlyph.Text = G 0xE753; $syncGlyph.Foreground = $Faint; $syncGlyph.Opacity = 0.35 }
       default   { $syncGlyph.Text = G 0xE7BA; $syncGlyph.Foreground = $Red; $syncGlyph.Opacity = 1 }
     }
-    $syncButton.ToolTip = Get-SyncStatusLine; Set-Name $syncButton ('Sync: ' + (Get-SyncStatusLine))
+    $syncButton.ToolTip = Get-SyncStatusLine; Set-Name $syncButton (T 'win.a11y.syncState' @{ state = (Get-SyncStatusLine) })
   }
-  if ($n -gt 0) { $conflictBadge.Visibility = 'Visible'; $cbText.Text = $(if ($n -eq 1) { '1 conflict' } else { "$n conflicts" }); Set-Name $conflictBadge $cbText.Text }
+  if ($n -gt 0) { $conflictBadge.Visibility = 'Visible'; $cbText.Text = TN 'win.sync.nConflicts' $n; Set-Name $conflictBadge $cbText.Text }
   else { $conflictBadge.Visibility = 'Collapsed' }
   return $true
 }
@@ -3738,7 +3899,7 @@ function Connect-Sync([string]$link) {
   if (-not $p -or -not $p.Server) { return 'bad' }
   $srvHost = ([Uri]$p.Server).Host
   $n = @(Get-ProjectNames).Count
-  $r = [System.Windows.MessageBox]::Show($w, "Sync this PC with $srvHost?`n`nThis uploads this PC's $n $(if ($n -eq 1) { 'list' } else { 'lists' }) to $srvHost and keeps them in step with it. Only use a pairing link from your own devices: whoever runs that server can read your lists.", 'Saqme To Do', 'YesNo', 'Question')
+  $r = [System.Windows.MessageBox]::Show($w, (TN 'win.ask.connectSync' $n @{ host = $srvHost }), 'Saqme To Do', 'YesNo', 'Question')
   if ("$r" -ne 'Yes') { return 'cancel' }
   if (-not (Test-Path -LiteralPath $syncDir)) { [void](New-Item -ItemType Directory -Path $syncDir -Force) }
   Write-TextFileAtomic $syncCfgFile (ConvertTo-JsonText @{ url = $p.Server; token = $p.Key; deviceId = "pc-$(New-SaqmeId 10)"; enabled = $true })
@@ -3751,8 +3912,7 @@ function Connect-Sync([string]$link) {
 # Runs the cloud part of setup (what setup.cmd -Cloud does) in a console window of its own: Node.js, the
 # Cloudflare sign-in in the browser and any questions happen there, while the app keeps running. Its result
 # file says how it ended (Watch-SyncSetup); without one, the window was closed before it finished.
-$script:SetupHelp = 'Creates your own free sync service in your Cloudflare account. Your lists stay on this PC and are uploaded there; nothing is deleted. You need a free Cloudflare account and one sign-in in the browser.'
-$script:TurnOffHelp = 'This PC stops syncing. Your lists stay on this PC. The copy in your Cloudflare account is kept until you delete it there.'
+Register-Words { $script:SetupHelp = T 'win.sync.setUpHelp'; $script:TurnOffHelp = T 'win.sync.turnOffHelp' }
 $script:setupRun = $null; $script:setupOutcome = $null
 function Find-SetupScript {
   foreach ($p in @($env:SAQME_SETUP_SCRIPT, (Join-Path $dir 'setup.ps1'), (Join-Path $dir '..\scripts\setup.ps1'))) {
@@ -3783,13 +3943,12 @@ function Start-SyncSetup {
   if ($script:setupRun) { return }
   $pkg = Get-PackageContext
   if ($pkg) {
-    $script:setupOutcome = @{ message = "Saqme was started from inside another app ($pkg), so Windows would keep what setup writes in that app's private copy of your settings."
-                              next = 'Quit Saqme (tray icon > Quit), start it from the Start menu, then choose Set up sync again.' }
+    $script:setupOutcome = @{ message = (T 'win.sync.setupInPackage' @{ app = $pkg }); next = (T 'win.sync.setupInPackageNext') }
     Render; return
   }
   $setup = Find-SetupScript
   if (-not $setup) {
-    $script:setupOutcome = @{ message = 'The setup script is not installed next to the app.'; next = 'Run setup.cmd -Cloud from the folder you installed the app from.' }
+    $script:setupOutcome = @{ message = (T 'win.sync.setupMissing'); next = (T 'win.sync.setupMissingNext' @{ command = 'setup.cmd -Cloud' }) }
     Render; return
   }
   if (-not (Test-Path -LiteralPath $syncDir)) { [void](New-Item -ItemType Directory -Path $syncDir -Force) }
@@ -3798,7 +3957,7 @@ function Start-SyncSetup {
   $ps = Join-Path $env:WINDIR 'System32\WindowsPowerShell\v1.0\powershell.exe'
   $a = @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', "`"$setup`"", '-FromApp', '-ResultFile', "`"$result`"", '-DataDir', "`"$DataDir`"")
   try { $p = Start-Process -FilePath $ps -ArgumentList $a -PassThru -ErrorAction Stop }
-  catch { $script:setupOutcome = @{ message = "Setup could not start: $($_.Exception.Message)"; next = '' }; Render; return }
+  catch { $script:setupOutcome = @{ message = (T 'win.sync.setupNoStart' @{ why = $_.Exception.Message }); next = '' }; Render; return }
   $script:setupRun = @{ Proc = $p; Result = $result }
   $script:setupOutcome = $null
   Render
@@ -3818,7 +3977,7 @@ function Watch-SyncSetup {
   } elseif ($res -and -not $res['ok']) {
     $script:setupOutcome = @{ message = [string]$res['message']; next = [string]$res['next'] }
   } else {
-    $script:setupOutcome = @{ message = 'The setup window was closed before it finished.'; next = 'Nothing changed on this PC. You can run it again any time.' }
+    $script:setupOutcome = @{ message = (T 'win.sync.setupClosed'); next = (T 'win.sync.setupClosedNext') }
   }
   Render
 }
@@ -3832,45 +3991,46 @@ function Disable-Sync {
 
 function Render-SyncSettings {
   $syncCfg = Read-SyncConfigUi
-  Add-Heading 'Sync'
+  Add-Heading (T 'win.header.sync')
   if (-not $syncCfg) {
     if ($script:setupRun) {
-      Add-CardRow (New-InfoRow 'Sync with your phone' 'Setting up...')
-      Add-Footnote 'Follow the window that opened: a browser asks you to sign in to Cloudflare (or create a free account) and to click Allow. You can keep using the app meanwhile.'
+      Add-CardRow (New-InfoRow (T 'win.sync.withPhone') (T 'win.sync.settingUp'))
+      Add-Footnote (T 'win.sync.followWindow')
     } else {
-      Add-CardRow (New-InfoRow 'Sync with your phone' 'Off')
-      Add-CardRow (New-ActionRow 'Set up sync' { Start-SyncSetup } -Help $script:SetupHelp)
-      Add-Footnote 'Set it up once: your own free sync service, in your Cloudflare account. Your lists stay on this PC and are uploaded there.'
+      Add-CardRow (New-InfoRow (T 'win.sync.withPhone') (T 'win.value.off'))
+      Add-CardRow (New-ActionRow (T 'win.sync.setUp') { Start-SyncSetup } -Help $script:SetupHelp)
+      Add-Footnote (T 'win.sync.setUpNote')
     }
     if ($script:setupOutcome) {
-      Add-Footnote ((@('Sync was not set up.', $script:setupOutcome.message, $script:setupOutcome.next) | Where-Object { $_ }) -join ' ') $Red
+      Add-Footnote ((@((T 'win.sync.notSetUp'), (Convert-KnownText $script:setupOutcome.message), (Convert-KnownText $script:setupOutcome.next)) | Where-Object { $_ }) -join ' ') $Red
     }
     # a device that already syncs: its pairing link connects this PC to the same sync service
-    Add-Heading 'Already syncing on another device?'
+    Add-Heading (T 'win.sync.alreadySyncing')
     $box = New-Object System.Windows.Controls.TextBox
-    Set-Name $box 'Pairing link' 'From a device that already syncs: its Pair phone page, Copy link'
+    Set-Name $box (T 'win.sync.pairingLink') (T 'win.sync.pairingLinkHelp')
     $script:pairBox = $box
     $box.Add_PreviewKeyDown({ param($s, $e) if ($e.Key -eq 'Return') {
         $e.Handled = $true
         $r = Connect-Sync $s.Text
         if ($r -eq 'ok') { [void]$w.Focus(); Render } elseif ($r -eq 'bad') { Set-BoxError $s } } })
-    $go = New-TextButton 'Connect' {
+    $go = New-TextButton (T 'win.sync.connect') {
       $r = Connect-Sync $script:pairBox.Text
       if ($r -eq 'ok') { Render } elseif ($r -eq 'bad') { Set-BoxError $script:pairBox }
     }
-    Add-CardRow (New-InputRow $box 'Paste its pairing link' $go)
-    Add-Footnote 'There: Pair phone, Copy link. It looks like https://...workers.dev/#pair=...'
+    Add-CardRow (New-InputRow $box (T 'win.sync.pastePairing') $go)
+    Add-Footnote (T 'win.sync.pairingNote')
     return
   }
   $srvHost = try { ([Uri][string]$syncCfg['url']).Host } catch { [string]$syncCfg['url'] }
-  $wv = $(if ($script:sync -and $script:sync.WorkerVersion) { ", version $($script:sync.WorkerVersion)" } elseif ($script:sync -and $script:sync.WorkerApi) { ', an older version' } else { '' })
-  Add-CardRow (New-InfoRow 'Status' (Get-SyncStatusLine) -Tip "Your sync service: $srvHost$wv")
-  Add-CardRow (New-ActionRow 'Sync now' { Request-Sync; if ($script:sync) { $script:sync.Status = 'syncing' }; [void](Update-SyncIndicator -Force); Render })
-  Add-CardRow (New-LinkRow 'Pair phone' '' 'pair' -Help 'QR code and pairing code for your phone (or another PC)')
+  $service = $(if ($script:sync -and $script:sync.WorkerVersion) { T 'win.sync.serviceVersion' @{ host = $srvHost; version = $script:sync.WorkerVersion } }
+                elseif ($script:sync -and $script:sync.WorkerApi) { T 'win.sync.serviceOlder' @{ host = $srvHost } } else { T 'win.sync.service' @{ host = $srvHost } })
+  Add-CardRow (New-InfoRow (T 'win.value.status') (Get-SyncStatusLine) -Tip $service)
+  Add-CardRow (New-ActionRow (T 'win.sync.now') { Request-Sync; if ($script:sync) { $script:sync.Status = 'syncing' }; [void](Update-SyncIndicator -Force); Render })
+  Add-CardRow (New-LinkRow (T 'win.pair.title') '' 'pair' -Help (T 'win.sync.pairHelp'))
   # (Turn off sync is under Advanced, at the bottom of the page)
   $n = @(Get-OpenConflictList).Count + @(Get-NoticeList).Count
-  if ($n) { Add-CardRow (New-LinkRow 'Conflicts' "$n" 'conflicts' -Dot -Name "Conflicts, $n" -Help 'Changed on two devices at once: pick which version to keep') }
-  Add-Footnote "Your sync service: $srvHost$wv."
+  if ($n) { Add-CardRow (New-LinkRow (T 'win.conflicts.title') "$n" 'conflicts' -Dot -Name ((T 'win.conflicts.title') + (T 'win.a11y.sep') + $n) -Help (T 'win.sync.conflictsHelp')) }
+  Add-Footnote ($service + '.')
 }
 
 function New-QrImage([string]$text) {
@@ -3914,41 +4074,41 @@ function Receive-PairCode {
 }
 
 function Render-PairView {
-  [void]$list.Children.Add((New-SettingsHeader 'Pair phone'))
+  [void]$list.Children.Add((New-SettingsHeader (T 'win.pair.title')))
   $syncCfg = Read-SyncConfigUi
-  if (-not $syncCfg) { Add-Note 'Sync is not set up on this PC yet (Settings > Sync & sharing).'; return }
+  if (-not $syncCfg) { Add-Note (T 'win.pair.noSync'); return }
   Request-PairCode $syncCfg
   $code = $(if ($script:pairCode -and $script:pairCode.Until -gt (Get-Date)) { $script:pairCode.Code } else { $null })
   $link = ([string]$syncCfg['url']).TrimEnd('/') + '/#pair=' + [string]$syncCfg['token']
   $frame = New-Object System.Windows.Controls.Border
   $frame.Background = $Paper; $frame.CornerRadius = New-Object System.Windows.CornerRadius($CardRadius); $frame.Padding = '8'
   $frame.HorizontalAlignment = 'Center'
-  try { $frame.Child = New-QrImage $link } catch { $frame.Child = New-Text "Could not draw the QR code: $($_.Exception.Message)" $TypeSize.meta $Red }
+  try { $frame.Child = New-QrImage $link } catch { $frame.Child = New-Text (T 'win.qr.failed' @{ why = $_.Exception.Message }) $TypeSize.meta $Red }
   Add-Loose $frame
   # the steps on the phone, one short line each
-  Add-Heading 'On the iPhone'
-  $codeStep = $(if ($code) { 'Type the pairing code below' } elseif ($null -eq $code) { 'Type the code (it shows below)' } else { 'Paste the link below' })
-  $steps = @('Scan the code with the Camera', 'Open the link in Safari', 'Share, then Add to Home Screen', 'Open Saqme from the Home Screen', $codeStep, 'In its Settings: Enable notifications')
+  Add-Heading (T 'win.pair.onIphone')
+  $codeStep = $(if ($code) { T 'win.pair.stepCode' } elseif ($null -eq $code) { T 'win.pair.stepCodeSoon' } else { T 'win.pair.stepLink' })
+  $steps = @((T 'win.pair.step1'), (T 'win.pair.step2'), (T 'win.pair.step3'), (T 'win.pair.step4'), $codeStep, (T 'win.pair.step6'))
   for ($k = 0; $k -lt $steps.Count; $k++) { Add-CardRow (New-InfoRow $steps[$k] -Lead "$($k + 1)" -Tip $steps[$k]) ($CardPad + 28) }
   if ($code) {
-    Add-Heading 'Pairing code'
+    Add-Heading (T 'win.pair.code')
     $ct = New-Text $code 26 $Ink; $ct.FontWeight = 'SemiBold'; $ct.TextWrapping = 'NoWrap'; $ct.HorizontalAlignment = 'Center'; Set-Tabular $ct
-    Set-Name $ct ('Pairing code ' + (($code -replace '-', '').ToCharArray() -join ' '))
+    Set-Name $ct (T 'win.pair.codeName' @{ code = (($code -replace '-', '').ToCharArray() -join ' ') })
     $r = New-Object System.Windows.Controls.Border; Set-RowBox $r $ct; $r.Padding = '8,10,8,10'
     Add-CardRow $r
-    Add-Footnote 'It works once, for 10 minutes.'
-  } elseif ($code -eq '') { Add-Footnote 'No pairing code from your sync service right now: Copy link, and send the link to the phone.' }
-  Add-Heading 'Pairing link'
+    Add-Footnote (T 'win.pair.codeNote')
+  } elseif ($code -eq '') { Add-Footnote (T 'win.pair.noCode') }
+  Add-Heading (T 'win.sync.pairingLink')
   $box = New-Object System.Windows.Controls.TextBox
-  Set-Name $box 'Pairing link (keep it private)'
+  Set-Name $box (T 'win.pair.linkName')
   $box.Text = $link; $box.IsReadOnly = $true
   $box.Add_GotKeyboardFocus({ param($s, $e) $s.SelectAll() })
-  $copy = New-TextButton 'Copy link' { try { [System.Windows.Clipboard]::SetText($script:pairLink); Show-Toast 'Saqme To Do' 'Pairing link copied.' 'Saqme To Do' } catch {} }
+  $copy = New-TextButton (T 'win.ai.copyLink') { try { [System.Windows.Clipboard]::SetText($script:pairLink); Show-Toast 'Saqme To Do' (T 'win.pair.copied') 'Saqme To Do' } catch {} }
   $script:pairLink = $link
   $row = New-InputRow $box '' $copy
   $box.Foreground = $Faint
   Add-CardRow $row
-  Add-Footnote "The QR code and the link are the key to your lists: anyone who has them can read and change them. To revoke it, run setup again with $([char]0x2011)RotateToken and pair your devices again."
+  Add-Footnote (T 'win.pair.keyNote' @{ flag = "$([char]0x2011)RotateToken" })
 }
 
 # ---------------------------------------------------------------- updates (Settings > Updates; docs/setup.md, "Updating")
@@ -3998,7 +4158,7 @@ function Receive-UpdateCheck {
   $script:upd.Checking = $null
   $script:upd.CheckedAt = Get-NowMs
   if ($r -and $r.Ok) { $script:upd.Latest = $r.Manifest; $script:upd.Error = '' }
-  else { $script:upd.Error = $(if ($r -and $r.Error) { [string]$r.Error } else { 'The check did not finish.' }) }
+  else { $script:upd.Error = $(if ($r -and $r.Error) { [string]$r.Error } else { T 'win.upd.checkUnfinished' }) }
 }
 # the newest release when it is newer than this version, else $null
 function Get-AvailableUpdate {
@@ -4025,7 +4185,7 @@ function Start-Update([switch]$WorkerOnly) {
   if ($WorkerOnly) { $a += '-WorkerOnly' }
   $script:upd.Since = Get-NowMs
   try { $script:upd.Proc = Start-Process -FilePath $ps -ArgumentList $a -WindowStyle Hidden -PassThru -ErrorAction Stop; $script:upd.Watch = $true }
-  catch { $script:upd.Error = "The update could not start: $($_.Exception.Message)" }
+  catch { $script:upd.Error = T 'win.upd.couldNotStart' @{ error = $_.Exception.Message } }
   Render-IfSettings
 }
 # the Cloudflare sign-in an update needs: the browser opens (wrangler), the Worker part runs once it is done
@@ -4040,7 +4200,7 @@ function Start-CloudLogin {
     $p = Start-Process -FilePath $ps -ArgumentList $a -WindowStyle Hidden -PassThru -ErrorAction Stop
     [void]$p.Handle   # (without it, ExitCode stays empty once the process is gone)
     $script:upd.Login = @{ Proc = $p; Result = $res }; $script:upd.LoginError = ''
-  } catch { $script:upd.LoginError = "The sign-in could not start: $($_.Exception.Message)" }
+  } catch { $script:upd.LoginError = T 'win.upd.signInCouldNotStart' @{ error = $_.Exception.Message } }
   Render-IfSettings
 }
 function Watch-CloudLogin {
@@ -4054,7 +4214,7 @@ function Watch-CloudLogin {
     $held = Get-UpdateResult
     if ($held -and -not $held['ok']) { Start-Update } else { Start-Update -WorkerOnly }
   } else {
-    $script:upd.LoginError = $(if ($r -and $r['message']) { [string]$r['message'] } else { 'The sign-in did not finish. Try again; a browser window asks you to allow it.' })
+    $script:upd.LoginError = $(if ($r -and $r['message']) { [string]$r['message'] } else { T 'win.upd.signInUnfinished' })
   }
   Render-IfSettings
 }
@@ -4070,22 +4230,22 @@ function Get-VersionText { return "Saqme To Do $($script:Release.Version)" }
 # value of the Updates row in Settings
 function Get-UpdateBadge {
   if (-not $InstallRoot) { return $null }
-  if (Test-UpdateRunning) { return @{ Text = 'Updating...'; Short = 'Updating...'; Dot = $false } }
+  if (Test-UpdateRunning) { return @{ Text = (T 'win.upd.updating'); Short = (T 'win.upd.updating'); Dot = $false } }
   $res = Get-UpdateResult
-  if ($res -and $res['needsLogin']) { return @{ Text = 'Sign in to Cloudflare to finish the update'; Short = 'Sign in needed'; Dot = $true } }
+  if ($res -and $res['needsLogin']) { return @{ Text = (T 'win.upd.signInBadge'); Short = (T 'win.upd.signInShort'); Dot = $true } }
   $avail = Get-AvailableUpdate
-  if ($avail) { return @{ Text = "Update available: $($avail.version)"; Short = "$($avail.version) available"; Dot = $true } }
-  if ($res -and -not $res['ok'] -and $res['version']) { return @{ Text = "The update to $($res['version']) is waiting"; Short = 'Waiting'; Dot = $true } }
+  if ($avail) { return @{ Text = (T 'win.upd.available' @{ version = $avail.version }); Short = (T 'win.upd.availableShort' @{ version = $avail.version }); Dot = $true } }
+  if ($res -and -not $res['ok'] -and $res['version']) { return @{ Text = (T 'win.upd.waitingFor' @{ version = $res['version'] }); Short = (T 'win.upd.waiting'); Dot = $true } }
   return $null
 }
 # the Updates row in Settings when there is no badge: Text in words, Short for the row's value
 function Get-UpdateSummary {
-  if (-not $InstallRoot) { return @{ Text = 'This copy does not update itself'; Short = 'Off' } }
-  if ($script:upd.Checking) { return @{ Text = 'Checking for updates...'; Short = 'Checking...' } }
-  if ($script:upd.Error) { return @{ Text = 'Could not check for updates'; Short = "Couldn't check" } }
-  if ($script:upd.CheckedAt) { return @{ Text = 'Up to date'; Short = 'Up to date' } }
-  if ($script:cfg.autoUpdate -eq '1') { return @{ Text = 'Checked once a day, installed by itself when idle'; Short = 'Automatic' } }
-  return @{ Text = 'Checked once a day'; Short = 'Manual' }
+  if (-not $InstallRoot) { return @{ Text = (T 'win.upd.notInstalled'); Short = (T 'win.upd.off') } }
+  if ($script:upd.Checking) { return @{ Text = (T 'win.upd.checkingLong'); Short = (T 'win.upd.checking') } }
+  if ($script:upd.Error) { return @{ Text = (T 'win.upd.couldNotCheck'); Short = (T 'win.upd.couldNotCheckShort') } }
+  if ($script:upd.CheckedAt) { return @{ Text = (T 'win.upd.upToDate'); Short = (T 'win.upd.upToDate') } }
+  if ($script:cfg.autoUpdate -eq '1') { return @{ Text = (T 'win.upd.autoText'); Short = (T 'win.upd.auto') } }
+  return @{ Text = (T 'win.upd.manualText'); Short = (T 'win.upd.manual') }
 }
 
 # the quiet line at the bottom of the Settings views, and the tray icon's tooltip. With a badge, the line is a link to Updates.
@@ -4110,10 +4270,10 @@ function Update-VersionDisplay {
     [void]$row.Children.Add($more)
   }
   if ($link) {
-    $b = New-Control 'link' "$text. $($badge.Text)" 'Opens Settings, Updates' { param($s, $e) Show-View 'updates' }
+    $b = New-Control 'link' (T 'win.upd.versionLinkName' @{ version = $text; badge = $badge.Text }) (T 'win.upd.versionLinkHelp') { param($s, $e) Show-View 'updates' }
     [System.Windows.Automation.AutomationProperties]::SetAutomationId($b, 'version')
     $b.Child = $row; $b.Tag = 'updates'; $b.Cursor = 'Hand'; $b.Background = $Clear; $b.Padding = '6,3,6,3'; $b.Margin = "$($CardPad - 6),0,0,0"; $b.HorizontalAlignment = 'Left'
-    $b.CornerRadius = New-Object System.Windows.CornerRadius($Tokens.Radius.control); $b.ToolTip = 'Open Updates'; Set-Press $b 0.97
+    $b.CornerRadius = New-Object System.Windows.CornerRadius($Tokens.Radius.control); $b.ToolTip = T 'win.upd.openUpdates'; Set-Press $b 0.97
     $b.Add_MouseEnter({ param($s, $e) $s.Background = $Hover })
     $b.Add_MouseLeave({ param($s, $e) $s.Background = $Clear })
     $b.Add_MouseLeftButtonUp({ param($s, $e) $e.Handled = $true; Show-View 'updates' })
@@ -4160,9 +4320,9 @@ function Step-Updates {
 
 function Render-UpdateSettings {
   $cur = $script:Release.Version
-  Add-CardRow (New-InfoRow 'Version' $cur -Tip (Get-VersionText))
+  Add-CardRow (New-InfoRow (T 'win.upd.version') $cur -Tip (Get-VersionText))
   if (-not $InstallRoot) {
-    Add-Footnote 'This copy runs from a folder of its own, not an installed one, so it does not update itself. setup.cmd installs it.'
+    Add-Footnote (T 'win.upd.portable')
     Render-ServiceUpdate
     return
   }
@@ -4173,50 +4333,50 @@ function Render-UpdateSettings {
     $st = Read-UpdateFile $InstallRoot 'status.json'
     $v = $(if ($st -and $st['version']) { [string]$st['version'] } elseif ($avail) { $avail.version } else { '' })
     $what = $(switch ($(if ($st) { [string]$st['state'] } else { '' })) {
-      'checking' { 'Checking...' }
-      'downloading' { "Downloading $v..." }
-      'installing' { "Installing $v..." }
-      'worker' { 'Updating your sync service...' }
-      'restarting' { 'Restarting...' }
-      default { 'Updating...' } })
-    Add-CardRow (New-InfoRow 'Status' $what -LongValue -Tip $what)
-    Add-Footnote 'Saqme restarts by itself when it is done; your lists stay as they are.'
+      'checking' { T 'win.upd.checking' }
+      'downloading' { T 'win.upd.downloading' @{ version = $v } }
+      'installing' { T 'win.upd.installing' @{ version = $v } }
+      'worker' { T 'win.upd.updatingService' }
+      'restarting' { T 'win.upd.restarting' }
+      default { T 'win.upd.updating' } })
+    Add-CardRow (New-InfoRow (T 'win.upd.status') $what -LongValue -Tip $what)
+    Add-Footnote (T 'win.upd.restartsWhenDone')
   } elseif ($avail) {
-    Add-CardRow (New-InfoRow 'Available' $avail.version -Dot)
-    Add-CardRow (New-ActionRow 'Update now' { Start-Update } -Name "Update now to $($avail.version)" -Help 'Saqme restarts by itself; your lists stay as they are')
-    Add-Footnote "You have $cur. It takes a minute; Saqme restarts by itself and your lists stay as they are."
+    Add-CardRow (New-InfoRow (T 'win.upd.availableLabel') $avail.version -Dot)
+    Add-CardRow (New-ActionRow (T 'win.upd.updateNow') { Start-Update } -Name (T 'win.upd.updateNowTo' @{ version = $avail.version }) -Help (T 'win.upd.restartsHelp'))
+    Add-Footnote (T 'win.upd.youHave' @{ version = $cur })
   } else {
-    $state = $(if ($script:upd.Checking) { 'Checking...' } elseif ($script:upd.Error) { "Couldn't check" } elseif ($script:upd.CheckedAt) { 'Up to date' } else { 'Not checked yet' })
-    Add-CardRow (New-InfoRow 'Status' $state)
-    Add-CardRow (New-ActionRow 'Check now' { Start-UpdateCheck; Render } -Name 'Check for updates now')
-    Add-Footnote $(if ($script:upd.Error) { [string]$script:upd.Error } elseif ($script:upd.CheckedAt) { "Checked at $(Format-Ms $script:upd.CheckedAt 'H:mm'), then again once a day." } else { 'Checked shortly after the start, then once a day.' })
+    $state = $(if ($script:upd.Checking) { T 'win.upd.checking' } elseif ($script:upd.Error) { T 'win.upd.couldNotCheckShort' } elseif ($script:upd.CheckedAt) { T 'win.upd.upToDate' } else { T 'win.upd.notChecked' })
+    Add-CardRow (New-InfoRow (T 'win.upd.status') $state)
+    Add-CardRow (New-ActionRow (T 'win.upd.checkNow') { Start-UpdateCheck; Render } -Name (T 'win.upd.checkNowName'))
+    Add-Footnote $(if ($script:upd.Error) { [string]$script:upd.Error } elseif ($script:upd.CheckedAt) { T 'win.upd.checkedAt' @{ time = (Format-Ms $script:upd.CheckedAt 'H:mm') } } else { T 'win.upd.checkedSoon' })
   }
   # how the last one ended, when there is something to do about it
   if ($script:upd.Login) {
-    Add-CardRow (New-InfoRow 'Signing in to Cloudflare...')
-    Add-Footnote 'Allow it in the browser window that opened; the update finishes by itself afterwards.'
+    Add-CardRow (New-InfoRow (T 'win.upd.signingIn'))
+    Add-Footnote (T 'win.upd.allowInBrowser')
   } elseif (-not $running -and $res -and ($res['needsLogin'] -or -not $res['ok'] -or $res['worker'] -eq 'pending')) {
     $hint = (([string]$res['message']), ([string]$res['next']), $script:upd.LoginError | Where-Object { $_ }) -join ' '
     if ($res['needsLogin']) {
-      Add-CardRow (New-ActionRow 'Sign in to Cloudflare' { Start-CloudLogin } -Help 'Opens the browser; the update finishes by itself afterwards')
+      Add-CardRow (New-ActionRow (T 'win.upd.signIn') { Start-CloudLogin } -Help (T 'win.upd.signInHelp'))
     } elseif ($res['ok']) {
-      Add-CardRow (New-InfoRow 'Your sync service' 'Not updated yet')
-      Add-CardRow (New-ActionRow 'Try again' { Start-Update -WorkerOnly } -Name 'Try updating your sync service again')
+      Add-CardRow (New-InfoRow (T 'win.svc.title') (T 'win.upd.notUpdated'))
+      Add-CardRow (New-ActionRow (T 'win.upd.tryAgain') { Start-Update -WorkerOnly } -Name (T 'win.upd.tryServiceAgain'))
     } elseif ($res['version']) {
-      Add-CardRow (New-InfoRow "Update to $($res['version'])" $(if ($res['held']) { 'Waiting' } else { "Didn't install" }) -Dot)
-      Add-CardRow (New-ActionRow 'Try again' { Start-Update } -Name "Try the update to $($res['version']) again")
+      Add-CardRow (New-InfoRow (T 'win.upd.updateTo' @{ version = $res['version'] }) $(if ($res['held']) { T 'win.upd.waiting' } else { T 'win.upd.didNotInstall' }) -Dot)
+      Add-CardRow (New-ActionRow (T 'win.upd.tryAgain') { Start-Update } -Name (T 'win.upd.tryUpdateAgain' @{ version = $res['version'] }))
     } else {
-      Add-CardRow (New-InfoRow 'Checking for updates' "Couldn't check")
+      Add-CardRow (New-InfoRow (T 'win.upd.checkingLabel') (T 'win.upd.couldNotCheckShort'))
     }
     if ($hint) { Add-Footnote $hint }
   }
   Close-Card
-  Add-CardRow (New-SwitchRow 'Install updates automatically' ($script:cfg.autoUpdate -eq '1') {
+  Add-CardRow (New-SwitchRow (T 'win.upd.autoInstall') ($script:cfg.autoUpdate -eq '1') {
     param($on)
     $script:cfg.autoUpdate = $(if ($on) { '1' } else { '0' }); Save-Settings
     Render
-  } 'When the app is idle. It restarts by itself; your lists stay as they are.')
-  Add-Footnote 'When the app is idle. It restarts by itself; your lists stay as they are.'
+  } (T 'win.upd.autoInstallHelp'))
+  Add-Footnote (T 'win.upd.autoInstallHelp')
   Render-ServiceUpdate
 }
 
@@ -4257,62 +4417,61 @@ function Send-ServiceUpdate([string]$path, $body, [string]$done = '') {
 function Save-ServiceToken {
   $t = ([string]$script:svc.Box.Text).Trim()
   if (-not $t) { Set-BoxError $script:svc.Box; return }
-  Send-ServiceUpdate 'update/token' @{ token = $t } 'Your sync service updates itself from now on.'
+  Send-ServiceUpdate 'update/token' @{ token = $t } (T 'win.svc.tokenSaved')
 }
 function Render-ServiceUpdate {
   if (-not (Read-SyncConfigUi)) { return }
   $sv = $script:svc; $s = $sv.Status
-  Add-Heading 'Your sync service'
+  Add-Heading (T 'win.svc.title')
   $wv = $(if ($script:sync -and $script:sync.WorkerVersion) { [string]$script:sync.WorkerVersion } else { '' })
   if ($script:sync -and $script:sync.WorkerApi -and $script:sync.WorkerApi -lt $script:SelfUpdateApi) {
-    Add-CardRow (New-InfoRow 'Version' $(if ($wv) { $wv } else { 'An older one' }))
-    Add-Footnote 'It updates with this app (above). From its next update on, it can also update itself.'
+    Add-CardRow (New-InfoRow (T 'win.upd.version') $(if ($wv) { $wv } else { T 'win.svc.older' }))
+    Add-Footnote (T 'win.svc.olderHelp')
     return
   }
   if (-not $s) {
-    Add-CardRow (New-InfoRow 'Version' $wv)
-    Add-Footnote $(if ($sv.Error) { "Could not ask your sync service: $($sv.Error)" } else { 'Asking your sync service...' }) $(if ($sv.Error) { $Red } else { $Faint })
+    Add-CardRow (New-InfoRow (T 'win.upd.version') $wv)
+    Add-Footnote $(if ($sv.Error) { T 'win.svc.couldNotAsk' @{ error = $sv.Error } } else { T 'win.svc.asking' }) $(if ($sv.Error) { $Red } else { $Faint })
     return
   }
-  Add-CardRow (New-InfoRow 'Version' ([string]$s['version']))
+  Add-CardRow (New-InfoRow (T 'win.upd.version') ([string]$s['version']))
   if (-not $s['knowsItself']) {
-    Add-Footnote 'It updates with this app (above). Once this app has updated it, it can also update itself (it then knows its Cloudflare account).'
+    Add-Footnote (T 'win.svc.knowsNot')
     return
   }
   if (-not $s['token']) {
     # making the token is the one step only the user can do: Cloudflare's page, filled in; then paste it here
-    Add-CardRow (New-ActionRow 'Open Cloudflare''s token page' { try { Start-Process ([string]$script:svc.Status['tokenUrl']) } catch {} } -Help 'In the browser, filled in already: Workers Scripts, Edit, on your account only')
+    Add-CardRow (New-ActionRow (T 'win.svc.openTokenPage') { try { Start-Process ([string]$script:svc.Status['tokenUrl']) } catch {} } -Help (T 'win.svc.openTokenHelp'))
     $box = New-Object System.Windows.Controls.TextBox
-    Set-Name $box 'Cloudflare API token' 'The token Cloudflare showed after Create Token'
+    Set-Name $box (T 'win.svc.tokenName') (T 'win.svc.tokenHelp')
     $sv.Box = $box
     $box.Add_PreviewKeyDown({ param($s, $e) if ($e.Key -eq 'Return') { $e.Handled = $true; Save-ServiceToken } })
-    Add-CardRow (New-InputRow $box 'Paste the token' (New-TextButton 'Save' { Save-ServiceToken }))
-    if ($sv.Busy) { Add-Footnote 'Checking it with Cloudflare...' }
+    Add-CardRow (New-InputRow $box (T 'win.svc.pasteToken') (New-TextButton (T 'win.svc.save') { Save-ServiceToken }))
+    if ($sv.Busy) { Add-Footnote (T 'win.svc.checkingToken') }
     elseif ($sv.Msg) { Add-Footnote $sv.Msg $Red }
-    Add-Footnote ('Let it update itself: it then installs new versions by itself, from this project''s releases on GitHub, also when this PC is off. ' +
-      'It needs a token from Cloudflare that may change the Workers of your account, and nothing else: open the page above (signed in), click Continue to summary and Create Token, copy the token and paste it here. ' +
-      '(No permission shown on that page? Create Custom Token; Permissions: Account, Workers Scripts, Edit; Account Resources: Include, your account.)')
+    Add-Footnote (T 'win.svc.tokenAbout')
     return
   }
-  $steps = @{ checking = 'Checking...'; downloading = 'Downloading...'; uploading = 'Uploading...'; switching = 'Switching over...' }
+  $steps = @{ checking = (T 'win.upd.checking'); downloading = (T 'win.svc.downloading'); uploading = (T 'win.svc.uploading'); switching = (T 'win.svc.switching') }
   $run = [string]$s['running']
   $newer = $(if (-not $run -and $s['latest'] -and [string]$s['latest'] -ne [string]$s['version']) { [string]$s['latest'] } else { '' })
-  $state = $(if ($run) { $(if ($steps[$run]) { $steps[$run] } else { 'Updating...' }) } elseif ($newer) { "$newer available" } elseif ($s['checkedAt']) { 'Up to date' } else { 'Not checked yet' })
-  Add-CardRow (New-InfoRow 'Status' $state -Dot:([bool]$newer) -LongValue -Tip $state)
-  Add-CardRow (New-ActionRow 'Update now' { Send-ServiceUpdate 'update/now' @{} 'Your sync service is looking for a new version.' } -Name 'Update your sync service now' -Help 'Looks for a new version now and installs it')
-  Add-CardRow (New-SwitchRow 'Update by itself' ([bool]$s['auto']) { param($on) Send-ServiceUpdate 'update/auto' @{ on = [bool]$on } } 'Looks every 6 hours and installs a new version. Off: only with Update now.')
+  $state = $(if ($run) { $(if ($steps[$run]) { $steps[$run] } else { T 'win.upd.updating' }) } elseif ($newer) { T 'win.upd.availableShort' @{ version = $newer } } elseif ($s['checkedAt']) { T 'win.upd.upToDate' } else { T 'win.upd.notChecked' })
+  Add-CardRow (New-InfoRow (T 'win.upd.status') $state -Dot:([bool]$newer) -LongValue -Tip $state)
+  Add-CardRow (New-ActionRow (T 'win.upd.updateNow') { Send-ServiceUpdate 'update/now' @{} (T 'win.svc.looking') } -Name (T 'win.svc.updateNowName') -Help (T 'win.svc.updateNowHelp'))
+  Add-CardRow (New-SwitchRow (T 'win.svc.auto') ([bool]$s['auto']) { param($on) Send-ServiceUpdate 'update/auto' @{ on = [bool]$on } } (T 'win.svc.autoHelp'))
   $last = $(if (-not $run -and $s['last']) { $s['last'] } else { $null })
   if ($sv.Msg) { Add-Footnote $sv.Msg $Red }
   elseif ($last -and -not $last['ok']) { Add-Footnote ([string]$last['message']) $Red }
   else {
-    $when = $(if ($s['checkedAt']) { "Checked at $(Format-Ms ([long]$s['checkedAt']) 'H:mm'); " } else { '' })
-    Add-Footnote ("$(if ($last) { "$($last['message']) " })$when$(if ($s['auto']) { 'it looks every 6 hours by itself.' } else { 'it looks only with Update now.' })")
+    $how = $(if ($s['auto']) { 'Auto' } else { 'Manual' })
+    $when = $(if ($s['checkedAt']) { T "win.svc.checked$how" @{ time = (Format-Ms ([long]$s['checkedAt']) 'H:mm') } } else { T "win.svc.looks$how" })
+    Add-Footnote ("$(if ($last) { "$($last['message']) " })$when")
   }
-  Add-CardRow (New-ActionRow 'Remove the token' {
-      $r = [System.Windows.MessageBox]::Show($w, "Remove the token?`n`nYour sync service then stops updating itself; this app updates it again, as before.", 'Saqme To Do', 'YesNo', 'Question')
-      if ("$r" -eq 'Yes') { Send-ServiceUpdate 'update/token' @{ token = '' } 'The token is removed.' } } -Danger -Help 'It stops updating itself; this app updates it again')
+  Add-CardRow (New-ActionRow (T 'win.svc.removeToken') {
+      $r = [System.Windows.MessageBox]::Show($w, (T 'win.svc.removeTokenAsk'), 'Saqme To Do', 'YesNo', 'Question')
+      if ("$r" -eq 'Yes') { Send-ServiceUpdate 'update/token' @{ token = '' } (T 'win.svc.tokenRemoved') } } -Danger -Help (T 'win.svc.removeTokenHelp'))
   $lines = @(@($s['log']) | Where-Object { $_ } | Select-Object -Last 5 | ForEach-Object { "$(Format-Ms ([long]$_['at']) 'd MMM H:mm')  $($_['text'])" })
-  Add-Footnote ((@("The token is kept by your sync service on Cloudflare, not on this PC; it can change the Workers of your account and nothing else.") + $(if ($lines.Count) { @('What it did:') + $lines } else { @() })) -join "`n")
+  Add-Footnote ((@((T 'win.svc.tokenKept')) + $(if ($lines.Count) { @((T 'win.svc.whatItDid')) + $lines } else { @() })) -join "`n")
 }
 
 # ---------------------------------------------------------------- sharing a list (the owner's side)
@@ -4339,15 +4498,16 @@ function Receive-OwnApi {
     try { $r = @($q.Ps.EndInvoke($q.Handle)) | Select-Object -Last 1 } catch {}
     try { $q.Ps.Dispose() } catch {}
     $script:apiReqs.Remove($q)
-    if (-not $r) { $r = @{ Status = 0; Data = @{ error = 'No answer from your sync service.' } } }
+    if (-not $r) { $r = @{ Status = 0; Data = @{ error = (T 'win.svc.noAnswer') } } }
     try { & $q.Done $r } catch {}
   }
 }
 function Get-ApiError($r) {
   if ($r.Data -and $r.Data['error']) { return [string]$r.Data['error'] }
-  return "Your sync service answered $($r.Status)."
+  return (T 'win.svc.answered' @{ status = $r.Status })
 }
-function Format-Ms([long]$ms, [string]$fmt) { return [DateTimeOffset]::FromUnixTimeMilliseconds($ms).LocalDateTime.ToString($fmt, $CI) }
+# (for people: in the app's language, Format-UiDate)
+function Format-Ms([long]$ms, [string]$fmt) { return (Format-UiDate ([DateTimeOffset]::FromUnixTimeMilliseconds($ms).LocalDateTime) $fmt) }
 
 function Show-Share([string]$name) {
   Commit-Edit
@@ -4372,7 +4532,7 @@ function Update-SharePeople {
 function New-ShareInvite {
   $sv = $script:shareView
   $alias = ConvertTo-CleanText ([string]$sv.Alias)
-  if (-not $alias) { $sv.Error = 'Give the person a name, so you can recognise them later (only you see it).'; Render; return }
+  if (-not $alias) { $sv.Error = T 'win.share.needName'; Render; return }
   $sv.Busy = $true; $sv.Error = ''; Render
   Start-OwnApi 'POST' 'shares/invite' @{ projectId = $sv.ProjectId; alias = $alias; access = $sv.Access } {
     param($r)
@@ -4382,7 +4542,7 @@ function New-ShareInvite {
       $sv.Invite = $r.Data; $sv.Alias = ''; $sv.Error = ''
       try { [System.Windows.Clipboard]::SetText([string]$r.Data['link']) } catch {}
       Request-Sync; Update-SharePeople
-      Show-Notice "Invite link for $($r.Data['share']['alias']) copied. Send it to them yourself; it works once."
+      Show-Notice (T 'win.share.inviteCopied' @{ name = $r.Data['share']['alias'] })
     } else { $sv.Error = Get-ApiError $r }
     if ($script:view -eq 'share') { Render }
   }
@@ -4390,75 +4550,75 @@ function New-ShareInvite {
 function Set-ShareAccess($person, [string]$access) {
   Start-OwnApi 'POST' 'shares/update' @{ id = [string]$person['id']; access = $access } {
     param($r)
-    if ($r.Status -ne 200) { Show-Notice "Not changed: $(Get-ApiError $r)" }
+    if ($r.Status -ne 200) { Show-Notice (T 'win.share.notChanged' @{ error = (Get-ApiError $r) }) }
     Update-SharePeople
   }
 }
 function Remove-ShareAccess($person) {
   $joined = [string]$person['state'] -eq 'joined'
   if ($joined) {
-    $q = [System.Windows.MessageBox]::Show($w, "Revoke $($person['alias'])'s access?`n`nTheir key stops working now. The list stays on their device as their own copy, unshared.", 'Saqme To Do', 'YesNo', 'Question')
+    $q = [System.Windows.MessageBox]::Show($w, (T 'win.share.revokeAsk' @{ name = $person['alias'] }), 'Saqme To Do', 'YesNo', 'Question')
     if ("$q" -ne 'Yes') { return }
   }
   Start-OwnApi 'POST' 'shares/revoke' @{ id = [string]$person['id'] } {
     param($r)
-    if ($r.Status -ne 200) { Show-Notice "Not done: $(Get-ApiError $r)" } else { Request-Sync }
+    if ($r.Status -ne 200) { Show-Notice (T 'win.share.notDone' @{ error = (Get-ApiError $r) }) } else { Request-Sync }
     Update-SharePeople
   }
 }
 
 function Render-ShareView {
   $sv = $script:shareView
-  [void]$list.Children.Add((New-SettingsHeader "Share '$($sv.Name)'"))
+  [void]$list.Children.Add((New-SettingsHeader (T 'win.share.header' @{ name = $sv.Name })))
   if (-not (Read-SyncConfigUi)) { Add-Note $script:ShareNeedsSync; return }
   if ($script:sync -and $script:sync.WorkerApi -and $script:sync.WorkerApi -lt $script:SharingApi) { Add-Note $script:WorkerTooOld; return }
   if (-not $sv.ProjectId -and $script:sync -and $script:sync.ProjectIds) { $sv.ProjectId = $script:sync.ProjectIds[$sv.Name]; if ($sv.ProjectId) { Update-SharePeople } }
-  if (-not $sv.ProjectId) { Add-Note 'This list is not on your sync service yet. It gets there within a few seconds; then open Share again.'; return }
+  if (-not $sv.ProjectId) { Add-Note (T 'win.share.notOnServer'); return }
   # who (a name only you see, to recognise them later), what they may do, and the link
-  Add-Heading 'Invite someone'
+  Add-Heading (T 'win.share.invite')
   $box = New-Object System.Windows.Controls.TextBox
-  Set-Name $box 'Their name' 'Only you see it: it is how you recognise them in this list later'
+  Set-Name $box (T 'win.share.theirName') (T 'win.share.theirNameHelp')
   $box.Text = [string]$sv.Alias; $box.MaxLength = 60
   $box.Add_TextChanged({ param($s, $e) $script:shareView.Alias = $s.Text })
   $box.Add_PreviewKeyDown({ param($s, $e) if ($e.Key -eq 'Return') { $e.Handled = $true; New-ShareInvite } })
-  Add-CardRow (New-InputRow $box 'Their name, e.g. Nuca')
-  $seg = New-Segmented @(@('edit', $script:AccessText.edit[0], $script:AccessText.edit[1]), @('view', $script:AccessText.view[0], $script:AccessText.view[1])) $sv.Access { param($v) $script:shareView.Access = $v; Render } 'Access'
-  Add-CardRow (New-InfoRow 'Access' '' $seg)
-  Add-CardRow (New-ActionRow $(if ($sv.Busy) { 'Creating...' } else { 'Create invite link' }) { if (-not $script:shareView.Busy) { New-ShareInvite } } -Name 'Create invite link')
-  Add-Footnote "Only you see their name. $($script:AccessText[$sv.Access][1]) They get a link that works once, for 24 hours; the list stays on your sync service, and they sync it from there with a key that reaches this list only."
+  Add-CardRow (New-InputRow $box (T 'win.share.theirNameHint'))
+  $seg = New-Segmented @(@('edit', $script:AccessText.edit[0], $script:AccessText.edit[1]), @('view', $script:AccessText.view[0], $script:AccessText.view[1])) $sv.Access { param($v) $script:shareView.Access = $v; Render } (T 'win.share.access')
+  Add-CardRow (New-InfoRow (T 'win.share.access') '' $seg)
+  Add-CardRow (New-ActionRow $(if ($sv.Busy) { T 'win.share.creating' } else { T 'win.share.create' }) { if (-not $script:shareView.Busy) { New-ShareInvite } } -Name (T 'win.share.create'))
+  Add-Footnote (T 'win.share.inviteAbout' @{ access = $script:AccessText[$sv.Access][1] })
   if ($sv.Error) { Add-Footnote $sv.Error $Red }
   if ($sv.Invite) {
     $inv = $sv.Invite; $link = [string]$inv['link']
     $frame = New-Object System.Windows.Controls.Border
     $frame.Background = $Paper; $frame.CornerRadius = New-Object System.Windows.CornerRadius($CardRadius); $frame.Padding = '8'; $frame.HorizontalAlignment = 'Center'
-    try { $frame.Child = New-QrImage $link; $frame.Child.Width = 180; $frame.Child.Height = 180 } catch { $frame.Child = New-Text "Could not draw the QR code: $($_.Exception.Message)" $TypeSize.meta $Red }
+    try { $frame.Child = New-QrImage $link; $frame.Child.Width = 180; $frame.Child.Height = 180 } catch { $frame.Child = New-Text (T 'win.share.qrFailed' @{ error = $_.Exception.Message }) $TypeSize.meta $Red }
     Add-Loose $frame
     $lb = New-Object System.Windows.Controls.TextBox
-    Set-Name $lb 'Invite link'
+    Set-Name $lb (T 'win.share.inviteLink')
     $lb.Text = $link; $lb.IsReadOnly = $true
     $lb.Add_GotKeyboardFocus({ param($s, $e) $s.SelectAll() })
-    $cp = New-TextButton 'Copy' { param($x) try { [System.Windows.Clipboard]::SetText($x); Show-Notice 'Invite link copied.' } catch {} } $Accent $link
-    Set-Name $cp 'Copy the invite link'
+    $cp = New-TextButton (T 'win.share.copy') { param($x) try { [System.Windows.Clipboard]::SetText($x); Show-Notice (T 'win.share.linkCopied') } catch {} } $Accent $link
+    Set-Name $cp (T 'win.share.copyName')
     $row = New-InputRow $lb '' $cp; $lb.Foreground = $Faint
     Add-CardRow $row
-    Add-Footnote ("For $($inv['share']['alias']), $($script:AccessText[[string]$inv['share']['access']][0].ToLower()). It works once, until $(Format-Ms ([long]$inv['expiresAt']) 'ddd H:mm'). Send it to them yourself (a message, an email): whoever opens it first joins.") $Ink
+    Add-Footnote (T 'win.share.inviteFor' @{ name = $inv['share']['alias']; access = $script:AccessText[[string]$inv['share']['access']][2]; until = (Format-Ms ([long]$inv['expiresAt']) 'ddd H:mm') }) $Ink
   }
   # who has it: one row each, with their access; the row's menu changes it, or revokes it
-  Add-Heading 'Shared with'
-  if ($null -eq $sv.People) { Add-Note 'Loading...'; return }
-  if (-not @($sv.People).Count) { Add-Note 'Nobody yet.'; return }
+  Add-Heading (T 'win.share.sharedWith')
+  if ($null -eq $sv.People) { Add-Note (T 'win.share.loading'); return }
+  if (-not @($sv.People).Count) { Add-Note (T 'win.share.nobody'); return }
   foreach ($p in @($sv.People)) {
     $state = [string]$p['state']
     $access = $script:AccessText[[string]$p['access']][0]
     $when = $(switch ($state) {
-      'joined' { "joined $(Format-Ms ([long]$p['joinedAt']) 'd MMM')" }
-      'pending' { "invited $(Format-Ms ([long]$p['createdAt']) 'd MMM'), not joined yet" }
-      default { 'invite expired, never used' } })
-    $value = $(switch ($state) { 'joined' { $access } 'pending' { 'Invited' } default { 'Expired' } })
+      'joined' { T 'win.share.joinedOn' @{ date = (Format-Ms ([long]$p['joinedAt']) 'd MMM') } }
+      'pending' { T 'win.share.invitedOn' @{ date = (Format-Ms ([long]$p['createdAt']) 'd MMM') } }
+      default { T 'win.share.expiredNever' } })
+    $value = $(switch ($state) { 'joined' { $access } 'pending' { T 'win.share.invited' } default { T 'win.share.expired' } })
     $more = New-Text (G 0xE70D) 10 $TabInk; $more.FontFamily = $MDL2; $more.TextWrapping = 'NoWrap'; $more.Margin = '0,2,0,0'
     $g = New-RowGrid ([string]$p['alias']) $value (Hide-Decoration $more)
-    $r = New-RowButton "$($p['alias']), $($access.ToLower()), $when" 'Opens a menu: change their access, or revoke it' $g { param($x) Show-PersonMenu $x.Row $x.P } @{ P = $p; Row = $null }
-    $r.Tag.Arg.Row = $r; $r.ToolTip = "$access, $when"
+    $r = New-RowButton (T 'win.share.personName' @{ name = $p['alias']; access = $script:AccessText[[string]$p['access']][2]; when = $when }) (T 'win.share.personHelp') $g { param($x) Show-PersonMenu $x.Row $x.P } @{ P = $p; Row = $null }
+    $r.Tag.Arg.Row = $r; $r.ToolTip = T 'win.share.personTip' @{ access = $access; when = $when }
     Add-CardRow $r
   }
 }
@@ -4471,15 +4631,15 @@ function Show-PersonMenu($target, $p) {
       $cur = ([string]$p['access'] -eq $v)
       $mi = New-MenuItem $script:AccessText[$v][0]; $mi.ToolTip = $script:AccessText[$v][1]
       if ($cur) { $mi.FontWeight = 'SemiBold' }
-      Set-Name $mi ("$($script:AccessText[$v][0]) for $($p['alias'])" + $(if ($cur) { ' (current)' } else { '' })) $script:AccessText[$v][1]
+      Set-Name $mi (T $(if ($cur) { 'win.share.accessForCurrent' } else { 'win.share.accessFor' }) @{ access = $script:AccessText[$v][0]; name = $p['alias'] }) $script:AccessText[$v][1]
       $mi.Tag = @{ P = $p; V = $v }
       $mi.Add_Click({ param($s, $e) if ($s.Tag.V -ne [string]$s.Tag.P['access']) { Set-ShareAccess $s.Tag.P $s.Tag.V } })
       [void]$m.Items.Add($mi)
     }
     [void]$m.Items.Add((New-Separator))
   }
-  $end = New-MenuItem $(switch ($state) { 'joined' { 'Revoke' } 'pending' { 'Cancel invite' } default { 'Remove' } }); $end.Tag = $p
-  if ($state -eq 'joined') { $end.Foreground = $Red; $end.ToolTip = 'Their key stops working now; the list stays on their device as their own copy.' }
+  $end = New-MenuItem $(switch ($state) { 'joined' { T 'win.share.revoke' } 'pending' { T 'win.share.cancelInvite' } default { T 'win.share.remove' } }); $end.Tag = $p
+  if ($state -eq 'joined') { $end.Foreground = $Red; $end.ToolTip = T 'win.share.revokeHelp' }
   $end.Add_Click({ param($s, $e) Remove-ShareAccess $s.Tag })
   [void]$m.Items.Add($end)
   $m.PlacementTarget = $target; $m.Placement = 'Bottom'; $m.IsOpen = $true
@@ -4494,14 +4654,14 @@ function Start-JoinShare([string]$link) {
   $inv = Get-InviteLink $link
   if (-not $inv) { return 'bad' }
   $srvHost = ([Uri]$inv.Server).Host
-  $r = [System.Windows.MessageBox]::Show($w, "Join a list shared from $srvHost?`n`nIt shows up here as a new tab and stays in step with theirs. What you change in it goes to $srvHost, which belongs to the person who shared it.", 'Saqme To Do', 'YesNo', 'Question')
+  $r = [System.Windows.MessageBox]::Show($w, (T 'win.join.ask' @{ host = $srvHost }), 'Saqme To Do', 'YesNo', 'Question')
   if ("$r" -ne 'Yes') { return 'cancel' }
   if (-not $script:sync) { Start-SyncLoop }
   $ticket = New-SaqmeId 8
   $script:joining = @{ Ticket = $ticket; Server = $srvHost; File = $null; Since = (Get-Date) }
   $script:sync.Queue.Enqueue(@{ kind = 'join'; link = $link.Trim($script:JsSpace); ticket = $ticket })
   Request-Sync
-  Show-Notice "Joining the list shared from $srvHost..."
+  Show-Notice (T 'win.join.joining' @{ host = $srvHost })
   return 'ok'
 }
 function Receive-JoinResult {
@@ -4511,13 +4671,13 @@ function Receive-JoinResult {
     $res = $script:sync.JoinResults[$j.Ticket]
     if (-not $res) { return }
     $script:sync.JoinResults.Remove($j.Ticket)
-    if (-not $res.Ok) { $script:joining = $null; Show-Notice "Could not join: $($res.Error)"; return }
+    if (-not $res.Ok) { $script:joining = $null; Show-Notice (T 'win.join.failed' @{ error = $res.Error }); return }
     $j.File = $res.File; $j.Since = Get-Date
-    Show-Notice "Joined '$($res.File)'. Getting it from $($j.Server)..."
+    Show-Notice (T 'win.join.getting' @{ name = $res.File; host = $j.Server })
   }
   if (Test-Path -LiteralPath (Proj-Path $j.File)) {
     $script:joining = $null; $script:view = 'list'; Switch-Project $j.File
-    Show-Notice "Joined '$($j.File)', shared from $($j.Server)."
+    Show-Notice (T 'win.join.done' @{ name = $j.File; host = $j.Server })
   } elseif (((Get-Date) - $j.Since).TotalSeconds -gt 120) { $script:joining = $null }
 }
 # a saqme:// link this app was started with, or that a second start handed over (.open-url in the data folder)
@@ -4535,7 +4695,7 @@ function Receive-OpenUrl([string]$url = '') {
 function Leave-SharedList([string]$name) {
   $b = Get-ShareOf $name
   if (-not $b) { return }
-  $r = [System.Windows.MessageBox]::Show($w, "Leave '$name'?`n`nIt goes from this PC (to lists\.trash). Nothing changes in the owner's list. To have it here again, you need a new invite.", 'Saqme To Do', 'YesNo', 'Question')
+  $r = [System.Windows.MessageBox]::Show($w, (T 'win.shared.leaveAsk' @{ name = $name }), 'Saqme To Do', 'YesNo', 'Question')
   if ("$r" -ne 'Yes') { return }
   Commit-Edit
   if (-not $script:sync) { Start-SyncLoop }
@@ -4543,37 +4703,37 @@ function Leave-SharedList([string]$name) {
   Request-Sync
   $script:leaving[$name] = $true
   if ($script:proj -eq $name) { $n = @(Get-ProjectNames); Switch-Project $(if ($n.Count) { $n[0] } else { 'General' }) } else { Render }
-  Show-Notice "Left '$name'."
+  Show-Notice (T 'win.shared.left' @{ name = $name })
 }
 
 # Settings > Sync & sharing > Shared lists: join one (paste the invite link), and those this PC has, each with Leave
 function Render-SharedListSettings {
-  Add-Heading 'Shared lists'
+  Add-Heading (T 'win.shared.title')
   $box = New-Object System.Windows.Controls.TextBox
-  Set-Name $box 'Invite link' 'From the person who shares the list with you'
+  Set-Name $box (T 'win.share.inviteLink') (T 'win.shared.inviteHelp')
   $script:joinBox = $box
   $box.Add_PreviewKeyDown({ param($s, $e) if ($e.Key -eq 'Return') { $e.Handled = $true; $r = Start-JoinShare $s.Text; if ($r -eq 'ok') { $s.Text = '' } elseif ($r -eq 'bad') { Set-BoxError $s } } })
-  $go = New-TextButton 'Join' { $r = Start-JoinShare $script:joinBox.Text; if ($r -eq 'ok') { $script:joinBox.Text = '' } elseif ($r -eq 'bad') { Set-BoxError $script:joinBox; Show-Notice 'That is not an invite link (it looks like https://.../join#code=...).' } }
-  Add-CardRow (New-InputRow $box 'Paste an invite link to join' $go)
+  $go = New-TextButton (T 'win.shared.join') { $r = Start-JoinShare $script:joinBox.Text; if ($r -eq 'ok') { $script:joinBox.Text = '' } elseif ($r -eq 'bad') { Set-BoxError $script:joinBox; Show-Notice (T 'win.shared.notInvite') } }
+  Add-CardRow (New-InputRow $box (T 'win.shared.pasteHint') $go)
   # (Deletions paused, for this PC's own lists or a shared one, is further down the Sync & sharing page)
   foreach ($b in $script:bindings) {
     $st = $(if ($script:sync -and $script:sync.Shares) { @($script:sync.Shares | Where-Object { $_.Id -eq [string]$b['id'] })[0] } else { $null })
     $trouble = $st -and @('offline', 'error') -contains $st.State
     $access = $script:AccessText[[string]$b['access']][0]
-    $about = "From $(Get-ShareHost $b), $($access.ToLower())$(if ($trouble) { ", $($st.Message)" })"
-    $lv = New-TextButton 'Leave' { param($x) Leave-SharedList $x } $Red ([string]$b['file'])
-    Set-Name $lv "Leave $([string]$b['file'])" "$about. It goes from this PC; nothing changes in the owner's list"
-    Add-CardRow (New-InfoRow ([string]$b['file']) $(if ($trouble) { 'Not synced' } else { $access }) $lv -Dot:$trouble -Tip $about)
+    $about = (T 'win.shared.from' @{ host = (Get-ShareHost $b); access = $script:AccessText[[string]$b['access']][2] }) + $(if ($trouble) { ", $($st.Message)" } else { '' })
+    $lv = New-TextButton (T 'win.shared.leave') { param($x) Leave-SharedList $x } $Red ([string]$b['file'])
+    Set-Name $lv (T 'win.shared.leaveName' @{ name = [string]$b['file'] }) (T 'win.shared.leaveHelp' @{ about = $about })
+    Add-CardRow (New-InfoRow ([string]$b['file']) $(if ($trouble) { T 'win.shared.notSynced' } else { $access }) $lv -Dot:$trouble -Tip $about)
   }
-  Add-Footnote 'Someone shared a list with you? Paste the invite link they sent; it works without sync of your own too. To share one of your own lists, right-click it in the lists menu (or the title) and choose Share.'
+  Add-Footnote (T 'win.shared.foot')
 }
 
 function Format-ConflictValue([string]$field, $v) {
   switch ($field) {
     'status' { return (St ([string]$v)).Name }
-    'due' { if (-not $v) { return 'No deadline' }; return [string]$v['date'] + $(if ($v['time']) { ' ' + [string]$v['time'] } else { '' }) }
-    'deleted' { if ($v) { return 'Deleted' } else { return 'Kept' } }
-    default { if ([string]$v) { return [string]$v } else { return '(empty)' } }
+    'due' { if (-not $v) { return (T 'win.conflict.noDeadline') }; return [string]$v['date'] + $(if ($v['time']) { ' ' + [string]$v['time'] } else { '' }) }
+    'deleted' { if ($v) { return (T 'win.conflict.deleted') } else { return (T 'win.conflict.kept') } }
+    default { if ([string]$v) { return [string]$v } else { return (T 'win.conflict.empty') } }
   }
 }
 
@@ -4597,39 +4757,39 @@ function Dismiss-SyncNotice($n) {
 }
 
 function Render-ConflictsView {
-  [void]$list.Children.Add((New-SettingsHeader 'Conflicts'))
+  [void]$list.Children.Add((New-SettingsHeader (T 'win.conflicts.title')))
   $all = @(Get-OpenConflictList)
   $notices = @(Get-NoticeList)
   if (-not $all.Count -and -not $notices.Count) {
-    Add-Note 'No conflicts. When the same thing is changed on two devices before they sync, the newest change wins and the other one is kept here for you to pick.'
+    Add-Note (T 'win.conflict.none')
     return
   }
   # a version on one line: the whole of it (a long note, say) is in the tooltip and read by screen readers
   $flat = { param([string]$t) ($t -replace '\s*\r?\n\s*', ' / ').Trim() }
   # changes made in a view-only shared list (by hand, an editor, an AI assistant): the owner's version stays, and
   # what was typed is kept here, not lost. One card per task: what is kept, then Copy and Dismiss
-  $what = @{ text = 'Text'; status = 'Status'; due = 'Deadline'; notes = 'Notes'; deleted = 'Delete'; new = 'New task' }
+  $what = @{}; foreach ($f in 'text', 'status', 'due', 'notes', 'deleted', 'new') { $what[$f] = T "win.conflict.field.$f" }
   foreach ($n in $notices) {
-    Add-Heading $(if ($n.Text) { $n.Text } else { '(untitled)' })
-    $val = $(if ($n.Field -eq 'deleted') { 'Deleted' } elseif ($n.Field -eq 'new') { [string]$n.Value } else { Format-ConflictValue $n.Field $n.Value })
-    Add-CardRow (New-InfoRow 'Your version' (& $flat $val) -LongValue -Tip $val)
-    Add-CardRow (New-ActionRow 'Copy' { param($x) try { [System.Windows.Clipboard]::SetText($x); Show-Notice 'Copied.' } catch {} } $val -Name 'Copy your version' -Help $val)
-    Add-CardRow (New-ActionRow 'Dismiss' { param($x) Dismiss-SyncNotice $x } $n)
-    $why = $(if ($n.Reason -eq 'this shared list is view-only') { "'$($n.List)' is view-only for you, so the owner's version stays." } else { "The owner's server did not take it: $($n.Reason)." })
-    Add-Footnote ("Not saved: " + [string]$what[$n.Field] + " in '$($n.List)'. " + $why)
+    Add-Heading $(if ($n.Text) { $n.Text } else { T 'win.conflict.untitled' })
+    $val = $(if ($n.Field -eq 'deleted') { T 'win.conflict.deleted' } elseif ($n.Field -eq 'new') { [string]$n.Value } else { Format-ConflictValue $n.Field $n.Value })
+    Add-CardRow (New-InfoRow (T 'win.conflict.yourVersion') (& $flat $val) -LongValue -Tip $val)
+    Add-CardRow (New-ActionRow (T 'win.conflict.copy') { param($x) try { [System.Windows.Clipboard]::SetText($x); Show-Notice (T 'win.conflict.copied') } catch {} } $val -Name (T 'win.conflict.copyName') -Help $val)
+    Add-CardRow (New-ActionRow (T 'win.conflict.dismiss') { param($x) Dismiss-SyncNotice $x } $n)
+    $why = $(if ($n.Reason -eq 'this shared list is view-only') { T 'win.conflict.viewOnly' @{ list = $n.List } } else { T 'win.conflict.refused' @{ reason = $n.Reason } })
+    Add-Footnote (T 'win.conflict.notSaved' @{ what = [string]$what[$n.Field]; list = $n.List; why = $why })
   }
   # changed on two devices before they synced: the version that won (Now) and the other one, then the choice
-  $names = @{ text = 'Text'; status = 'Status'; due = 'Deadline'; notes = 'Notes' }
+  $names = $what
   foreach ($c in $all) {
-    Add-Heading $(if ($c.TaskText) { $c.TaskText } else { '(untitled)' })
-    foreach ($pair in @(@('Now', $c.Current), @('Other version', $c.Value))) {
+    Add-Heading $(if ($c.TaskText) { $c.TaskText } else { T 'win.conflict.untitled' })
+    foreach ($pair in @(@((T 'win.conflict.now'), $c.Current), @((T 'win.conflict.otherVersion'), $c.Value))) {
       $v = Format-ConflictValue $c.Field $pair[1]
       Add-CardRow (New-InfoRow $pair[0] (& $flat $v) -LongValue -Tip $v)
     }
-    $useText = $(if ($c.Field -eq 'deleted') { if ($c.Value) { 'Delete it' } else { 'Restore it' } } else { 'Use other' })
-    Add-CardRow (New-ActionRow 'Keep now' { param($x) Resolve-SyncConflict $x $false } $c -Name 'Keep the version you have now')
-    Add-CardRow (New-ActionRow $useText { param($x) Resolve-SyncConflict $x $true } $c -Name $(if ($c.Field -eq 'deleted') { $useText } else { 'Use the other version' }))
-    Add-Footnote $(if ($c.Field -eq 'deleted') { 'Deleted on one device, edited on another.' } else { "$([string]$names[$c.Field]) changed on two devices. The newest change is the one you have now." })
+    $useText = $(if ($c.Field -eq 'deleted') { if ($c.Value) { T 'win.conflict.deleteIt' } else { T 'win.conflict.restoreIt' } } else { T 'win.conflict.useOther' })
+    Add-CardRow (New-ActionRow (T 'win.conflict.keepNow') { param($x) Resolve-SyncConflict $x $false } $c -Name (T 'win.conflict.keepNowName'))
+    Add-CardRow (New-ActionRow $useText { param($x) Resolve-SyncConflict $x $true } $c -Name $(if ($c.Field -eq 'deleted') { $useText } else { T 'win.conflict.useOtherName' }))
+    Add-Footnote $(if ($c.Field -eq 'deleted') { T 'win.conflict.deletedEdited' } else { T 'win.conflict.changedTwice' @{ what = [string]$names[$c.Field] } })
   }
 }
 
@@ -4836,9 +4996,10 @@ $cms.ShowImageMargin = $false
 $cms.BackColor = [System.Drawing.ColorTranslator]::FromHtml('#' + $T.MenuBg.Substring(3))
 $cms.ForeColor = [System.Drawing.ColorTranslator]::FromHtml('#' + $T.Ink.Substring(3))
 $cms.Font = New-Object System.Drawing.Font('Segoe UI', 9.5)
-$miOpen = $cms.Items.Add('Open Saqme To Do'); $miOpen.Add_Click({ Show-Main })
+$miOpen = $cms.Items.Add(''); $miOpen.Add_Click({ Show-Main })
 [void]$cms.Items.Add((New-Object System.Windows.Forms.ToolStripSeparator))
-$miQuit = $cms.Items.Add('Quit'); $miQuit.Add_Click({ Quit-App })
+$miQuit = $cms.Items.Add(''); $miQuit.Add_Click({ Quit-App })
+Register-Words { $miOpen.Text = T 'win.tray.open'; $miQuit.Text = T 'win.tray.quit' }
 $tray.ContextMenuStrip = $cms
 $tray.Add_BalloonTipClicked({ if ($script:balloonTask) { $id = $script:balloonTask; Show-Main; [void](Open-TaskById $id) } })
 $tray.Add_MouseClick({ param($s, $e) if ($e.Button -eq [System.Windows.Forms.MouseButtons]::Left) { Show-Main } })
@@ -5075,7 +5236,7 @@ if ($SmokeTest) {
     & $activate (& $find $list 'Disconnect Claude Desktop')
     if ((@((ConvertFrom-JsonText ([IO.File]::ReadAllText($deskCfg)))['mcpServers'].Keys) -join ',') -ne 'other') { throw 'Disconnect Claude Desktop takes out Saqme only' }
     $keys = @(Read-Lines $cfgFile | Where-Object { $_ -match '^\w+=' } | ForEach-Object { ($_ -split '=', 2)[0] } | Sort-Object)
-    if (($keys -join ',') -ne 'active,autoUpdate,height,notifyAt,showCompleted,theme,updatedSeen,width') { throw "the settings file's keys changed: $($keys -join ',')" }
+    if (($keys -join ',') -ne 'active,autoUpdate,height,lang,notifyAt,showCompleted,theme,updatedSeen,width') { throw "the settings file's keys changed: $($keys -join ',')" }
     # the version: the line under every Settings view (plain while no update needs a look), About, the tray icon's tooltip
     $ver = Get-VersionText
     $hasText = { param($root, [string]$t) foreach ($c in (Get-Controls $root)) { if ($c -is [System.Windows.Controls.TextBlock] -and $c.Text -eq $t) { return $true } }; return $false }
@@ -5610,8 +5771,21 @@ if ($SmokeTest) {
         & $wait { @(Get-OpenConflictList).Count -gt 0 } 'a conflict'
       }
     }
+    # every view in each language (Settings > General > Language switches at once): drawn without an error, and no
+    # key on screen where its words should be (a key missing from that language's file shows as itself)
+    foreach ($code in $script:Langs) {
+      [void](Set-AppLanguage $code); Update-Words
+      foreach ($v in @('settings') + @($script:SettingsPages.Keys) + @('keys', 'language', 'pair', 'conflicts', 'trash', 'backups', 'list')) {
+        $script:view = $v; Render
+        foreach ($c in (Get-Controls $outer)) {
+          if ($c -is [System.Windows.Controls.TextBlock] -and $c.Text -cmatch '^(win|status|date|language|today|remind)\.[a-z]') { throw "$code, $v shows the key $($c.Text)" }
+        }
+      }
+    }
+    [void](Set-AppLanguage 'en'); Update-Words
     if ($env:SAQME_SMOKE_SHOTS) {
-      # off-screen renders of the main views, for visual checks (scripts/dev/widget-shots.ps1)
+      # off-screen renders of the main views, for visual checks (scripts/dev/widget-shots.ps1; SAQME_LANG: in that language)
+      if ($env:SAQME_LANG) { [void](Set-AppLanguage (Get-PickedLanguage '' $env:SAQME_LANG)); Update-Words }
       $shot = {
         param([string]$name)
         [void](Update-SyncIndicator -Force)

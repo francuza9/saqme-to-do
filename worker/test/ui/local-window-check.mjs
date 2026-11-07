@@ -44,7 +44,7 @@ try {
   await page.goto(`${app.url}/#claim=${code}`);
   await page.waitForSelector('#switcher:has-text("Work")');
   await page.click('#switcher');
-  check((await page.$$eval('#listMenu [role="menuitemradio"] .g-label', (e) => e.map((x) => x.textContent))).join() === 'Work', 'the title opens the lists menu: the lists folder\'s lists');
+  check((await page.$$eval('#listMenu [role="menuitemradio"]:not([data-id="today"]) .g-label', (e) => e.map((x) => x.textContent))).join() === 'Work', 'the title opens the lists menu: the lists folder\'s lists');
   await page.keyboard.press('Escape');
   await page.click('#logo');
   // the window's own pages: Updates, and the lists folder under Your lists

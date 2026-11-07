@@ -7,15 +7,24 @@ import {
   STATUSES, statusOf, rank, sections, forToday, kidsInDisplayOrder, progress, linkify, listCounts, subtreeIds, isAncestor,
   cleanText, cleanNotes,   // same cleanup as the server (worker/src/merge.js): saving never changes text by itself
 } from './model.js';
-import { parseDue, dueLabel, dueLong, dueTone, quickDates } from './dates.js';
+import { parseDue, dueTone } from './dates.js';
 import { icon, STATUS_GLYPH } from './icons.js';
 import { makeZip, readZip } from './zip.js';
 import { parsePairingLink, normalizePairingCode, parseInviteLink, serverLabel } from './pairing.js';
+import { t, tn, rich, lang, setLang, pickLang, LANGS, LANG_NAMES, dueText, dueLongText, quickDatesText, dateText } from './i18n.js';
+
+const ls = {
+  get: (k, d = '') => { try { return localStorage.getItem(`saqme.${k}`) ?? d; } catch { return d; } },
+  set: (k, v) => { try { localStorage.setItem(`saqme.${k}`, v); } catch { /* private mode */ } },
+};
+// The app's language (Settings > General > Language; '' = the device's), before anything is drawn
+await setLang(pickLang(ls.get('lang'), navigator.languages));
+document.documentElement.lang = lang();
 
 // Inside another site's frame the app does not start: a page could trick taps onto it (clickjacking). The
 // Worker forbids framing with a header; a copy on a static host (GitHub Pages) can only do it here.
 if (window.top !== window.self) {
-  const a = Object.assign(document.createElement('a'), { href: location.href, target: '_blank', rel: 'noopener', textContent: 'Open Saqme To Do' });
+  const a = Object.assign(document.createElement('a'), { href: location.href, target: '_blank', rel: 'noopener', textContent: t('app.openOutsideFrame') });
   document.body.replaceChildren(a);
   throw new Error('Saqme To Do does not run inside a frame.');
 }
@@ -28,10 +37,19 @@ const els = {
   addBar: $('addBar'), add: $('addInput'), addGo: $('addGo'), addPlus: $('addPlus'), sheetWrap: $('sheetWrap'), sheet: $('sheet'), backdrop: $('sheetBackdrop'),
   toast: $('toast'), announce: $('announce'), app: $('app'),
 };
-const ls = {
-  get: (k, d = '') => { try { return localStorage.getItem(`saqme.${k}`) ?? d; } catch { return d; } },
-  set: (k, v) => { try { localStorage.setItem(`saqme.${k}`, v); } catch { /* private mode */ } },
-};
+/** The words of the page itself (index.html): its buttons' names, the add line's placeholder; again after a language switch. */
+function applyStaticTexts() {
+  els.logo.setAttribute('aria-label', t('nav.settings'));
+  els.conflicts.setAttribute('aria-label', t('nav.conflicts'));
+  els.sync.setAttribute('aria-label', t('sync.statusLabel'));
+  els.menu.setAttribute('aria-label', t('list.menuLabel'));
+  els.addPlus.setAttribute('aria-label', t('add.button'));
+  els.addGo.setAttribute('aria-label', t('add.button'));
+  els.add.placeholder = t('add.placeholder');
+  els.add.setAttribute('aria-label', t('add.placeholder'));
+  els.toast.setAttribute('aria-label', t('toast.label'));
+}
+applyStaticTexts();
 const isStandalone = () => matchMedia('(display-mode: standalone)').matches || navigator.standalone === true;
 const isIOS = () => /iPad|iPhone|iPod/.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
 
@@ -73,6 +91,9 @@ function h(tag, props = {}, ...children) {
   }
   return el;
 }
+
+/** A message with <b>…</b> parts (i18n.js rich) as nodes; tags: what to build for a tag instead (e.g. { b: (text) => a button }). */
+const richText = (key, vars, tags = {}) => rich(key, vars).map((p) => (typeof p === 'string' ? p : (tags[p.tag] ?? ((x) => h(p.tag, {}, x)))(p.text)));
 
 function chip(mark) {
   const s = statusOf(mark);
@@ -145,7 +166,7 @@ function toast(text, action) {
   clearTimeout(toastTimer);
   els.toast.replaceChildren(...[h('span', {}, text), action && h('button', { onclick: () => { els.toast.hidden = true; action.run(); } }, action.label)].filter(Boolean));
   els.toast.hidden = false;
-  announce(action ? `${text}. ${action.label} is available.` : text);
+  announce(action ? t('toast.withAction', { text, action: action.label }) : text);
   const hide = () => { toastTimer = setTimeout(() => { els.toast.hidden = true; }, action ? 5000 : 2600); };
   // a toast with an action (Undo) stays while it has keyboard focus or the pointer
   els.toast.onfocusin = els.toast.onpointerenter = () => clearTimeout(toastTimer);
@@ -248,19 +269,19 @@ function listName(p) {
   if (!sh) return name;
   const lower = name.toLowerCase();
   const clash = store.projects().some((x) => x.id !== p.id && x.fields.name.v.toLowerCase() === lower && (store.shareOf(x.id)?.server ?? '') !== sh.server);
-  return clash ? `${name} (from ${serverLabel(sh.server)})` : name;
+  return clash ? t('list.nameFrom', { name, from: serverLabel(sh.server) }) : name;
 }
 /** A list used here in the browser from its owner's address (no sync of one's own), not through a sync service. */
 const inBrowser = (sh) => !ui.local && sh?.via === 'direct';
-const ACCESS = {
-  edit: { name: 'Can edit', help: 'They can add, change, check off and delete tasks in this list.' },
-  view: { name: 'Can view', help: 'They see the list and its updates, but can\'t change anything.' },
-};
-const SHARE_NEEDS_SYNC = 'Sharing needs sync with your own Cloudflare account (Settings › Sync & sharing): a shared list lives on your sync service, where the people you share it with sync it from.';
+/** The two kinds of access to a shared list: name (and in a sentence: lower), help (about them; you: about oneself). */
+const ACCESS = () => ({
+  edit: { name: t('access.edit'), lower: t('access.editLower'), help: t('access.editHelp'), you: t('access.editHelpYou') },
+  view: { name: t('access.view'), lower: t('access.viewLower'), help: t('access.viewHelp'), you: t('access.viewHelpYou') },
+});
 /** A sharing call's error -> what to say: "not updated yet" when one's own sync service is older than sharing. */
 function shareError(e) {
   const older = ui.local ? (ui.local.cloud?.workerApi ?? SHARING_API) < SHARING_API : store.olderServer(SHARING_API);
-  return older ? OLDER_SERVER : e.message;
+  return older ? t(OLDER_SERVER) : e.message;
 }
 const canShare = () => (ui.local ? !!ui.local.cloud : !!store.meta.token);
 
@@ -282,17 +303,30 @@ const shareApi = {
 function sharedMark(projectId) {
   const sh = sharing(projectId);
   if (!sh) return null;
-  return { about: sh.withMe ? `Shared with you · ${ACCESS[sh.withMe.access]?.name ?? ''}` : 'Shared', icon: sh.withMe?.access === 'view' ? 'eye' : 'people' };
+  const access = ACCESS()[sh.withMe?.access];
+  return {
+    about: sh.withMe ? t('list.sharedWithYou', { access: access?.name ?? '' }) : t('list.shared'),
+    lower: sh.withMe ? t('list.sharedWithYouLower', { access: access?.lower ?? '' }) : t('list.sharedLower'),
+    icon: sh.withMe?.access === 'view' ? 'eye' : 'people',
+  };
 }
-const sharedBadge = (m) => (m ? [h('span', { class: 'shared-badge', 'aria-hidden': 'true' }, icon(m.icon)), h('span', { class: 'sr-only' }, `, ${m.about.toLowerCase()}`)] : null);
+const sharedBadge = (m) => (m ? [h('span', { class: 'shared-badge', 'aria-hidden': 'true' }, icon(m.icon)), h('span', { class: 'sr-only' }, `, ${m.lower}`)] : null);
+/** A count in words, "3 open": the number shows, the words around it are for screen readers only. */
+function srAroundNumber(words, n) {
+  const at = words.indexOf(String(n));
+  if (at < 0) return [h('span', { class: 'sr-only' }, words)];
+  const before = words.slice(0, at);
+  const after = words.slice(at + String(n).length);
+  return [before ? h('span', { class: 'sr-only' }, before) : null, String(n), after ? h('span', { class: 'sr-only' }, after) : null];
+}
 
 /** A list's row value in the menu: "2 due" (alert when one is overdue, amber when all are due today), else its open count. */
 function listValue(c) {
   if (c?.due) {
-    const about = c.over === c.due ? `${c.due} overdue` : c.over ? `${c.due} due, ${c.over} overdue` : `${c.due} due today`;
-    return { text: `${c.due} due`, tone: c.over ? 'over' : 'soon', about };
+    const about = c.over === c.due ? tn('list.overdue', c.due) : c.over ? t('list.dueAndOverdue', { due: c.due, over: c.over }) : tn('list.dueToday', c.due);
+    return { text: tn('list.due', c.due), tone: c.over ? 'over' : 'soon', about };
   }
-  return c?.open ? { text: String(c.open), tone: '', about: `${c.open} open` } : null;
+  return c?.open ? { text: String(c.open), tone: '', about: tn('list.open', c.open), n: c.open } : null;
 }
 
 /** The title: the list's name, its shared badge, ⌄, and a violet dot when another list has something due. */
@@ -301,16 +335,16 @@ function renderSwitcher() {
   const counts = listCounts(store.tasks());
   const due = ui.today ? [] : store.projects().filter((p) => p.id !== cur?.id && counts.get(p.id)?.due);
   const mark = cur && !ui.today ? sharedMark(cur.id) : null;
-  const name = ui.today ? 'For Today' : cur ? listName(cur) : 'Lists';
+  const name = ui.today ? t('today.title') : cur ? listName(cur) : t('list.lists');
   // (the dot has its words in the tooltip and for screen readers; the menu says which list and how many)
-  const dueWords = due.length ? `Due in ${due.map(listName).join(', ')}` : '';
+  const dueWords = due.length ? t('list.dueIn', { lists: due.map(listName).join(', ') }) : '';
   els.switcher.replaceChildren(...[
     h('span', { class: 'switcher-name' }, name),
     sharedBadge(mark),
     h('span', { class: 'switcher-chev', 'aria-hidden': 'true' }, icon('chevronDown')),
     due.length ? h('span', { class: 'dot', 'aria-hidden': 'true' }) : null].flat().filter(Boolean));
   els.switcher.title = [name, mark?.about, dueWords].filter(Boolean).join(' · ');
-  els.switcher.setAttribute('aria-description', ['Your lists', dueWords].filter(Boolean).join('. '));
+  els.switcher.setAttribute('aria-description', [t('list.yourLists'), dueWords].filter(Boolean).join('. '));
   if (menuOpen()) renderListMenu(counts);
 }
 
@@ -322,15 +356,15 @@ function renderListMenu(counts = listCounts(store.tasks())) {
   const cur = currentProject();
   const soon = todayRows();
   const anyOver = soon.some((r) => r.bucket === 'over');
-  const todayAbout = soon.length ? `${soon.length} due soon${anyOver ? ', some overdue' : ''}` : '';
+  const todayAbout = soon.length ? tn(anyOver ? 'list.dueSoonOver' : 'list.dueSoon', soon.length) : '';
   const todayRow = h('button', {
     class: 'g-row lm-item', role: 'menuitemradio', 'aria-checked': String(ui.today), tabindex: '-1',
-    title: ['For Today', 'Open tasks of every list that are overdue, due today or in the next 3 days', todayAbout].filter(Boolean).join(' · '), dataset: { fk: 'list-today', id: 'today' },
+    title: [t('today.title'), t('today.about'), todayAbout].filter(Boolean).join(' · '), dataset: { fk: 'list-today', id: 'today' },
     onclick: () => { if (!els.sheetWrap.hidden) return; closeListMenu(); showToday(); },
   },
   h('span', { class: 'check', 'aria-hidden': 'true' }, ui.today ? icon('check') : null),
-  h('span', { class: 'g-label' }, 'For Today'),
-  soon.length ? h('span', { class: `g-value${anyOver ? ' lm-over' : ''}` }, h('span', { class: 'sr-only' }, ', '), String(soon.length), h('span', { class: 'sr-only' }, todayAbout.slice(String(soon.length).length))) : null);
+  h('span', { class: 'g-label' }, t('today.title')),
+  soon.length ? h('span', { class: `g-value${anyOver ? ' lm-over' : ''}` }, h('span', { class: 'sr-only' }, ', '), srAroundNumber(todayAbout, soon.length)) : null);
   const rows = store.projects().map((p) => {
     const isCur = !ui.today && p.id === cur?.id;
     const v = listValue(counts.get(p.id));
@@ -343,7 +377,7 @@ function renderListMenu(counts = listCounts(store.tasks())) {
     h('span', { class: 'check', 'aria-hidden': 'true' }, isCur ? icon('check') : null),
     h('span', { class: 'g-label' }, listName(p)),
     sharedBadge(mark),
-    v ? h('span', { class: `g-value${v.tone ? ` lm-${v.tone}` : ''}` }, h('span', { class: 'sr-only' }, ', '), v.text, v.tone ? null : h('span', { class: 'sr-only' }, ' open')) : null);
+    v ? h('span', { class: `g-value${v.tone ? ` lm-${v.tone}` : ''}` }, h('span', { class: 'sr-only' }, ', '), v.tone ? v.text : srAroundNumber(v.about, v.n)) : null);
     row.addEventListener('contextmenu', (e) => { e.preventDefault(); listOptions(p.id, { fromMenu: true }); });
     onLongPress(row, () => listOptions(p.id, { fromMenu: true }));
     return row;
@@ -351,9 +385,9 @@ function renderListMenu(counts = listCounts(store.tasks())) {
   const add = h('button', {
     class: 'g-row action lm-item lm-new', role: 'menuitem', tabindex: '-1', dataset: { fk: 'list-new' },
     onclick: () => { closeListMenu(); projectNameSheet(null); },
-  }, h('span', { class: 'check', 'aria-hidden': 'true' }, icon('plus')), h('span', { class: 'g-label' }, 'New list'));
-  els.menu.replaceChildren(...[rows.length ? h('div', { class: 'group lm-today', role: 'group', 'aria-label': 'Across all lists' }, todayRow) : null,
-    rows.length ? h('div', { class: 'group lm-lists', role: 'group', 'aria-label': 'Your lists' }, rows) : null, h('div', { class: 'group', role: 'group' }, add)].filter(Boolean));
+  }, h('span', { class: 'check', 'aria-hidden': 'true' }, icon('plus')), h('span', { class: 'g-label' }, t('list.new')));
+  els.menu.replaceChildren(...[rows.length ? h('div', { class: 'group lm-today', role: 'group', 'aria-label': t('list.acrossAll') }, todayRow) : null,
+    rows.length ? h('div', { class: 'group lm-lists', role: 'group', 'aria-label': t('list.yourLists') }, rows) : null, h('div', { class: 'group', role: 'group' }, add)].filter(Boolean));
 }
 
 /** Opens the lists menu with focus on the current list (focus: 'last' for "New list", or a list:<id> key). */
@@ -592,28 +626,29 @@ function listOptions(id, { fromMenu = false } = {}) {
   const i = list.findIndex((x) => x.id === id);
   const move = (dir) => () => { store.moveProject(id, dir); if (fromMenu) openListMenu({ focus: `list:${id}` }); };
   const moves = [
-    i > 0 && menuItem('up', 'Move up', move(-1)),
-    i < list.length - 1 && menuItem('down', 'Move down', move(1)),
+    i > 0 && menuItem('up', t('menu.moveUp'), move(-1)),
+    i < list.length - 1 && menuItem('down', t('menu.moveDown'), move(1)),
   ];
   const sh = sharing(id)?.withMe;
   if (sh) {
     // someone else's list: its name and its deletion are theirs; leaving takes it off this device only
+    const a = ACCESS()[sh.access];
     sheet(listName(p), [
-      h('p', { class: 'sheet-note' }, `Shared with you from ${hostOf(sh.server)} · ${ACCESS[sh.access]?.name}. ${ACCESS[sh.access]?.help.replace('They', 'You').replace('they', 'you')}`),
+      h('p', { class: 'sheet-note' }, t('share.withYouFrom', { host: hostOf(sh.server), access: a?.name, help: a?.you })),
       ...moves,
-      inBrowser(sh) ? menuItem('share', 'Move to my Saqme app', () => moveToAppSheet(sh), { keepOpen: true }) : null,
+      inBrowser(sh) ? menuItem('share', t('share.moveToApp'), () => moveToAppSheet(sh), { keepOpen: true }) : null,
       h('div', { class: 'menu-sep' }),
-      menuItem('leave', 'Leave this list', () => confirmLeave(id), { danger: true }),
+      menuItem('leave', t('share.leaveList'), () => confirmLeave(id), { danger: true }),
     ]);
     return;
   }
   sheet(p.fields.name.v, [
-    canShare() ? menuItem('share', 'Share…', () => shareSheet(id), { keepOpen: true })
-      : menuItem('share', 'Share…', () => {}, { disabled: true, hint: 'needs sync', title: SHARE_NEEDS_SYNC }),
-    menuItem('edit', 'Rename', () => projectNameSheet(id)),
+    canShare() ? menuItem('share', t('share.share'), () => shareSheet(id), { keepOpen: true })
+      : menuItem('share', t('share.share'), () => {}, { disabled: true, hint: t('share.needsSyncHint'), title: t('share.needsSync') }),
+    menuItem('edit', t('list.rename'), () => projectNameSheet(id)),
     ...moves,
     h('div', { class: 'menu-sep' }),
-    menuItem('trash', 'Delete list', () => confirmDeleteProject(id), { danger: true }),
+    menuItem('trash', t('list.delete'), () => confirmDeleteProject(id), { danger: true }),
   ]);
 }
 
@@ -621,20 +656,20 @@ function confirmLeave(projectId, share = null) {
   const p = projectId ? store.get('project', projectId) : null;
   const sh = share ?? sharing(projectId)?.withMe;
   if (!sh) return;
-  const where = ui.local ? 'this computer' : inBrowser(sh) ? 'this browser' : 'this app (and your other phones paired with your sync)';
-  sheet(`Leave “${p ? listName(p) : sh.name}”?`, [
-    h('p', {}, `It goes from ${where}. Nothing changes in the owner's list. To see it here again, you need a new invite.`),
+  const goes = ui.local ? t('share.leaveGoesComputer') : inBrowser(sh) ? t('share.leaveGoesBrowser') : t('share.leaveGoesApp');
+  sheet(t('share.leaveTitle', { name: p ? listName(p) : sh.name }), [
+    h('p', {}, goes),
     h('div', { class: 'btn-row' },
-      h('button', { class: 'btn', onclick: closeSheet }, 'Cancel'),
+      h('button', { class: 'btn', onclick: closeSheet }, t('btn.cancel')),
       h('button', { class: 'btn primary', onclick: async () => {
         closeSheet();
         try {
           // (its reminders end with the key, on the owner's server)
           if (ui.local) { await api('local/leave', { id: sh.id }); await loadLocalInfo(); } else store.leaveShare(sh.id);
-          toast(`Left “${p?.fields.name.v ?? sh.name}”`);
-        } catch (e) { toast(`Could not leave: ${e.message}`); }
+          toast(t('share.left', { name: p?.fields.name.v ?? sh.name }));
+        } catch (e) { toast(t('share.couldNotLeave', { error: e.message })); }
         render();
-      } }, 'Leave')),
+      } }, t('share.leave'))),
   ]);
 }
 
@@ -644,14 +679,14 @@ async function shareSheet(projectId) {
   if (!p) return;
   const state = { access: 'edit', invite: null, people: null, error: '', open: null, busy: false };
   const name = h('input', {
-    class: 'g-input', placeholder: 'Their name, e.g. Nuca', maxLength: 60, autocapitalize: 'words', 'aria-label': 'Their name',
-    'aria-description': 'Only you see it: it is how you recognise them in this list later', enterKeyHint: 'done', dataset: { fk: 'share-name' },
+    class: 'g-input', placeholder: t('share.namePlaceholder'), maxLength: 60, autocapitalize: 'words', 'aria-label': t('share.nameLabel'),
+    'aria-description': t('share.nameHelp'), enterKeyHint: 'done', dataset: { fk: 'share-name' },
   });
   const draw = () => {
     if (els.sheetWrap.hidden && state.drawn) return;   // closed meanwhile
     state.drawn = true;
-    const accessPick = h('div', { class: 'segmented share-access', role: 'group', 'aria-label': 'Access' },
-      ...Object.entries(ACCESS).map(([v, a]) => h('button', {
+    const accessPick = h('div', { class: 'segmented share-access', role: 'group', 'aria-label': t('share.access') },
+      ...Object.entries(ACCESS()).map(([v, a]) => h('button', {
         class: v === state.access ? 'on' : '', 'aria-pressed': String(v === state.access), title: a.help, dataset: { fk: `access:${v}` },
         onclick: () => { state.access = v; draw(); },
       }, a.name)));
@@ -673,21 +708,21 @@ async function shareSheet(projectId) {
     name.oninput = () => name.classList.remove('bad');
     // who (a name only you see), what they may do, and the link; then who has it, one row each
     const out = [
-      head('Invite someone', 3),
-      card(inputRow(name), infoRow('Access', '', accessPick),
-        actionRow(state.busy ? 'Creating…' : 'Create invite link', create, { name: 'Create invite link', fk: 'share-create' })),
-      foot(`Only you see their name. ${ACCESS[state.access].help} They get a link that works once, for 24 hours; the list stays on your sync service, and they sync it from there with a key that reaches this list only.`),
+      head(t('share.inviteSomeone'), 3),
+      card(inputRow(name), infoRow(t('share.access'), '', accessPick),
+        actionRow(state.busy ? t('share.creating') : t('share.createLink'), create, { name: t('share.createLink'), fk: 'share-create' })),
+      foot(t('share.inviteFoot', { help: ACCESS()[state.access].help })),
       state.error ? foot(state.error, { alert: true }) : null,
     ];
     if (state.invite) out.push(...inviteBlock(state.invite));
-    out.push(head('Shared with', 3));
-    if (!state.people) out.push(note('Loading…'));
-    else if (!state.people.length) out.push(note('Nobody yet.'));
+    out.push(head(t('share.sharedWith'), 3));
+    if (!state.people) out.push(note(t('common.loading')));
+    else if (!state.people.length) out.push(note(t('share.nobodyYet')));
     else out.push(card(state.people.map((s) => personRows(s, state, draw, refresh))));
-    out.push(h('div', { class: 'btn-row' }, h('button', { class: 'btn', onclick: closeSheet }, 'Done')));
+    out.push(h('div', { class: 'btn-row' }, h('button', { class: 'btn', onclick: closeSheet }, t('btn.done'))));
     // (the sheet is rebuilt: keyboard focus stays on the same control)
     const fk = els.sheet.contains(document.activeElement) ? document.activeElement?.dataset?.fk : '';
-    sheet(`Share “${p.fields.name.v}”`, out);
+    sheet(t('share.title', { name: p.fields.name.v }), out);
     if (fk) focusKey(fk);
     if (state.error) announce(state.error);
   };
@@ -703,14 +738,14 @@ async function shareSheet(projectId) {
 
 /** The invite just made: its link with Copy (and a QR code on larger screens), and what it does. */
 function inviteBlock(inv) {
-  const box = h('input', { class: 'g-input', value: inv.link, readOnly: true, 'aria-label': 'Invite link', onfocus: (e) => e.target.select(), dataset: { fk: 'invite-link' } });
+  const box = h('input', { class: 'g-input', value: inv.link, readOnly: true, 'aria-label': t('share.inviteLink'), onfocus: (e) => e.target.select(), dataset: { fk: 'invite-link' } });
   const out = [
-    head('Invite link', 3),
-    h('div', { class: 'group invite' }, inputRow(box, textButton('Copy', () => copyText(inv.link, 'Invite link copied'), { name: 'Copy the invite link', fk: 'invite-copy' }))),
-    foot(`For ${inv.share.alias}, ${ACCESS[inv.share.access].name.toLowerCase()}. It works once, until ${new Date(inv.expiresAt).toLocaleString([], { weekday: 'short', hour: '2-digit', minute: '2-digit' })}. Send it to them yourself (a message, an email): whoever opens it first joins, so send it to them only.`),
+    head(t('share.inviteLink'), 3),
+    h('div', { class: 'group invite' }, inputRow(box, textButton(t('btn.copy'), () => copyText(inv.link, t('share.inviteCopied')), { name: t('share.copyInvite'), fk: 'invite-copy' }))),
+    foot(t('share.inviteMade', { alias: inv.share.alias, access: ACCESS()[inv.share.access].lower, until: dateText(inv.expiresAt, { weekday: 'short', hour: '2-digit', minute: '2-digit' }) })),
   ];
   if (matchMedia('(min-width: 560px) and (pointer: fine)').matches) {
-    const img = h('img', { class: 'qr in-group', alt: 'QR code with the invite link', hidden: true });
+    const img = h('img', { class: 'qr in-group', alt: t('share.inviteQr'), hidden: true });
     import('./qr.js').then(({ qrMatrix, qrToSvg }) => {
       const svg = qrToSvg(qrMatrix(inv.link, 'M'), { margin: 4, scale: 5 });
       img.src = `data:image/svg+xml;charset=utf-8,${encodeURIComponent(svg)}`;
@@ -726,53 +761,51 @@ function inviteBlock(inv) {
  * they joined or were invited, the access choices, and revoke / cancel the invite / remove it.
  */
 function personRows(s, state, draw, refresh) {
-  const when = (ms) => new Date(ms).toLocaleDateString([], { day: 'numeric', month: 'short' });
-  const stand = s.state === 'joined' ? `Joined ${when(s.joinedAt)}` : s.state === 'pending' ? `Invited ${when(s.createdAt)}, not joined yet` : 'Invite expired, never used';
-  const access = ACCESS[s.access]?.name ?? s.access;
-  const value = s.state === 'joined' ? access : s.state === 'pending' ? 'Invited' : 'Expired';
+  const when = (ms) => dateText(ms, { day: 'numeric', month: 'short' });
+  const stand = s.state === 'joined' ? t('share.joinedOn', { date: when(s.joinedAt) }) : s.state === 'pending' ? t('share.invitedOn', { date: when(s.createdAt) }) : t('share.inviteExpired');
+  const access = ACCESS()[s.access]?.name ?? s.access;
+  const value = s.state === 'joined' ? access : s.state === 'pending' ? t('share.invited') : t('share.expired');
   const open = state.open === s.id;
   const act = async (fn, done) => { try { await fn(); toast(done); } catch (e) { toast(e.message); } await refresh(); };
   const rows = [h('button', {
-    class: 'g-row link person', 'aria-expanded': String(open), 'aria-description': `${stand}. Opens their access, and revoke`, title: stand, dataset: { fk: `person:${s.id}` },
+    class: 'g-row link person', 'aria-expanded': String(open), 'aria-description': t('share.personAbout', { stand }), title: stand, dataset: { fk: `person:${s.id}` },
     onclick: () => { state.open = open ? null : s.id; draw(); },
   }, rowParts(s.alias, { value, trailing: chevron() }))];
   if (!open) return rows;
   rows.push(h('div', { class: 'g-row sub info' }, h('span', { class: 'g-label' }, stand)));
   if (s.state !== 'expired') {
-    for (const [v, a] of Object.entries(ACCESS)) {
+    for (const [v, a] of Object.entries(ACCESS())) {
       const cur = v === s.access;
       rows.push(h('button', {
-        class: 'g-row sub choice', 'aria-pressed': String(cur), 'aria-label': `${a.name} for ${s.alias}`, title: a.help, 'aria-description': a.help,
-        dataset: { fk: `access:${s.id}:${v}` }, onclick: () => { if (!cur) act(() => shareApi.update(s.id, v), `${s.alias}: ${a.name.toLowerCase()}`); },
+        class: 'g-row sub choice', 'aria-pressed': String(cur), 'aria-label': t('share.accessFor', { access: a.name, alias: s.alias }), title: a.help, 'aria-description': a.help,
+        dataset: { fk: `access:${s.id}:${v}` }, onclick: () => { if (!cur) act(() => shareApi.update(s.id, v), t('share.accessChanged', { alias: s.alias, access: a.lower })); },
       }, h('span', { class: 'g-label' }, a.name), cur ? h('span', { class: 'check', 'aria-hidden': 'true' }, icon('check')) : null));
     }
   }
   const [label, danger, help, done] = s.state === 'joined'
-    ? ['Revoke', true, 'Their key stops working now; the list stays on their device as their own copy.', `${s.alias} no longer has the list`]
-    : s.state === 'pending' ? ['Cancel invite', false, '', 'Invite cancelled'] : ['Remove', false, '', 'Removed'];
-  rows.push(actionRow(label, () => act(() => shareApi.revoke(s.id), done), { danger, help, name: `${label}: ${s.alias}`, fk: `end:${s.id}`, cls: 'sub' }));
+    ? [t('share.revoke'), true, t('share.revokeHelp'), t('share.revoked', { alias: s.alias })]
+    : s.state === 'pending' ? [t('share.cancelInvite'), false, '', t('share.inviteCancelled')] : [t('btn.remove'), false, '', t('share.removed')];
+  rows.push(actionRow(label, () => act(() => shareApi.revoke(s.id), done), { danger, help, name: t('share.endFor', { action: label, alias: s.alias }), fk: `end:${s.id}`, cls: 'sub' }));
   return rows;
 }
 
 /** Join a list someone shares: the invite link pasted (or found on the clipboard). */
 function joinSheet(prefill = '') {
-  const input = h('input', { class: 'field', value: prefill, placeholder: 'https://…/join#code=…', 'aria-label': 'Invite link', autocapitalize: 'off', autocomplete: 'off', spellcheck: false });
+  const input = h('input', { class: 'field', value: prefill, placeholder: 'https://…/join#code=…', 'aria-label': t('share.inviteLink'), autocapitalize: 'off', autocomplete: 'off', spellcheck: false });
   const go = () => {
     const inv = parseInviteLink(input.value);
-    if (!inv) { input.classList.add('bad'); toast('That is not an invite link (it looks like https://…/join#code=…).'); return; }
+    if (!inv) { input.classList.add('bad'); toast(t('share.notInviteLink')); return; }
     confirmJoin(input.value.trim(), inv);
   };
   input.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); go(); } });
   input.addEventListener('input', () => input.classList.remove('bad'));
   const paste = navigator.clipboard?.readText ? h('button', { class: 'btn', onclick: async () => {
-    try { input.value = (await navigator.clipboard.readText()).trim(); input.classList.remove('bad'); } catch { toast('Paste it into the field instead.'); }
-  } }, 'Paste') : null;
-  sheet('Join a shared list', [
-    h('p', { class: 'sheet-note' }, ui.local || store.meta.token
-      ? 'Paste the invite link someone sent you. The list then shows up among your lists and stays in step with theirs.'
-      : 'Paste the invite link someone sent you. Without a sync of your own, this app opens lists of this address only; for any other, open the invite link itself and choose “Use it in this browser” there.'),
+    try { input.value = (await navigator.clipboard.readText()).trim(); input.classList.remove('bad'); } catch { toast(t('common.pasteIntoField')); }
+  } }, t('btn.paste')) : null;
+  sheet(t('shareJoin.title'), [
+    h('p', { class: 'sheet-note' }, ui.local || store.meta.token ? t('shareJoin.paste') : t('shareJoin.pasteNoSync')),
     h('div', { class: 'field-row' }, input, paste),
-    h('div', { class: 'btn-row' }, h('button', { class: 'btn', onclick: closeSheet }, 'Cancel'), h('button', { class: 'btn primary', onclick: go }, 'Join')),
+    h('div', { class: 'btn-row' }, h('button', { class: 'btn', onclick: closeSheet }, t('btn.cancel')), h('button', { class: 'btn primary', onclick: go }, t('shareJoin.join'))),
   ]);
   if (!prefill) input.focus();
 }
@@ -782,21 +815,21 @@ function confirmJoin(link, inv) {
   const host = hostOf(inv.server);
   if (!ui.local && !store.meta.token && inv.server !== location.origin) {
     // no sync of its own: this app reaches its own address only (its security policy), so the list opens there
-    sheet('Open the invite link instead', [
-      h('p', {}, `This list is on ${host}. Without a sync of your own, open the invite link itself: its page has “Use it in this browser”, with nothing to install and no account. Or pair this app with your own sync first (Settings › Sync & sharing), then join here.`),
+    sheet(t('shareJoin.openInsteadTitle'), [
+      h('p', {}, t('shareJoin.openInstead', { host })),
       h('div', { class: 'btn-row' },
-        h('button', { class: 'btn', onclick: closeSheet }, 'Not now'),
-        h('a', { class: 'btn primary', href: `${inv.server}/join#code=${inv.code}`, rel: 'noreferrer' }, 'Open the invite')),
+        h('button', { class: 'btn', onclick: closeSheet }, t('btn.notNow')),
+        h('a', { class: 'btn primary', href: `${inv.server}/join#code=${inv.code}`, rel: 'noreferrer' }, t('shareJoin.openInvite'))),
     ]);
     return;
   }
-  const how = ui.local ? 'This computer syncs it with them directly.'
-    : store.meta.token ? `Your sync service (${hostOf(store.meta.server || location.origin)}) keeps it in step with theirs for this app and your other phones, and reminds you of its deadlines.`
-      : 'It stays in this browser: no account and no sync of your own needed. Later, the list\'s menu can move it to your Saqme app.';
-  sheet('Join shared list?', [
-    h('p', {}, `A list shared from ${host} shows up here as a new list. ${how} What you change in it goes to ${host}, which belongs to the person who shared it: they (and only they) can see your changes.`),
+  const how = ui.local ? t('shareJoin.howComputer')
+    : store.meta.token ? t('shareJoin.howSync', { host: hostOf(store.meta.server || location.origin) })
+      : t('shareJoin.howBrowser');
+  sheet(t('shareJoin.confirmTitle'), [
+    h('p', {}, t('shareJoin.confirm', { host, how })),
     h('div', { class: 'btn-row' },
-      h('button', { class: 'btn', onclick: closeSheet }, 'Not now'),
+      h('button', { class: 'btn', onclick: closeSheet }, t('btn.notNow')),
       h('button', { class: 'btn primary', onclick: async (e) => {
         e.target.disabled = true;
         try {
@@ -805,18 +838,18 @@ function confirmJoin(link, inv) {
             closeSheet();
             const box = document.querySelector('[data-fk="join-input"]');   // (Settings stays open here: empty its box)
             if (box) box.value = '';
-            toast(`Joined “${r.name}”. It shows up in a few seconds.`);
+            toast(t('shareJoin.joinedSoon', { name: r.name }));
             setTimeout(loadLocalInfo, 2500);
           } else {
             const s = await store.joinShare(link);
             closeSheet();
             ui.view = 'list'; ui.today = false; ls.set('today', '0'); ui.project = s.projectId; ls.set('project', s.projectId);
-            toast(`Joined “${s.name}”`);
+            toast(t('shareJoin.joined', { name: s.name }));
             syncSharePush();
           }
           render();
         } catch (err) { e.target.disabled = false; toast(err.message); }
-      } }, 'Join')),
+      } }, t('shareJoin.join'))),
   ]);
 }
 
@@ -826,38 +859,38 @@ function confirmJoin(link, inv) {
  */
 async function moveToAppSheet(sh) {
   const p = store.get('project', sh.projectId);
-  const title = `Move “${p ? listName(p) : sh.name}” to your Saqme app`;
-  sheet(title, [h('p', { class: 'sheet-note', role: 'status' }, 'Getting a link…')]);
+  const title = t('move.title', { name: p ? listName(p) : sh.name });
+  sheet(title, [h('p', { class: 'sheet-note', role: 'status' }, t('move.gettingLink'))]);
   let m;
   try {
     await store.sync({ force: true });   // (what was changed here goes first)
     m = await store.transferShare(sh.id);
   } catch (e) {
     if (e.ended) { closeSheet(); return; }   // (the store says what happened)
-    sheet(title, [h('p', {}, `Could not get a link: ${e.message}`), h('div', { class: 'btn-row' }, h('button', { class: 'btn primary', onclick: closeSheet }, 'OK'))]);
+    sheet(title, [h('p', {}, t('move.couldNotGetLink', { error: e.message })), h('div', { class: 'btn-row' }, h('button', { class: 'btn primary', onclick: closeSheet }, t('btn.ok')))]);
     return;
   }
   const inv = parseInviteLink(m.link);
-  const box = h('input', { class: 'field', value: m.link, readOnly: true, 'aria-label': 'Move link', onfocus: (e) => e.target.select() });
-  const block = h('div', { class: 'invite' }, h('div', { class: 'field-row' }, box, h('button', { class: 'btn primary', onclick: () => copyText(m.link, 'Link copied') }, 'Copy')));
+  const box = h('input', { class: 'field', value: m.link, readOnly: true, 'aria-label': t('move.link'), onfocus: (e) => e.target.select() });
+  const block = h('div', { class: 'invite' }, h('div', { class: 'field-row' }, box, h('button', { class: 'btn primary', onclick: () => copyText(m.link, t('common.linkCopied')) }, t('btn.copy'))));
   const computer = matchMedia('(pointer: fine)').matches;
   if (computer) {
     import('./qr.js').then(({ qrMatrix, qrToSvg }) => {
       const svg = qrToSvg(qrMatrix(m.link, 'M'), { margin: 4, scale: 5 });
-      block.append(h('img', { class: 'qr', alt: 'QR code with the move link', src: `data:image/svg+xml;charset=utf-8,${encodeURIComponent(svg)}` }));
+      block.append(h('img', { class: 'qr', alt: t('move.qr'), src: `data:image/svg+xml;charset=utf-8,${encodeURIComponent(svg)}` }));
     }).catch(() => {});
   }
   sheet(title, [
-    h('p', {}, 'Your Saqme app takes this list over, with its tasks and your access: no new invite needed. This browser stops syncing it then, and it goes from here.'),
+    h('p', {}, t('move.what')),
     h('ol', { class: 'steps' },
-      h('li', {}, h('b', {}, 'Saqme on this computer: '), 'Open in Saqme To Do (it asks first).'),
-      h('li', {}, h('b', {}, 'The phone app: '), 'copy the link, then in Saqme: Settings › Sync & sharing, and paste it under Shared lists.'),
-      h('li', {}, h('b', {}, 'Another computer: '), 'send yourself the link and open it there.')),
+      h('li', {}, richText('move.stepComputer')),
+      h('li', {}, richText('move.stepPhone')),
+      h('li', {}, richText('move.stepOther'))),
     block,
-    h('p', { class: 'sheet-note' }, `The link works once, until ${new Date(m.expiresAt).toLocaleString([], { weekday: 'short', hour: '2-digit', minute: '2-digit' })}.`),
+    h('p', { class: 'sheet-note' }, t('move.worksOnce', { until: dateText(m.expiresAt, { weekday: 'short', hour: '2-digit', minute: '2-digit' }) })),
     h('div', { class: 'btn-row' },
-      inv && computer ? h('a', { class: 'btn', href: `saqme://join?server=${encodeURIComponent(inv.server)}&code=${inv.code}` }, 'Open in Saqme To Do') : null,
-      h('button', { class: 'btn primary', onclick: closeSheet }, 'Done')),
+      inv && computer ? h('a', { class: 'btn', href: `saqme://join?server=${encodeURIComponent(inv.server)}&code=${inv.code}` }, t('move.openInApp')) : null,
+      h('button', { class: 'btn primary', onclick: closeSheet }, t('btn.done'))),
   ]);
 }
 
@@ -891,20 +924,20 @@ async function checkClipboardForInvite() {
 
 function projectNameSheet(id) {
   const p = id ? store.get('project', id) : null;
-  const input = h('input', { class: 'field', value: p ? p.fields.name.v : '', placeholder: 'List name', 'aria-label': 'List name', maxLength: 100, enterKeyHint: 'done', autocapitalize: 'words' });
+  const input = h('input', { class: 'field', value: p ? p.fields.name.v : '', placeholder: t('list.namePlaceholder'), 'aria-label': t('list.namePlaceholder'), maxLength: 100, enterKeyHint: 'done', autocapitalize: 'words' });
   const save = () => {
     const name = input.value.trim();
     if (!name) { input.classList.add('bad'); return; }
     const clash = store.projects().find((x) => x.id !== id && x.fields.name.v.toLowerCase() === name.toLowerCase());
-    if (clash) { input.classList.add('bad'); toast('A list with that name already exists'); return; }
+    if (clash) { input.classList.add('bad'); toast(t('list.nameTaken')); return; }
     if (id) store.renameProject(id, name);
     else { const nid = store.addProject(name); if (nid) { ui.project = nid; ls.set('project', nid); ui.today = false; ls.set('today', '0'); ui.view = 'list'; } }
     closeSheet();
   };
   input.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); save(); } });
-  sheet(id ? 'Rename list' : 'New list', [
+  sheet(id ? t('list.renameTitle') : t('list.new'), [
     h('div', { class: 'field-row' }, input),
-    h('div', { class: 'btn-row' }, h('button', { class: 'btn', onclick: closeSheet }, 'Cancel'), h('button', { class: 'btn primary', onclick: save }, id ? 'Rename' : 'Create')),
+    h('div', { class: 'btn-row' }, h('button', { class: 'btn', onclick: closeSheet }, t('btn.cancel')), h('button', { class: 'btn primary', onclick: save }, id ? t('list.rename') : t('btn.create'))),
   ]);
   input.focus();
   input.select();
@@ -912,36 +945,36 @@ function projectNameSheet(id) {
 
 function confirmDeleteProject(id) {
   const p = store.get('project', id);
-  sheet(`Delete “${p.fields.name.v}”?`, [
-    h('p', {}, 'Its tasks move to Recently deleted (Settings › Your lists), nothing is erased. You can restore the list from there.'),
+  sheet(t('list.deleteTitle', { name: p.fields.name.v }), [
+    h('p', {}, t('list.deleteWhat')),
     h('div', { class: 'btn-row' },
-      h('button', { class: 'btn', onclick: closeSheet }, 'Cancel'),
+      h('button', { class: 'btn', onclick: closeSheet }, t('btn.cancel')),
       h('button', { class: 'btn primary', onclick: () => {
         store.deleteProject(id); closeSheet();
-        toast('List deleted', { label: 'Undo', run: () => store.restoreProject(id) });
-      } }, 'Delete')),
+        toast(t('list.deleted'), { label: t('btn.undo'), run: () => store.restoreProject(id) });
+      } }, t('btn.delete'))),
   ]);
 }
 
 // ---------------------------------------------------------------- sync status + conflicts badge
 function ago(ms) {
   const s = Math.round((Date.now() - ms) / 1000);
-  if (s < 10) return 'just now';
-  if (s < 60) return `${s} s ago`;
-  if (s < 3600) return `${Math.round(s / 60)} min ago`;
-  if (s < 86400) return `${Math.round(s / 3600)} h ago`;
-  return new Date(ms).toLocaleString([], { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' });   // (short: it is a row's value)
+  if (s < 10) return t('ago.now');
+  if (s < 60) return tn('ago.s', s);
+  if (s < 3600) return tn('ago.min', Math.round(s / 60));
+  if (s < 86400) return tn('ago.h', Math.round(s / 3600));
+  return dateText(ms, { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' });   // (short: it is a row's value)
 }
 
 function statusText() {
   const st = store.status;
   const pending = store.pendingCount();
   switch (st.state) {
-    case 'unpaired': return browserShares().length ? 'Not paired — the lists shared with you here sync with their owner, your own lists stay on this device' : 'Not paired — changes stay on this device';
-    case 'syncing': return 'Syncing…';
-    case 'offline': return `Offline${pending ? ` · ${pending} change${pending > 1 ? 's' : ''} waiting` : ''}`;
-    case 'error': return `Sync error: ${st.message}`;
-    default: return store.meta.lastSync ? `Synced ${ago(store.meta.lastSync)}` : 'Synced';
+    case 'unpaired': return browserShares().length ? t('sync.unpairedShared') : t('sync.unpaired');
+    case 'syncing': return t('sync.syncing');
+    case 'offline': return pending ? tn('sync.offlineWaiting', pending) : t('sync.offline');
+    case 'error': return t('sync.error', { error: st.message });
+    default: return store.meta.lastSync ? t('sync.syncedAgo', { ago: ago(store.meta.lastSync) }) : t('sync.synced');
   }
 }
 
@@ -955,7 +988,7 @@ function renderStatus() {
   const n = store.conflicts().length + allNotices().length;
   els.conflicts.hidden = n === 0;
   els.conflicts.replaceChildren(icon('conflict'), h('span', {}, n));
-  els.conflicts.title = `${n} sync conflict${n === 1 ? '' : 's'} or change${n === 1 ? '' : 's'} not saved`;
+  els.conflicts.title = tn('sync.conflictsBadge', n);
 }
 
 // ---------------------------------------------------------------- main view
@@ -1076,8 +1109,8 @@ function renderTasks() {
   const proj = currentProject();
   if (!proj) {
     frag.push(h('div', { class: 'welcome' },
-      h('p', {}, 'No lists yet.'),
-      h('button', { class: 'btn primary', onclick: () => projectNameSheet(null) }, icon('plus'), 'New list')));
+      h('p', {}, t('list.noLists')),
+      h('button', { class: 'btn primary', onclick: () => projectNameSheet(null) }, icon('plus'), t('list.new'))));
     setListContent(frag);
     return;
   }
@@ -1086,13 +1119,14 @@ function renderTasks() {
   const shared = sharing(proj.id)?.withMe;
   if (shared) {
     const st = store.shareStatus.get(shared.id) ?? shared.status;
-    const trouble = st?.state === 'paused' ? ' Not synced while this app is not paired: your sync service keeps it in step. Pair it again in Settings › Sync & sharing; what you change meanwhile waits here.'
-      : st && (st.state === 'offline' || st.state === 'error') ? ` Not synced right now: ${st.message || st.state}.` : '';
+    const trouble = st?.state === 'paused' ? t('shared.paused')
+      : st && (st.state === 'offline' || st.state === 'error') ? t('shared.notSynced', { error: localText(st.message) || st.state }) : '';
     if (shared.access === 'view' || trouble) {
       // (a line above the cards, like the Windows app's; in ink when something is wrong)
+      const from = t(shared.access === 'view' ? 'shared.fromViewOnly' : 'shared.from', { host: hostOf(shared.server) });
       frag.push(h('p', { class: `shared-note${trouble ? ' trouble' : ''}`, role: trouble ? 'status' : null },
-        shared.access === 'view' ? h('b', {}, 'View only. ') : null,
-        `Shared with you from ${hostOf(shared.server)}.${shared.access === 'view' ? ' You see the changes as they are made, but can\'t change it.' : ''}${trouble}`));
+        shared.access === 'view' ? [h('b', {}, t('shared.viewOnly')), ' '] : null,
+        trouble ? `${from} ${trouble}` : from));
     }
   }
   const tree = store.tree(proj.id);
@@ -1107,34 +1141,34 @@ function renderTasks() {
   if (draft && !draft.parentId && !draft.afterId) activeItems.push(listItem(0, taskRow(null, 'active', draft)));
   frag.push(list(name, activeItems));
   if (postponed.length) {
-    frag.push(h('h2', { class: 'g-head list-head' }, 'Postponed'));
+    frag.push(h('h2', { class: 'g-head list-head' }, t('status.post')));
     const items = [];
     for (const n of postponed) renderNode(items, n, 'postponed');
-    frag.push(list('Postponed', items));
+    frag.push(list(t('status.post'), items));
   }
   if (closed.length) {
     const show = ls.get('showCompleted') === '1';
     frag.push(h('h2', { class: 'completed-heading' }, h('button', {
       class: `completed-toggle${show ? ' open' : ''}`, 'aria-expanded': String(show), dataset: { fk: 'completed' },
-      'aria-label': `Completed, ${closed.length} ${closed.length === 1 ? 'task' : 'tasks'}`,
+      'aria-label': tn('list.completedTasks', closed.length),
       onclick: () => { ls.set('showCompleted', show ? '0' : '1'); commitAll(); render(); },
-    }, h('span', {}, 'Completed'), h('span', { class: 'count' }, ` · ${closed.length}`), icon('chevron'))));
-    if (show) { const items = []; for (const n of closed) renderNode(items, n, 'closed'); frag.push(list('Completed', items)); }
+    }, h('span', {}, t('list.completed')), h('span', { class: 'count' }, ` · ${closed.length}`), icon('chevron'))));
+    if (show) { const items = []; for (const n of closed) renderNode(items, n, 'closed'); frag.push(list(t('list.completed'), items)); }
   }
   if (!ui.visible.length && !draft) {
-    frag.push(h('div', { class: 'empty-state' }, readOnly(proj.id) ? 'No tasks here yet.' : 'No tasks here yet. Add one below.'));
+    frag.push(h('div', { class: 'empty-state' }, readOnly(proj.id) ? t('list.emptyReadOnly') : t('list.empty')));
   }
   setListContent(frag.filter(Boolean));
   if (ui.sel && !ui.visible.includes(ui.sel)) ui.sel = null;
 }
 
-const TODAY_HEADS = { over: 'Overdue', today: 'Today', soon: 'Next 3 days' };
+const TODAY_HEADS = { over: 'today.over', today: 'today.today', soon: 'today.soon' };
 /** For Today: the open tasks due soon from every list, in the order of their deadlines, under Overdue / Today / Next 3 days. */
 function renderToday() {
   const frag = [];
   ui.visible = [];
   if (store.saveError) frag.push(saveWarning());
-  frag.push(h('h1', { class: 'sr-only' }, 'For Today'));
+  frag.push(h('h1', { class: 'sr-only' }, t('today.title')));
   const rows = todayRows();
   for (const bucket of ['over', 'today', 'soon']) {
     const items = [];
@@ -1148,10 +1182,10 @@ function renderToday() {
       items.push(listItem(0, taskRow(node, 'today'), open ? notesBlock(node) : null));
     }
     if (!items.length) continue;
-    frag.push(h('h2', { class: 'g-head list-head' }, TODAY_HEADS[bucket]));
-    frag.push(h('div', { class: 'tasks group', role: 'list', 'aria-label': TODAY_HEADS[bucket] }, items));
+    frag.push(h('h2', { class: 'g-head list-head' }, t(TODAY_HEADS[bucket])));
+    frag.push(h('div', { class: 'tasks group', role: 'list', 'aria-label': t(TODAY_HEADS[bucket]) }, items));
   }
-  if (!ui.visible.length) frag.push(h('div', { class: 'empty-state' }, 'Nothing overdue, due today or in the next 3 days.'));
+  if (!ui.visible.length) frag.push(h('div', { class: 'empty-state' }, t('today.empty')));
   setListContent(frag.filter(Boolean));
   if (ui.sel && !ui.visible.includes(ui.sel)) ui.sel = null;
 }
@@ -1172,43 +1206,42 @@ function renderNode(frag, node, section) {
 }
 /** One phrase for a task row: what it says, its status, its deadline (read when the row gets focus). */
 function rowSummary(node, st) {
-  const t = node.task;
-  const due = t.fields.due.v;
-  const parts = [t.fields.text.v || 'Untitled', st.name];
-  if (ui.today) parts.push(`in ${projectName(t)}`);
-  if (due) parts.push(`deadline ${dueLong(due)}${dueTone(due, rank(t.fields.status.v) === 2) === 'over' ? ', overdue' : ''}`);
-  if (node.kids.length) { const p = progress(node); parts.push(`${p.done} of ${p.total} subtasks closed`); }
+  const task = node.task;
+  const due = task.fields.due.v;
+  const parts = [task.fields.text.v || t('task.untitled'), t(`status.${st.key}`)];
+  if (ui.today) parts.push(t('task.inList', { list: projectName(task) }));
+  if (due) parts.push(t(dueTone(due, rank(task.fields.status.v) === 2) === 'over' ? 'task.deadlineOverdue' : 'task.deadline', { date: dueLongText(due) }));
+  if (node.kids.length) { const p = progress(node); parts.push(tn('task.subtasksClosed', p.total, { done: p.done })); }
   return parts.join(', ');
 }
 
 function installHint() {
   return h('div', { class: 'callout install' },
-    h('div', {}, h('b', {}, 'Install the app: '), 'tap ', h('b', {}, 'Share'), ' then ', h('b', {}, 'Add to Home Screen'),
-      ', and open Saqme from the Home Screen for notifications and full screen.'),
+    h('div', {}, richText('install.hint')),
     // Safari keeps a tab's data apart from the Home Screen app's, and may clear it after a week without a visit
-    store.meta.token ? null : h('div', {}, 'Lists you make in this Safari tab stay in this tab: the Home Screen app starts empty, and Safari may clear them after a week without opening them. Install first, or export them (Settings › Your lists) and import them in the app.'),
-    h('div', { class: 'btn-row' }, h('button', { class: 'g-btn', onclick: () => { ls.set('installHint', 'off'); render(); } }, 'Got it')));
+    store.meta.token ? null : h('div', {}, t('install.safariTab')),
+    h('div', { class: 'btn-row' }, h('button', { class: 'g-btn', onclick: () => { ls.set('installHint', 'off'); render(); } }, t('btn.gotIt'))));
 }
 
 /** Shown while edits cannot be written to the phone's storage (they are kept in memory and retried). */
 function saveWarning() {
   return h('div', { class: 'callout', role: 'alert' },
-    h('b', {}, 'Changes are not saved on this phone right now. '),
-    `${store.saveError} They stay while the app is open and are saved as soon as it works again.${store.meta.token ? '' : ' Export your lists (Settings › Your lists) to be safe.'}`);
+    h('b', {}, t('save.notSaved')), ' ',
+    `${store.saveError} ${t(store.meta.token ? 'save.stay' : 'save.stayExport')}`);
 }
 
 const projectName = (t) => { const p = store.projects().find((x) => x.id === t.fields.place.v.project); return p ? listName(p) : ''; };
 
 function taskRow(node, section, draft = null) {
-  const t = node?.task;
+  const task = node?.task;
   const id = node?.id ?? null;
-  const mark = t ? t.fields.status.v : ' ';
+  const mark = task ? task.fields.status.v : ' ';
   const st = statusOf(mark);
   const hasKids = !!node?.kids.length;
-  const notes = t?.fields.notes.v ?? '';
+  const notes = task?.fields.notes.v ?? '';
   const open = node ? isOpen(node) : false;
   const depth = node ? node.depth : draft.depth;
-  const ro = !!t && readOnly(t.fields.place.v.project);   // a view-only shared list: read, never change
+  const ro = !!task && readOnly(task.fields.place.v.project);   // a view-only shared list: read, never change
   // the row takes keyboard focus as one unit (arrow keys move it), and says what it is in one phrase
   const notesBelow = !!node && (open || ui.notesEditing === id) && (!!notes || ui.notesEditing === id);
   const row = h('div', {
@@ -1232,16 +1265,17 @@ function taskRow(node, section, draft = null) {
   }
   row.append(grip);
 
-  const chev = h('button', { class: `chev${open ? ' open' : ''}`, 'aria-label': 'Subtasks and notes', 'aria-expanded': String(open), dataset: { fk: id ? `chev:${id}` : '' } });
+  const chev = h('button', { class: `chev${open ? ' open' : ''}`, 'aria-label': t('task.subtasksAndNotes'), 'aria-expanded': String(open), dataset: { fk: id ? `chev:${id}` : '' } });
   if (hasKids || notes) {
     chev.append(icon('chevron'));
     chev.addEventListener('click', () => { commitAll(); setOpen(id, !open); render(); });
   } else { chev.disabled = true; chev.setAttribute('aria-hidden', 'true'); chev.removeAttribute('aria-expanded'); }
   row.append(chev);
 
+  const statusName = t('task.statusLabel', { status: t(`status.${st.key}`) });
   const chipBtn = ro
-    ? h('span', { class: 'chip-btn', role: 'img', 'aria-label': `Status: ${st.name}` }, chip(mark))
-    : h('button', { class: 'chip-btn', 'aria-label': `Status: ${st.name}`, 'aria-haspopup': 'dialog', dataset: { fk: id ? `chip:${id}` : '' } }, chip(mark));
+    ? h('span', { class: 'chip-btn', role: 'img', 'aria-label': statusName }, chip(mark))
+    : h('button', { class: 'chip-btn', 'aria-label': statusName, 'aria-haspopup': 'dialog', dataset: { fk: id ? `chip:${id}` : '' } }, chip(mark));
   if (node && !ro) chipBtn.addEventListener('click', () => { commitAll(); statusSheet(id); });
   row.append(chipBtn);
   let textEl = null;
@@ -1250,44 +1284,45 @@ function taskRow(node, section, draft = null) {
   const main = h('div', { class: 'main' });
   const editingThis = draft || (ui.editing && ui.editing.id === id);
   if (editingThis) main.append(editor(node, draft));
-  else if (ro) main.append(textEl = h('span', { class: `text t-${st.key}${t.fields.text.v ? '' : ' empty'}` }, t.fields.text.v || 'Untitled'));
+  else if (ro) main.append(textEl = h('span', { class: `text t-${st.key}${task.fields.text.v ? '' : ' empty'}` }, task.fields.text.v || t('task.untitled')));
   else {
     // a button: tapping it (or Enter / Space on it) edits the text
-    const text = h('button', { class: `text t-${st.key}${t.fields.text.v ? '' : ' empty'}`, dataset: { fk: `text:${id}` } }, t.fields.text.v || 'Untitled');
+    const text = h('button', { class: `text t-${st.key}${task.fields.text.v ? '' : ' empty'}`, dataset: { fk: `text:${id}` } }, task.fields.text.v || t('task.untitled'));
     text.addEventListener('click', () => beginEdit(id));
     main.append(textEl = text);
   }
   if (node && statusAnim.has(id)) queueMicrotask(() => playStatusAnim(id, chipBtn.firstElementChild, textEl));   // (once the row is in the page)
   if (node) {
     const meta = [];
-    const due = t.fields.due.v;
+    const due = task.fields.due.v;
     if (due) {
       // a pill only when it matters (overdue / today / tomorrow); later deadlines are plain text
       const tone = dueTone(due, rank(mark) === 2);
       const urgent = tone === 'over' || tone === 'soon';
-      const shown = dueLabel(due.date) + (due.time ? ` ${due.time}` : '');
+      const shown = dueText(due.date) + (due.time ? ` ${due.time}` : '');
       const b = h(ro ? 'span' : 'button', {
-        class: `m-due ${urgent ? `pill ${tone}` : 'due'}`, title: `Deadline: ${dueLong(due)}`, dataset: { fk: ro ? '' : `due:${id}` }, 'aria-haspopup': ro ? null : 'dialog',
-        'aria-label': `Deadline: ${shown}${tone === 'over' ? ', overdue' : ''}`,   // the state in words, not only in colour
+        class: `m-due ${urgent ? `pill ${tone}` : 'due'}`, title: t('task.deadlineLabel', { date: dueLongText(due) }), dataset: { fk: ro ? '' : `due:${id}` }, 'aria-haspopup': ro ? null : 'dialog',
+        'aria-label': t(tone === 'over' ? 'task.deadlineLabelOverdue' : 'task.deadlineLabel', { date: shown }),   // the state in words, not only in colour
       }, shown);
       if (!ro) b.addEventListener('click', () => { commitAll(); dueSheet(id); });
       meta.push(b);
     }
     if (section === 'today') {
       // which list it is in; a tap opens the task there
-      const name = projectName(t);
-      meta.push(h('button', { class: 'item m-list', title: `Show in ${name}`, 'aria-label': `Show in ${name}`, dataset: { fk: `showlist:${id}` }, onclick: () => showInList(id) }, name));
+      const name = projectName(task);
+      meta.push(h('button', { class: 'item m-list', title: t('task.showIn', { list: name }), 'aria-label': t('task.showIn', { list: name }), dataset: { fk: `showlist:${id}` }, onclick: () => showInList(id) }, name));
     }
     if (hasKids) {
       const p = progress(node);
-      meta.push(h('span', { class: 'item m-progress', title: `${p.done} of ${p.total} subtasks closed` }, h('span', { 'aria-hidden': 'true' }, `${p.done}/${p.total}`), h('span', { class: 'sr-only' }, `${p.done} of ${p.total} subtasks closed`)));
+      const closedWords = tn('task.subtasksClosed', p.total, { done: p.done });
+      meta.push(h('span', { class: 'item m-progress', title: closedWords }, h('span', { 'aria-hidden': 'true' }, `${p.done}/${p.total}`), h('span', { class: 'sr-only' }, closedWords)));
     }
-    if (notes && !open) meta.push(h('span', { class: 'item m-notes', title: 'Has notes or links' }, icon('link'), h('span', { class: 'sr-only' }, 'Has notes')));
+    if (notes && !open) meta.push(h('span', { class: 'item m-notes', title: t('task.hasNotesOrLinks') }, icon('link'), h('span', { class: 'sr-only' }, t('task.hasNotes'))));
     if (meta.length) main.append(h('div', { class: 'meta' }, meta));
   }
   row.append(main);
 
-  const more = ro ? h('span', { class: 'more', 'aria-hidden': 'true' }) : h('button', { class: 'more', 'aria-label': 'Task menu', 'aria-haspopup': 'dialog', dataset: { fk: id ? `more:${id}` : '' } });
+  const more = ro ? h('span', { class: 'more', 'aria-hidden': 'true' }) : h('button', { class: 'more', 'aria-label': t('task.menu'), 'aria-haspopup': 'dialog', dataset: { fk: id ? `more:${id}` : '' } });
   if (node && !ro) { more.append(icon('more')); more.addEventListener('click', () => { commitAll(); rowMenu(id); }); }
   row.append(more);
 
@@ -1333,7 +1368,7 @@ function notesBlock(node) {
   const id = node.id;
   const wrap = h('div', { class: 'notes', style: { '--depth': String(node.depth) } });
   if (ui.notesEditing === id) {
-    const ta = h('textarea', { rows: 2, placeholder: 'Links, notes, context…', value: node.task.fields.notes.v, maxLength: MAX_NOTES });
+    const ta = h('textarea', { rows: 2, placeholder: t('notes.placeholder'), value: node.task.fields.notes.v, maxLength: MAX_NOTES });
     const done = () => commitNotes(ta.value);
     ta.addEventListener('input', () => autosize(ta));
     ta.addEventListener('keydown', (e) => {
@@ -1341,7 +1376,7 @@ function notesBlock(node) {
       else if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) { e.preventDefault(); done(); }
     });
     ta.addEventListener('blur', () => { if (ui.notesEditing === id) done(); });
-    wrap.append(ta, h('div', { class: 'notes-actions' }, h('button', { class: 'g-btn notes-done', onpointerdown: (e) => e.preventDefault(), onclick: done }, 'Done')));
+    wrap.append(ta, h('div', { class: 'notes-actions' }, h('button', { class: 'g-btn notes-done', onpointerdown: (e) => e.preventDefault(), onclick: done }, t('btn.done'))));
     queueMicrotask(() => { ta.focus(); autosize(ta); ta.setSelectionRange(ta.value.length, ta.value.length); });
   } else {
     const lines = node.task.fields.notes.v.split('\n');
@@ -1439,12 +1474,12 @@ function saveEditing(value) {
     const d = e.draft;
     return store.addTask(d.projectId, { parentId: d.parentId, index: d.index, text });
   }
-  const t = store.get('task', e.id);
-  if (!t) return null;
-  const orig = e.orig ?? { v: t.fields.text.v, ts: t.fields.text.ts };
+  const task = store.get('task', e.id);
+  if (!task) return null;
+  const orig = e.orig ?? { v: task.fields.text.v, ts: task.fields.text.ts };
   if (text === orig.v) return e.id;   // unchanged: never rewrite (it could be a newer version by now)
   if (!text) {
-    if (t.fields.text.v) { store.deleteTask(e.id); toast('Task deleted', { label: 'Undo', run: () => store.restoreTask(e.id) }); }
+    if (task.fields.text.v) { store.deleteTask(e.id); toast(t('task.deleted'), { label: t('btn.undo'), run: () => store.restoreTask(e.id) }); }
     return null;
   }
   store.setTask(e.id, { text }, { base: orig.ts });
@@ -1555,7 +1590,7 @@ function nudge(id, dir) {
 
 function deleteWithUndo(id) {
   store.deleteTask(id);
-  toast('Task deleted', { label: 'Undo', run: () => store.restoreTask(id) });
+  toast(t('task.deleted'), { label: t('btn.undo'), run: () => store.restoreTask(id) });
 }
 
 function addSubtask(id) {
@@ -1571,7 +1606,7 @@ function sheet(title, children) {
   if (els.sheetWrap.hidden) ui.sheetOpener = document.activeElement?.dataset?.fk || null;
   els.sheet.replaceChildren(h('div', { class: 'sheet-handle', 'aria-hidden': 'true' }), title ? h('h2', { id: 'sheetTitle' }, title) : null, ...children.filter(Boolean));
   if (title) { els.sheet.setAttribute('aria-labelledby', 'sheetTitle'); els.sheet.removeAttribute('aria-label'); }
-  else { els.sheet.removeAttribute('aria-labelledby'); els.sheet.setAttribute('aria-label', 'Options'); }
+  else { els.sheet.removeAttribute('aria-labelledby'); els.sheet.setAttribute('aria-label', t('sheet.options')); }
   els.sheetWrap.hidden = false;
   els.app.inert = true;   // modal: Tab and screen readers stay in the sheet
   els.sheet.scrollTop = 0;
@@ -1621,26 +1656,26 @@ function menuItem(iconName, label, fn, { danger = false, hint = '', current = fa
 }
 
 function statusSheet(id) {
-  const t = store.get('task', id);
-  if (!t || roTask(id)) return;
-  sheet(t.fields.text.v, STATUSES.map((s) => menuItem(chip(s.mark), s.name, () => setStatus(id, s.mark), { current: s.mark === t.fields.status.v })));
+  const task = store.get('task', id);
+  if (!task || roTask(id)) return;
+  sheet(task.fields.text.v, STATUSES.map((s) => menuItem(chip(s.mark), t(`status.${s.key}`), () => setStatus(id, s.mark), { current: s.mark === task.fields.status.v })));
 }
 
 function dueSheet(id) {
-  const t = store.get('task', id);
-  if (!t || roTask(id)) return;
-  const due = t.fields.due.v;
+  const task = store.get('task', id);
+  if (!task || roTask(id)) return;
+  const due = task.fields.due.v;
   const set = (v) => { store.setTask(id, { due: v }); closeSheet(); };
   const keepTime = (date) => ({ date, time: due?.time ?? '' });
-  const input = h('input', { class: 'field', placeholder: 'Type: fri 14:00, 25 oct, +3, 9:30', enterKeyHint: 'done', autocapitalize: 'off', autocomplete: 'off' });
+  const input = h('input', { class: 'field', placeholder: t('due.typeHint'), enterKeyHint: 'done', autocapitalize: 'off', autocomplete: 'off' });
   const apply = () => {
     const d = parseDue(input.value);
     if (d) set(d); else input.classList.add('bad');
   };
   input.addEventListener('input', () => input.classList.remove('bad'));
   input.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); apply(); } });
-  const date = h('input', { class: 'field', type: 'date', value: due?.date ?? '', 'aria-label': 'Date' });
-  const time = h('input', { class: 'field', type: 'time', value: due?.time ? due.time.padStart(5, '0') : '', 'aria-label': 'Time' });
+  const date = h('input', { class: 'field', type: 'date', value: due?.date ?? '', 'aria-label': t('due.date') });
+  const time = h('input', { class: 'field', type: 'time', value: due?.time ? due.time.padStart(5, '0') : '', 'aria-label': t('due.time') });
   const pick = () => {
     if (!date.value) return;
     const tm = time.value ? `${+time.value.slice(0, 2)}:${time.value.slice(3, 5)}` : '';
@@ -1648,52 +1683,52 @@ function dueSheet(id) {
   };
   date.addEventListener('change', pick);
   time.addEventListener('change', pick);
-  sheet(due ? `Deadline · ${dueLong(due)}` : 'Deadline', [
-    ...quickDates().map((q) => menuItem('calendar', q.label, () => set(keepTime(q.date)), { hint: q.hint })),
-    h('div', { class: 'field-row' }, input, h('button', { class: 'btn primary', onclick: apply }, 'Set')),
+  sheet(due ? t('due.titleWith', { date: dueLongText(due) }) : t('due.title'), [
+    ...quickDatesText().map((q) => menuItem('calendar', q.label, () => set(keepTime(q.date)), { hint: q.hint })),
+    h('div', { class: 'field-row' }, input, h('button', { class: 'btn primary', onclick: apply }, t('due.set'))),
     h('div', { class: 'field-row' }, date, time),
     due && h('div', { class: 'menu-sep' }),
-    due && menuItem('cross', 'Remove deadline', () => store.setTask(id, { due: null }), { danger: true }),
+    due && menuItem('cross', t('due.remove'), () => store.setTask(id, { due: null }), { danger: true }),
   ]);
 }
 
 function rowMenu(id) {
-  const t = store.get('task', id);
-  if (!t || roTask(id)) return;
+  const task = store.get('task', id);
+  if (!task || roTask(id)) return;
   ui.sel = id;
   const ctx = nodeOf(id);
   const node = ctx?.node;
   const sibs = node ? (node.parent ? node.parent.kids : ctx.tree.roots) : [];
   const i = sibs.indexOf(node);
-  const projectId = t.fields.place.v.project;
+  const projectId = task.fields.place.v.project;
   const others = store.projects().filter((p) => p.id !== projectId && !readOnly(p.id) && !(ui.local && sharing(p.id)?.withMe));
   const flat = ui.today;   // (For Today has no order of its own to change: that is done in the task's list)
-  sheet(t.fields.text.v, [
-    flat && menuItem('lists', `Show in ${projectName(t)}`, () => showInList(id)),
-    menuItem('edit', 'Edit', () => beginEdit(id)),
-    menuItem('calendar', 'Deadline…', () => dueSheet(id), { keepOpen: true }),
-    menuItem('note', 'Notes / links', () => beginNotes(id)),
-    !flat && menuItem('sub', 'Add subtask', () => addSubtask(id)),
+  sheet(task.fields.text.v, [
+    flat && menuItem('lists', t('task.showIn', { list: projectName(task) }), () => showInList(id)),
+    menuItem('edit', t('menu.edit'), () => beginEdit(id)),
+    menuItem('calendar', t('menu.deadline'), () => dueSheet(id), { keepOpen: true }),
+    menuItem('note', t('menu.notes'), () => beginNotes(id)),
+    !flat && menuItem('sub', t('menu.addSubtask'), () => addSubtask(id)),
     h('div', { class: 'menu-sep' }),
-    !flat && i > 0 && menuItem('up', 'Move up', () => nudge(id, -1)),
-    !flat && i >= 0 && i < sibs.length - 1 && menuItem('down', 'Move down', () => nudge(id, 1)),
-    !flat && i > 0 && menuItem('indent', 'Make subtask of the task above', () => shiftLevel(id, 1)),
-    !flat && node?.parent && menuItem('outdent', 'Move out one level', () => shiftLevel(id, -1)),
-    others.length && menuItem('move', 'Move to list…', () => moveSheet(id), { keepOpen: true }),
+    !flat && i > 0 && menuItem('up', t('menu.moveUp'), () => nudge(id, -1)),
+    !flat && i >= 0 && i < sibs.length - 1 && menuItem('down', t('menu.moveDown'), () => nudge(id, 1)),
+    !flat && i > 0 && menuItem('indent', t('menu.indent'), () => shiftLevel(id, 1)),
+    !flat && node?.parent && menuItem('outdent', t('menu.outdent'), () => shiftLevel(id, -1)),
+    others.length && menuItem('move', t('menu.moveToList'), () => moveSheet(id), { keepOpen: true }),
     h('div', { class: 'menu-sep' }),
-    menuItem('trash', node?.kids.length ? 'Delete (with subtasks)' : 'Delete', () => deleteWithUndo(id), { danger: true }),
+    menuItem('trash', node?.kids.length ? t('menu.deleteWithSubtasks') : t('btn.delete'), () => deleteWithUndo(id), { danger: true }),
   ]);
 }
 
 function moveSheet(id) {
-  const t = store.get('task', id);
+  const task = store.get('task', id);
   // (the Linux/macOS window moves tasks between its lists files; a shared one is synced by its own engine there,
   // so a move into or out of one is a copy plus a delete, like here, but done by the lists folder: not offered)
-  const others = store.projects().filter((p) => p.id !== t.fields.place.v.project && !readOnly(p.id) && !(ui.local && sharing(p.id)?.withMe));
-  sheet('Move to list', others.map((p) => menuItem('move', listName(p), () => {
+  const others = store.projects().filter((p) => p.id !== task.fields.place.v.project && !readOnly(p.id) && !(ui.local && sharing(p.id)?.withMe));
+  sheet(t('menu.moveToListTitle'), others.map((p) => menuItem('move', listName(p), () => {
     store.moveTask(id, { projectId: p.id, parentId: null });
-    toast(`Moved to ${listName(p)}`);
-  }, { hint: sharing(p.id)?.withMe ? 'shared' : '' })));
+    toast(t('task.movedTo', { list: listName(p) }));
+  }, { hint: sharing(p.id)?.withMe ? t('list.sharedLower') : '' })));
 }
 
 // ---------------------------------------------------------------- drag to reorder (grip handle)
@@ -1863,8 +1898,9 @@ document.addEventListener('keydown', (e) => {
 // grouped list (docs/design.md, "Grouped lists"): cards of one-line rows, where places to go have a chevron, actions are
 // violet rows (red when risky) and what needs explaining is a footnote under the card. Rare and risky actions sit at the
 // bottom of their page, under Advanced. A quiet line at the bottom of every view says the version.
-const PAGES = { general: 'General', notifications: 'Notifications', sync: 'Sync & sharing', lists: 'Your lists', ai: 'Use with AI', updates: 'Updates', about: 'About' };
-const VIEW_TITLES = { list: 'the list', settings: 'Settings', ...PAGES, keys: 'Keyboard shortcuts', trash: 'Recently deleted', backups: 'Backups', conflicts: 'Conflicts' };
+// (their keys in the language files: the words are looked up when a view is drawn, so a language switch shows at once)
+const PAGES = { general: 'page.general', notifications: 'page.notifications', sync: 'page.sync', lists: 'page.lists', ai: 'page.ai', updates: 'page.updates', about: 'page.about' };
+const VIEW_TITLES = { settings: 'nav.settings', ...PAGES, keys: 'page.keys', trash: 'page.trash', backups: 'page.backups', conflicts: 'nav.conflicts' };
 // where Back (the header, Esc) goes from each view; a page's is Settings
 const VIEW_PARENT = { settings: 'list', keys: 'general', trash: 'lists', backups: 'lists', conflicts: 'sync' };
 const parentOf = (view) => VIEW_PARENT[view] ?? 'settings';
@@ -1891,7 +1927,8 @@ function goBack() {
 }
 
 function viewHeader(title) {
-  const back = `Back to ${VIEW_TITLES[parentOf(ui.view)]}`;
+  const to = parentOf(ui.view);
+  const back = to === 'list' ? t('nav.backToList') : t('nav.backTo', { view: t(VIEW_TITLES[to]) });
   return h('div', { class: 'view-header', onclick: goBack },
     h('button', { class: 'back', 'aria-label': back, title: back, dataset: { fk: 'back' }, onclick: (e) => { e.stopPropagation(); goBack(); } }, icon('back')),
     h('h1', {}, title));
@@ -1992,10 +2029,10 @@ function renderSettingsView() {
   if (!VIEWS[ui.view] || (ui.view === 'updates' && !ui.local && !store.meta.token)) ui.view = 'settings';
   // a view rebuilt in place (sync status, the Linux/macOS app's news) keeps what was typed in its boxes
   const typed = new Map([...els.list.querySelectorAll('input.g-input[data-fk]')].map((i) => [i.dataset.fk, [i.value, i.selectionStart, i.selectionEnd]]));
-  setListContent([viewHeader(VIEW_TITLES[ui.view]), ...VIEWS[ui.view]().filter(Boolean), versionLine()]);
+  setListContent([viewHeader(t(VIEW_TITLES[ui.view])), ...VIEWS[ui.view]().filter(Boolean), versionLine()]);
   for (const i of els.list.querySelectorAll('input.g-input[data-fk]')) {
-    const t = typed.get(i.dataset.fk);
-    if (t && !i.readOnly) { i.value = t[0]; try { i.setSelectionRange(t[1], t[2]); } catch { /* not a text box */ } }
+    const was = typed.get(i.dataset.fk);
+    if (was && !i.readOnly) { i.value = was[0]; try { i.setSelectionRange(was[1], was[2]); } catch { /* not a text box */ } }
   }
 }
 
@@ -2007,32 +2044,33 @@ function versionLine() {
   const text = v ? `Saqme To Do ${v}` : 'Saqme To Do';
   const badge = updateBadge();
   if (badge && ui.view !== 'updates') {
-    return h('button', { class: 'version-line', 'aria-description': 'Opens Settings, Updates', dataset: { fk: 'version' }, onclick: () => go('updates') },
+    return h('button', { class: 'version-line', 'aria-description': t('settings.opensUpdates'), dataset: { fk: 'version' }, onclick: () => go('updates') },
       h('span', {}, text), h('span', { class: 'upd' }, badge.dot ? h('span', { class: 'dot', 'aria-hidden': 'true' }) : null, badge.text));
   }
   return h('p', { class: 'version-line' }, h('span', {}, text), badge ? h('span', {}, badge.text) : null);
 }
 
-const THEMES = { dark: 'Dark', light: 'Light', auto: 'Auto' };
+const THEMES = ['dark', 'light', 'auto'];
 /** Settings: two cards of pages (the app's own things last), each row with how it stands on the right. */
 function settingsHome() {
-  const sentence = (t) => (t ? `${t[0].toUpperCase()}${t.slice(1)}. ` : '');
-  const page = (id, s, help, ic) => linkRow(PAGES[id], s.short, id, { ic, dot: !!s.dot, help: `${sentence(s.text)}${help}` });
-  const theme = THEMES[ls.get('theme', 'auto')] ?? 'Auto';
+  // (how a page stands, as the start of its help: a capital first, where the language has capitals)
+  const sentence = (s) => (s ? `${lang() === 'ka' ? s : `${s[0].toUpperCase()}${s.slice(1)}`}. ` : '');
+  const page = (id, s, help, ic) => linkRow(t(PAGES[id]), s.short, id, { ic, dot: !!s.dot, help: `${sentence(s.text)}${help}` });
+  const theme = THEMES.includes(ls.get('theme', 'auto')) ? ls.get('theme', 'auto') : 'auto';
   const v = appVersion();
   return [
     card(
-      page('general', { short: theme, text: `${theme.toLowerCase()} theme` }, showKeys() ? 'Theme, keyboard shortcuts' : 'Theme', 'gear'),
-      page('notifications', notificationSummary(), ui.local ? 'Daily summary' : 'Daily summary, notifications on this device', 'bell'),
-      page('sync', syncSummary(), `${ui.local ? 'Set up sync or how it stands' : 'Pairing or how sync stands'}, pair a phone, conflicts, shared lists`, 'cloud'),
-      page('lists', listsSummary(), `${ui.local ? 'Lists folder, ' : ''}export, import, recently deleted`, 'lists'),
-      page('ai', aiSummary(), 'Connect Claude, ChatGPT or another AI app to your lists', 'chat'),
+      page('general', { short: t(`theme.${theme}`), text: t(`theme.${theme}Text`) }, showKeys() ? t('settings.generalHelpKeys') : t('settings.generalHelp'), 'gear'),
+      page('notifications', notificationSummary(), ui.local ? t('settings.notificationsHelpLocal') : t('settings.notificationsHelp'), 'bell'),
+      page('sync', syncSummary(), ui.local ? t('settings.syncHelpLocal') : t('settings.syncHelp'), 'cloud'),
+      page('lists', listsSummary(), ui.local ? t('settings.listsHelpLocal') : t('settings.listsHelp'), 'lists'),
+      page('ai', aiSummary(), t('settings.aiHelp'), 'chat'),
     ),
-    head('App'),
+    head(t('settings.app')),
     card(
-      ui.local ? page('updates', updateBadge() ?? updateSummary(), 'The version, checking and installing updates', 'update')
-        : store.meta.token ? page('updates', serviceSummary(), 'Your sync service: its version, updating it by itself', 'update') : null,
-      page('about', { short: v ?? '', text: v ? `version ${v}` : 'Saqme To Do' }, 'Version, where your lists are', 'info'),
+      ui.local ? page('updates', updateBadge() ?? updateSummary(), t('settings.updatesHelpLocal'), 'update')
+        : store.meta.token ? page('updates', serviceSummary(), t('settings.updatesHelp'), 'update') : null,
+      page('about', { short: v ?? '', text: v ? t('settings.aboutVersion', { version: v }) : 'Saqme To Do' }, t('settings.aboutHelp'), 'info'),
     ),
   ];
 }
@@ -2040,12 +2078,51 @@ function settingsHome() {
 /** The keyboard shortcuts page is offered where there is a keyboard to use them: the desktop window, a mouse or trackpad. */
 const showKeys = () => !!ui.local || matchMedia('(any-pointer: fine)').matches;
 function generalPage() {
-  const theme = segmented([['dark', 'Dark'], ['light', 'Light'], ['auto', 'Auto']], ls.get('theme', 'auto'), (v) => { ls.set('theme', v); applyTheme(); render(); }, 'Theme');
+  const theme = segmented(THEMES.map((v) => [v, t(`theme.${v}`)]), ls.get('theme', 'auto'), (v) => { ls.set('theme', v); applyTheme(); render(); }, t('theme.title'));
   return [
-    card(infoRow('Theme', '', theme)),
-    foot('Auto follows the light or dark setting of this device.'),
-    showKeys() ? card(linkRow('Keyboard shortcuts', '', 'keys', { help: 'Everything you can do with the keyboard' })) : null,
+    card(infoRow(t('theme.title'), '', theme)),
+    foot(t('theme.help')),
+    card(languageRow()),
+    foot(t('language.help')),
+    showKeys() ? card(linkRow(t('page.keys'), '', 'keys', { help: t('settings.keysHelp') })) : null,
   ];
+}
+
+// ---- the app's language: System (the device's, when the app has it) or one of LANGS, each by its own name
+/** The language System stands for on this device. */
+const systemLang = () => pickLang('', navigator.languages);
+/** Settings > General > Language: the row (its value: the choice now), which opens the choices in a sheet. */
+function languageRow() {
+  const choice = LANGS.includes(ls.get('lang')) ? ls.get('lang') : '';
+  const value = choice ? h('span', { lang: choice }, LANG_NAMES[choice]) : t('language.system', { name: LANG_NAMES[systemLang()] });
+  return h('button', {
+    class: rowClass('link'), 'aria-haspopup': 'dialog', dataset: { fk: 'language' }, onclick: languageSheet,
+  }, rowParts(t('language.title'), { value, trailing: chevron() }));
+}
+/** The choices, the current one checked (and focused); picking one switches the app at once. */
+function languageSheet() {
+  const choice = LANGS.includes(ls.get('lang')) ? ls.get('lang') : '';
+  const option = (code, label, own) => {
+    const cur = code === choice;
+    const b = menuItem(h('span', { class: 'check', 'aria-hidden': 'true' }, cur ? icon('check') : null), label, () => switchLanguage(code), { current: cur });
+    if (own) b.lang = own;
+    return b;
+  };
+  sheet(t('language.title'), [
+    option('', t('language.system', { name: LANG_NAMES[systemLang()] }), ''),
+    ...LANGS.map((code) => option(code, LANG_NAMES[code], code)),
+    h('p', { class: 'sheet-note' }, t('language.help')),
+  ]);
+}
+/** Switches the app to a language ('' = System) without a reload: every view is drawn again in it. */
+async function switchLanguage(code) {
+  ls.set('lang', code);
+  await setLang(pickLang(code, navigator.languages));
+  document.documentElement.lang = lang();
+  applyStaticTexts();
+  reportLanguage();
+  render();
+  announce(t('language.switched', { name: LANG_NAMES[lang()] }));
 }
 
 const IS_MAC = /Mac|iPhone|iPad|iPod/.test(navigator.platform);
@@ -2053,28 +2130,34 @@ const IS_MAC = /Mac|iPhone|iPad|iPod/.test(navigator.platform);
 function keysPage() {
   const mod = IS_MAC ? 'Cmd' : 'Ctrl';
   const alt = IS_MAC ? 'Option' : 'Alt';
+  // (key names as printed on the keys stay as they are; the arrows' names are words)
+  const up = t('keys.up');
+  const down = t('keys.down');
+  const left = t('keys.left');
+  const right = t('keys.right');
   const sections = [
-    ['Tasks', [
-      ['Up / Down', 'Previous / next task'], ['Enter', 'Edit the task'], ['Space', 'Done / not done'], ['Right / Left', 'Open / close a task'],
-      [`${alt}+Up / ${alt}+Down`, 'Move the task'], [`${mod}+D`, 'Deadline'], [`${mod}+I`, 'Notes / links'], [`${mod}+M`, 'Task menu'],
-      [`${mod}+N`, 'New task'], ['Esc', 'Clear the selection'],
-    ], 'A screen reader reads the selected task. The task menu has the deadline, notes, subtasks, moves and delete; a right-click (or a long press) on a task opens it too.'],
-    ['Lists', [
-      ['Left / Right', 'Previous / next list'], ['Enter / Down', 'All lists'], ['Up / Down', 'Choose a list'], ['Enter', 'Switch to it'],
-      [`${mod}+M`, 'Its menu'], ['Esc', 'Close the lists menu'],
-    ], 'Left / Right and Enter work on the list\'s name at the top. In the lists menu, a list\'s own menu (share, rename, move, delete) also opens with a right-click or a long press on it, or Shift+F10.'],
-    ['While editing a task', [
-      ['Enter', 'Save, new task below'], ['Shift+Enter', 'Save, new subtask'], ['Enter', 'Stop (on an empty line)'], ['Up / Down', 'Edit the previous / next'],
-      ['Tab / Shift+Tab', 'Subtask / back out'], ['Esc', 'Cancel'], [`${mod}+Enter`, 'Save the notes'],
+    [t('keys.tasks'), [
+      [`${up} / ${down}`, t('keys.prevNextTask')], ['Enter', t('keys.editTask')], ['Space', t('keys.doneNotDone')], [`${right} / ${left}`, t('keys.openClose')],
+      [`${alt}+${up} / ${alt}+${down}`, t('keys.moveTask')], [`${mod}+D`, t('due.title')], [`${mod}+I`, t('menu.notes')], [`${mod}+M`, t('task.menu')],
+      [`${mod}+N`, t('keys.newTask')], ['Esc', t('keys.clearSelection')],
+    ], t('keys.tasksFoot')],
+    [t('list.menuLabel'), [
+      [`${left} / ${right}`, t('keys.prevNextList')], [`Enter / ${down}`, t('keys.allLists')], [`${up} / ${down}`, t('keys.chooseList')], ['Enter', t('keys.switchToIt')],
+      [`${mod}+M`, t('keys.itsMenu')], ['Esc', t('keys.closeListsMenu')],
+    ], t('keys.listsFoot')],
+    [t('keys.editing'), [
+      ['Enter', t('keys.saveNewBelow')], ['Shift+Enter', t('keys.saveNewSubtask')], ['Enter', t('keys.stopEmpty')], [`${up} / ${down}`, t('keys.editPrevNext')],
+      ['Tab / Shift+Tab', t('keys.subtaskBackOut')], ['Esc', t('btn.cancel')], [`${mod}+Enter`, t('keys.saveNotes')],
     ]],
-    ['Everywhere', [
-      ['Tab / Shift+Tab', 'Move around the window'], ['Enter / Space', 'Use the focused button'], ['Esc', 'Close a menu, back one level'],
-    ], 'Esc goes from a Settings page to Settings, and from Settings to the list.'],
+    [t('keys.everywhere'), [
+      ['Tab / Shift+Tab', t('keys.moveAround')], ['Enter / Space', t('keys.useFocused')], ['Esc', t('keys.closeBack')],
+    ], t('keys.everywhereFoot')],
   ];
   const out = [];
+  const or = ` ${t('keys.or')} `;
   for (const [title, rows, footnote] of sections) {
     out.push(head(title), card(rows.map(([keys, what]) => infoRow(what, '', h('span', { class: 'keys' },
-      h('span', { class: 'sr-only' }, ': '), keys.split(' / ').map((k, i) => [i ? h('span', { class: 'sr-only' }, ' or ') : null, h('kbd', {}, k)])), { title: `${what}: ${keys}` }))));
+      h('span', { class: 'sr-only' }, ': '), keys.split(' / ').map((k, i) => [i ? h('span', { class: 'sr-only' }, or) : null, h('kbd', {}, k)])), { title: `${what}: ${keys}` }))));
     if (footnote) out.push(foot(footnote));
   }
   return out;
@@ -2082,36 +2165,36 @@ function keysPage() {
 
 function notificationSummary() {
   const at = store.setting('notifyAt', '10:00');
-  if (ui.local) return { short: at, text: `daily summary at ${at}` };
+  if (ui.local) return { short: at, text: t('notif.summaryAt', { time: at }) };
   const p = pushState();
-  return p.state === 'on' ? { short: at, text: `on, daily summary at ${at}` } : { short: p.short, text: p.short.toLowerCase() };
+  return p.state === 'on' ? { short: at, text: t('notif.onSummaryAt', { time: at }) } : { short: p.short, text: p.text };
 }
 function notificationsPage() {
-  const at = h('input', { class: 'time-input', type: 'time', value: store.setting('notifyAt', '10:00').padStart(5, '0'), 'aria-label': 'Daily summary time', dataset: { fk: 'notifyAt' } });
+  const at = h('input', { class: 'time-input', type: 'time', value: store.setting('notifyAt', '10:00').padStart(5, '0'), 'aria-label': t('notif.summaryTime'), dataset: { fk: 'notifyAt' } });
   at.addEventListener('change', () => { if (at.value) { store.setSetting('notifyAt', `${+at.value.slice(0, 2)}:${at.value.slice(3, 5)}`); syncSharePush(); } });
   const out = [
-    card(infoRow('Daily summary', '', at)),
-    foot('One notification with what is due today or overdue, at this time (the same on your devices that sync). A task with a deadline time also reminds you 15 minutes before it and at the time.'),
+    card(infoRow(t('notif.summary'), '', at)),
+    foot(t('notif.summaryHelp')),
   ];
   if (ui.local) {
-    out.push(card(infoRow('Notifications', 'On this computer')), foot('Shown by your computer while Saqme runs (it starts when you log in).'));
+    out.push(card(infoRow(t('page.notifications'), t('notif.onComputer'))), foot(t('notif.computerHelp')));
     return out;
   }
   const p = pushState();
   if (p.state === 'unpaired') {
     // used without sync: say what reminders need before offering a time for them
     return [
-      card(infoRow('Notifications', p.short), linkRow('Sync & sharing', 'Not paired', 'sync', { help: 'Pair this phone with your sync service' })),
+      card(infoRow(t('page.notifications'), p.short), linkRow(t('page.sync'), t('sync.notPaired'), 'sync', { help: t('notif.pairHelp') })),
       foot(p.help),
-      card(infoRow('Daily summary', '', at)),
-      foot('Once this phone is paired: one notification with what is due today or overdue, at this time, and reminders 15 minutes before a timed deadline and at the time.'),
+      card(infoRow(t('notif.summary'), '', at)),
+      foot(t('notif.summaryHelpUnpaired')),
     ];
   }
   if (p.state === 'on' || p.state === 'off') {
     out.push(card(
-      switchRow('Notifications', p.state === 'on', async (on) => { if (on) await enablePush(); else { await disablePush(); render(); } }, { help: p.help, fk: 'push' }),
-      p.state === 'on' ? actionRow('Send a test notification', testPush) : null));
-  } else out.push(card(infoRow('Notifications', p.short)));
+      switchRow(t('page.notifications'), p.state === 'on', async (on) => { if (on) await enablePush(); else { await disablePush(); render(); } }, { help: p.help, fk: 'push' }),
+      p.state === 'on' ? actionRow(t('notif.sendTest'), testPush) : null));
+  } else out.push(card(infoRow(t('page.notifications'), p.short)));
   out.push(foot(p.help));
   return out;
 }
@@ -2120,26 +2203,26 @@ function notificationsPage() {
 function syncShort() {
   if (ui.local) {
     const c = ui.local.cloud;
-    if (!c) return ui.cloudSetup?.running ? 'Setting up…' : '';
-    return { synced: c.lastSync ? `Synced ${ago(c.lastSync)}` : 'Synced', syncing: 'Syncing…', offline: 'Offline' }[c.state] ?? 'Sync error';
+    if (!c) return ui.cloudSetup?.running ? t('sync.settingUp') : '';
+    return { synced: c.lastSync ? t('sync.syncedAgo', { ago: ago(c.lastSync) }) : t('sync.synced'), syncing: t('sync.syncing'), offline: t('sync.offline') }[c.state] ?? t('sync.errorShort');
   }
   if (!store.meta.token) return '';
   const st = store.status.state;
-  if (st === 'idle') return store.meta.lastSync ? `Synced ${ago(store.meta.lastSync)}` : 'Synced';
-  if (st === 'offline') { const n = store.pendingCount(); return n ? `Offline, ${n} waiting` : 'Offline'; }
-  return { syncing: 'Syncing…', error: 'Sync error' }[st] ?? '';
+  if (st === 'idle') return store.meta.lastSync ? t('sync.syncedAgo', { ago: ago(store.meta.lastSync) }) : t('sync.synced');
+  if (st === 'offline') { const n = store.pendingCount(); return n ? tn('sync.offlineN', n) : t('sync.offline'); }
+  return { syncing: t('sync.syncing'), error: t('sync.errorShort') }[st] ?? '';
 }
 /** The Sync & sharing row: own sync, conflicts, shared lists, paused deletes. text says all of it; short is what needs a look first. */
 function syncSummary() {
   const n = store.conflicts().length + allNotices().length;
-  const nc = n === 1 ? '1 conflict' : `${n} conflicts`;
+  const nc = tn('sync.nConflicts', n);
   const sh = (ui.local ? ui.local.shares ?? [] : store.shares()).length;
-  const ns = sh === 1 ? '1 shared list' : `${sh} shared lists`;
+  const ns = tn('sync.nSharedLists', sh);
   const guarded = !!ui.local?.guarded;
   const own = syncShort();
   return {
-    text: [own || 'sync is off', n ? nc : '', sh ? ns : '', guarded ? 'deletions paused' : ''].filter(Boolean).join(', '),
-    short: n ? nc : guarded ? 'Deletions paused' : own || (sh ? ns : 'Off'),
+    text: [own || t('sync.isOff'), n ? nc : '', sh ? ns : '', guarded ? t('sync.deletionsPausedLower') : ''].filter(Boolean).join(', '),
+    short: n ? nc : guarded ? t('sync.deletionsPaused') : own || (sh ? ns : t('common.off')),
     dot: !!(n || guarded),
   };
 }
@@ -2155,67 +2238,67 @@ function syncPage() {
 /** The row to Conflicts, when there are some (also what a shared list's server did not take). */
 function conflictsRow() {
   const n = store.conflicts().length + allNotices().length;
-  return n ? linkRow('Conflicts', String(n), 'conflicts', { dot: true, help:'Changed on two devices at once, or not saved in a shared list: pick what to keep' }) : null;
+  return n ? linkRow(t('nav.conflicts'), String(n), 'conflicts', { dot: true, help: t('sync.conflictsHelp') }) : null;
 }
 /** The phone app's own sync: pair it (a code or a link), or how it stands. */
 function phoneSyncSettings() {
-  const out = [head('Sync')];
+  const out = [head(t('sync.head'))];
   if (!store.meta.token) {
-    out.push(card(infoRow('This device', 'Not paired'), pairingRow(), conflictsRow()));
-    out.push(foot('Sync is set up from a computer: in the Saqme app there, Settings › Sync & sharing › Set up sync. Then type the code its Pair phone shows here, paste its pairing link, or scan its QR code with the camera.'));
+    out.push(card(infoRow(t('sync.thisDevice'), t('sync.notPaired')), pairingRow(), conflictsRow()));
+    out.push(foot(t('sync.setUpFromComputer')));
     return out;
   }
   const st = store.status;
   out.push(card(
-    infoRow('Status', syncShort(), null, { title: statusText() }),
-    actionRow('Sync now', () => store.sync({ force: true })),
-    actionRow('Pair a phone', showPairing, { help: 'A one-time code and the QR code, for the app on another phone or on this phone\'s Home Screen' }),
+    infoRow(t('sync.status'), syncShort(), null, { title: statusText() }),
+    actionRow(t('sync.now'), () => store.sync({ force: true })),
+    actionRow(t('pair.title'), showPairing, { help: t('pair.helpPhone') }),
     conflictsRow(),
   ));
-  if (st.state === 'error') out.push(foot(`Sync error: ${st.message}`, { alert: true }));
-  out.push(foot(`Your sync service: ${hostOf(store.meta.server || location.origin)}${store.meta.serverVersion ? `, version ${store.meta.serverVersion}` : ''}. This device: ${store.meta.deviceId}.`));
+  if (st.state === 'error') out.push(foot(t('sync.error', { error: st.message }), { alert: true }));
+  const service = { host: hostOf(store.meta.server || location.origin), version: store.meta.serverVersion, device: store.meta.deviceId };
+  out.push(foot(t(store.meta.serverVersion ? 'sync.serviceAboutVersion' : 'sync.serviceAbout', service)));
   return out;
 }
 /** Sync & sharing > Advanced: turning sync off (a row that opens the rest of its card). */
 function advancedSettings() {
   if (!(ui.local ? ui.local.cloud : store.meta.token)) return [];
   const open = ui.advancedOpen;
-  const what = ui.local ? 'Turn off sync' : 'Unpair this device';
-  const help = ui.local ? turnOffHelp('computer') : `${turnOffHelp('device')} Changes not yet synced stay queued until you pair again.`;
+  const what = ui.local ? t('sync.turnOff') : t('sync.unpair');
+  const help = ui.local ? t('sync.turnOffHelp') : t('sync.unpairHelp');
   return [
     card(
       h('button', {
         class: 'g-row link', 'aria-expanded': String(open), 'aria-description': what, dataset: { fk: 'advanced' },
         onclick: () => { ui.advancedOpen = !open; render(); },
-      }, rowParts('Advanced', { trailing: chevron() })),
+      }, rowParts(t('settings.advanced'), { trailing: chevron() })),
       open ? actionRow(what, ui.local ? confirmTurnOff : confirmUnpair, { danger: true, help }) : null),
     open ? foot(help) : null,
   ];
 }
 function confirmTurnOff() {
-  sheet('Turn off sync?', [h('p', {}, turnOffHelp('computer')), h('div', { class: 'btn-row' },
-    h('button', { class: 'btn', onclick: closeSheet }, 'Cancel'),
-    h('button', { class: 'btn primary', onclick: async () => { closeSheet(); try { await api('local/disconnect', {}); ui.advancedOpen = false; await loadLocalInfo(); render(); } catch (e) { toast(e.message); } } }, 'Turn off'))]);
+  sheet(t('sync.turnOffTitle'), [h('p', {}, t('sync.turnOffHelp')), h('div', { class: 'btn-row' },
+    h('button', { class: 'btn', onclick: closeSheet }, t('btn.cancel')),
+    h('button', { class: 'btn primary', onclick: async () => { closeSheet(); try { await api('local/disconnect', {}); ui.advancedOpen = false; await loadLocalInfo(); render(); } catch (e) { toast(e.message); } } }, t('sync.turnOffButton')))]);
 }
 
 function listsSummary() {
   const n = store.projects().length;
-  const nl = n === 1 ? '1 list' : `${n} lists`;
-  return store.saveError ? { short: 'Not saved', text: `${nl}, changes not saved`, dot: true } : { short: nl, text: nl };
+  const nl = tn('lists.n', n);
+  return store.saveError ? { short: t('lists.notSaved'), text: tn('lists.nNotSaved', n), dot: true } : { short: nl, text: nl };
 }
 function listsPage() {
   const l = ui.local;
   return [
     store.saveError ? saveWarning() : null,
     card(
-      l ? actionRow('Copy the lists folder path', () => copyText(l.lists, 'Folder path copied'), { help: l.lists }) : null,
-      actionRow('Export lists', exportLists, { help: 'Markdown files in a zip, the same format as the desktop app' }),
-      actionRow('Import lists', importLists, { help: 'Markdown files or a zip of them. Tasks already here are skipped.' }),
-      linkRow('Recently deleted', '', 'trash', { help: 'Restore deleted tasks and lists' }),
-      l ? linkRow('Backups', '', 'backups', { help: 'Copies of your lists, made by themselves: bring back what is missing' }) : null,
+      l ? actionRow(t('lists.copyFolder'), () => copyText(l.lists, t('lists.folderCopied')), { help: l.lists }) : null,
+      actionRow(t('lists.export'), exportLists, { help: t('lists.exportHelp') }),
+      actionRow(t('lists.import'), importLists, { help: t('lists.importHelp') }),
+      linkRow(t('page.trash'), '', 'trash', { help: t('lists.trashHelp') }),
+      l ? linkRow(t('page.backups'), '', 'backups', { help: t('lists.backupsHelp') }) : null,
     ),
-    foot(l ? `Plain markdown files, one per list, in ${l.lists}: this window, AI assistants and any editor can change them. Export saves them in a zip; Import adds lists from such files (tasks already here are skipped).`
-      : 'Export saves your lists as markdown files in a zip, the same format as the desktop app. Import takes such files or a zip of them; tasks already here are skipped.'),
+    foot(l ? t('lists.footLocal', { folder: l.lists }) : t('lists.foot')),
   ];
 }
 
@@ -2245,27 +2328,19 @@ async function connectorAction(kind, done) {
 function aiSummary() {
   const desktop = ui.claudeDesktop?.state === 'connected';
   if (!hasOwnSync()) {
-    if (ui.local) return desktop ? { short: 'On', text: 'Claude Desktop has your lists' } : { short: '', text: 'connect Claude Desktop, no sync needed' };
-    return { short: 'Needs sync', text: 'connecting an AI app needs sync' };
+    if (ui.local) return desktop ? { short: t('common.on'), text: t('ai.desktopHasLists') } : { short: '', text: t('ai.summaryDesktop') };
+    return { short: t('ai.needsSync'), text: t('ai.summaryNeedsSync') };
   }
   const c = ui.connector;
-  if (!c || connectorTooOld()) return { short: '', text: 'connect Claude, ChatGPT or another AI app' };
-  return c.enabled || desktop ? { short: 'On', text: c.enabled ? `your AI link is on${c.lastUsedAt ? `, used ${ago(c.lastUsedAt)}` : ''}` : 'Claude Desktop has your lists' }
-    : { short: 'Off', text: 'your AI link is off' };
+  if (!c || connectorTooOld()) return { short: '', text: t('ai.summaryConnect') };
+  return c.enabled || desktop ? { short: t('common.on'), text: c.enabled ? (c.lastUsedAt ? t('ai.linkOnUsed', { ago: ago(c.lastUsedAt) }) : t('ai.linkOn')) : t('ai.desktopHasLists') }
+    : { short: t('common.off'), text: t('ai.linkOff') };
 }
 // What to do in the page the Connect button opened, in the same words as docs/ai.md ("Connect Claude", "Connect ChatGPT").
+// (each step a message with the words to click in bold; the AI apps' own labels stay as those apps show them)
 const ASSISTANTS = {
-  claude: ['Claude', () => [
-    ['In the page that opened, click ', h('b', {}, 'Add custom connector'), ' (sign in first if Claude asks).'],
-    ['Type ', h('b', {}, 'Saqme'), ' as the name, paste the link into the ', h('b', {}, 'URL'), ' box, and click ', h('b', {}, 'Add'), '. If Claude asks how to sign in, choose ', h('b', {}, 'No sign-in'), '.'],
-    ['In a new chat, click ', h('b', {}, '+'), ' under the message box, open ', h('b', {}, 'Connectors'), ', switch ', h('b', {}, 'Saqme'), ' on and ask “What’s due this week?”'],
-  ], 'Click Allow when Claude asks to use Saqme. It then works in the Claude apps on your phone and computer too. If no page opened: claude.ai › Customize › Connectors.'],
-  chatgpt: ['ChatGPT', () => [
-    ['In the page that opened (ChatGPT’s settings, ', h('b', {}, 'Apps & Connectors'), '), open ', h('b', {}, 'Advanced settings'), ' and switch on ', h('b', {}, 'Developer mode'), '.'],
-    ['Back in ', h('b', {}, 'Apps & Connectors'), ', click ', h('b', {}, 'Create'), '. Type ', h('b', {}, 'Saqme'), ' as the name and paste the link into the ', h('b', {}, 'URL'), ' box.'],
-    ['Choose ', h('b', {}, 'No authentication'), ', tick ', h('b', {}, 'I trust this application'), ' and click ', h('b', {}, 'Create'), '.'],
-    ['In a new chat, click ', h('b', {}, '+'), ', then ', h('b', {}, 'More › Developer mode'), ', pick ', h('b', {}, 'Saqme'), ' and ask “What’s due this week?”'],
-  ], 'Developer mode needs a paid ChatGPT plan, on chatgpt.com in a browser. If the settings did not open: Settings › Apps & Connectors (called Apps in newer versions).'],
+  claude: ['Claude', ['ai.claude.step1', 'ai.claude.step2', 'ai.claude.step3'], 'ai.claude.note'],
+  chatgpt: ['ChatGPT', ['ai.chatgpt.step1', 'ai.chatgpt.step2', 'ai.chatgpt.step3', 'ai.chatgpt.step4'], 'ai.chatgpt.note'],
 };
 /** Connect Claude / Connect ChatGPT: copies the link and opens the place to paste it, then says what to click there. */
 function connectAssistant(id) {
@@ -2275,25 +2350,24 @@ function connectAssistant(id) {
   const copied = navigator.clipboard?.writeText(url).then(() => true, () => false) ?? Promise.resolve(false);
   window.open(AI_LINKS[id], '_blank', 'noopener');
   const [name, steps, note] = ASSISTANTS[id];
-  const status = h('p', { class: 'sheet-lead', role: 'status' }, 'Copying your link…');
-  copied.then((ok) => { status.textContent = ok ? 'Link copied. Paste it in the page that opened.' : 'Copy the link (the button below), then paste it in the page that opened.'; });
-  sheet(`Connect ${name}`, [
+  const status = h('p', { class: 'sheet-lead', role: 'status' }, t('ai.copying'));
+  copied.then((ok) => { status.textContent = ok ? t('ai.copiedPaste') : t('ai.copyThenPaste'); });
+  sheet(t('ai.connectName', { name }), [
     status,
-    h('ol', { class: 'steps' }, steps().map((s) => h('li', {}, ...s))),
-    h('p', { class: 'sheet-note' }, note),
+    h('ol', { class: 'steps' }, steps.map((s) => h('li', {}, richText(s)))),
+    h('p', { class: 'sheet-note' }, t(note)),
     h('div', { class: 'btn-row' },
-      h('button', { class: 'btn', onclick: () => copyText(url, 'Link copied. Paste it in the page that opened.') }, 'Copy link'),
-      h('button', { class: 'btn', onclick: () => window.open(AI_LINKS[id], '_blank', 'noopener') }, `Open ${name}`),
-      h('button', { class: 'btn primary', onclick: closeSheet }, 'Done')),
+      h('button', { class: 'btn', onclick: () => copyText(url, t('ai.copiedPaste')) }, t('ai.copyLink')),
+      h('button', { class: 'btn', onclick: () => window.open(AI_LINKS[id], '_blank', 'noopener') }, t('ai.openName', { name })),
+      h('button', { class: 'btn primary', onclick: closeSheet }, t('btn.done'))),
   ]);
 }
 function confirmConnector(kind) {
   const rotate = kind === 'rotate';
-  sheet(rotate ? 'Make a new link?' : 'Disconnect your AI?', [
-    h('p', {}, rotate ? 'The link your AI apps have now stops working. Paste the new link into each AI app you still want to use.'
-      : 'No AI app can see or change your lists any more. You can connect again any time, with a new link.'),
-    h('div', { class: 'btn-row' }, h('button', { class: 'btn', onclick: closeSheet }, 'Cancel'),
-      h('button', { class: 'btn primary', onclick: () => { closeSheet(); connectorAction(kind, rotate ? 'New link made. The old one no longer works.' : 'Disconnected. No AI app can see your lists now.'); } }, rotate ? 'Make a new link' : 'Disconnect')),
+  sheet(rotate ? t('ai.rotateTitle') : t('ai.disconnectTitle'), [
+    h('p', {}, rotate ? t('ai.rotateWhat') : t('ai.disconnectWhat')),
+    h('div', { class: 'btn-row' }, h('button', { class: 'btn', onclick: closeSheet }, t('btn.cancel')),
+      h('button', { class: 'btn primary', onclick: () => { closeSheet(); connectorAction(kind, rotate ? t('ai.rotated') : t('ai.disconnected')); } }, rotate ? t('ai.rotate') : t('ai.disconnect'))),
   ]);
 }
 
@@ -2306,72 +2380,71 @@ async function claudeDesktopAction(kind) {
   try {
     ui.claudeDesktop = await api(`local/claude-desktop/${kind}`, {});
     if (kind === 'connect') claudeDesktopSteps();
-    else toast(ui.claudeDesktop.changed ? 'Saqme is out of Claude Desktop. Quit it and open it again to finish.' : 'Claude Desktop did not have Saqme.');
+    else toast(ui.claudeDesktop.changed ? t('ai.desktopRemoved') : t('ai.desktopHadNot'));
   } catch (e) { toast(e.message); }
   render();
 }
 function claudeDesktopSteps() {
-  sheet('Claude Desktop is connected', [
-    h('p', { class: 'sheet-lead', role: 'status' }, 'One more step: Claude Desktop reads this when it starts.'),
+  sheet(t('ai.desktopConnectedTitle'), [
+    h('p', { class: 'sheet-lead', role: 'status' }, t('ai.desktopOneMore')),
     h('ol', { class: 'steps' },
-      h('li', {}, 'Quit Claude Desktop completely: in its menu, ', h('b', {}, 'Quit'), ' (on a Mac ', h('b', {}, 'Claude › Quit Claude'), '). Closing its window is not enough.'),
-      h('li', {}, 'Open Claude Desktop again.'),
-      h('li', {}, 'In any chat, ask “What’s due this week?” When Claude asks to use Saqme, click ', h('b', {}, 'Allow'), '.')),
-    h('p', { class: 'sheet-note' }, 'Claude then works with your lists on this computer, no sync needed. Saqme picks up what it changes within seconds.'),
-    h('div', { class: 'btn-row' }, h('button', { class: 'btn primary', onclick: closeSheet }, 'Done')),
+      h('li', {}, richText('ai.desktop.step1')),
+      h('li', {}, t('ai.desktop.step2')),
+      h('li', {}, richText('ai.desktop.step3'))),
+    h('p', { class: 'sheet-note' }, t('ai.desktop.note')),
+    h('div', { class: 'btn-row' }, h('button', { class: 'btn primary', onclick: closeSheet }, t('btn.done'))),
   ]);
 }
 function desktopSection(first) {
-  const out = [head('Claude Desktop on this computer')];
+  const out = [head(t('ai.desktopHead'))];
   const d = ui.claudeDesktop;
-  if (!d) return [...out, card(infoRow('Claude Desktop', 'Checking…'))];
-  if (d.error) return [...out, card(infoRow('Claude Desktop', 'Not reachable')), foot(d.error, { alert: true })];
+  if (!d) return [...out, card(infoRow('Claude Desktop', t('common.checking')))];
+  if (d.error) return [...out, card(infoRow('Claude Desktop', t('common.notReachable'))), foot(d.error, { alert: true })];
   if (!d.installed) {
-    return [...out, card(actionRow('Install Claude Desktop', () => window.open(AI_LINKS.claudeDesktop, '_blank', 'noopener'), { help: 'Claude’s free app for your computer, from claude.ai', fk: 'ai-desktop-install' })),
-      foot(`Install Claude Desktop and sign in, then come back here and click Connect Claude Desktop.${first ? ' It works with your lists without sync.' : ''}`)];
+    return [...out, card(actionRow(t('ai.desktopInstall'), () => window.open(AI_LINKS.claudeDesktop, '_blank', 'noopener'), { help: t('ai.desktopInstallHelp'), fk: 'ai-desktop-install' })),
+      foot(first ? t('ai.desktopInstallFootFirst') : t('ai.desktopInstallFoot'))];
   }
   if (d.state === 'connected') {
-    return [...out, card(infoRow('Claude Desktop', 'Connected'), actionRow('Disconnect Claude Desktop', () => claudeDesktopAction('disconnect'), { danger: true, help: 'Takes Saqme out of Claude Desktop', fk: 'ai-desktop-disconnect' })),
-      foot('Ask Claude Desktop things like “What’s due this week?” in any chat. Just connected? Quit Claude Desktop completely and open it again first.')];
+    return [...out, card(infoRow('Claude Desktop', t('ai.connected')), actionRow(t('ai.desktopDisconnect'), () => claudeDesktopAction('disconnect'), { danger: true, help: t('ai.desktopDisconnectHelp'), fk: 'ai-desktop-disconnect' })),
+      foot(t('ai.desktopConnectedFoot'))];
   }
-  if (d.state === 'unreadable') return [...out, card(infoRow('Claude Desktop', 'Not connected')), foot(d.error, { alert: true })];
-  return [...out, card(actionRow('Connect Claude Desktop', () => claudeDesktopAction('connect'), { help: 'Claude Desktop gets your lists in every chat, no sync needed', fk: 'ai-desktop' })),
-    foot('One click: Claude Desktop on this computer then sees your lists in every chat and can change them, without sync and with nothing to paste. It can’t delete a list, and what it deletes waits in Recently deleted.')];
+  if (d.state === 'unreadable') return [...out, card(infoRow('Claude Desktop', t('ai.notConnected'))), foot(d.error, { alert: true })];
+  return [...out, card(actionRow(t('ai.desktopConnect'), () => claudeDesktopAction('connect'), { help: t('ai.desktopConnectHelp'), fk: 'ai-desktop' })),
+    foot(t('ai.desktopConnectFoot'))];
 }
 function linkSection() {
-  const out = [head('Connect your AI')];
+  const out = [head(t('ai.connectYourAi'))];
   if (!hasOwnSync()) {
-    out.push(card(infoRow('Connect your AI', 'Needs sync'), linkRow('Sync & sharing', ui.local ? 'Off' : 'Not paired', 'sync', { help: ui.local ? 'Set up sync' : 'Pair this device' })));
-    out.push(foot(ui.local ? 'For Claude and ChatGPT on the web and your phone, turn on sync first (free): Settings › Sync & sharing › Set up sync.'
-      : 'To connect Claude, ChatGPT or another AI app, turn on sync on your computer first (free; Settings › Sync & sharing there), then pair this phone.'));
+    out.push(card(infoRow(t('ai.connectYourAi'), t('ai.needsSync')), linkRow(t('page.sync'), ui.local ? t('common.off') : t('sync.notPaired'), 'sync', { help: ui.local ? t('ai.setUpSync') : t('ai.pairDevice') })));
+    out.push(foot(ui.local ? t('ai.needsSyncFootLocal') : t('ai.needsSyncFoot')));
   } else if (connectorTooOld()) {
-    out.push(card(infoRow('Connect your AI', 'Not yet')), foot(`Your sync needs an update first. It gets it with the next update (Settings › Updates${ui.local ? '' : ' on your computer'}); then come back here.`));
+    out.push(card(infoRow(t('ai.connectYourAi'), t('ai.notYet'))), foot(ui.local ? t('ai.tooOldLocal') : t('ai.tooOld')));
   } else if (!ui.connector) {
-    out.push(card(infoRow('Connect your AI', ui.connectorError ? 'Not reachable' : 'Checking…')), ui.connectorError ? foot(`Could not reach your sync: ${ui.connectorError}`, { alert: true }) : null);
+    out.push(card(infoRow(t('ai.connectYourAi'), ui.connectorError ? t('common.notReachable') : t('common.checking'))), ui.connectorError ? foot(t('ai.couldNotReach', { error: ui.connectorError }), { alert: true }) : null);
   } else if (!ui.connector.enabled) {
-    out.push(card(actionRow('Connect your AI', () => connectorAction('rotate', 'Connected. Now click Connect Claude or Connect ChatGPT.'), { help: 'Makes a new link for Claude, ChatGPT or another AI app', fk: 'ai-connect' })));
-    out.push(foot('Off: no AI app can see your lists. Connect your AI makes a new link.'));
+    out.push(card(actionRow(t('ai.connectYourAi'), () => connectorAction('rotate', t('ai.connectedNow')), { help: t('ai.connectHelp'), fk: 'ai-connect' })));
+    out.push(foot(t('ai.offFoot')));
   } else {
     const c = ui.connector;
     out.push(card(
-      actionRow('Connect Claude', () => connectAssistant('claude'), { help: 'Copies your link and opens Claude, where you paste it', fk: 'ai-claude' }),
-      actionRow('Connect ChatGPT', () => connectAssistant('chatgpt'), { help: 'Copies your link and opens ChatGPT, where you paste it', fk: 'ai-chatgpt' }),
-      actionRow('Copy link', () => copyText(c.url, 'Link copied. Now paste it into your AI app.'), { name: 'Copy link for your AI app', help: 'For another AI app: paste it where it adds a connector', fk: 'ai-copy' }),
+      actionRow(t('ai.connectName', { name: 'Claude' }), () => connectAssistant('claude'), { help: t('ai.connectNameHelp', { name: 'Claude' }), fk: 'ai-claude' }),
+      actionRow(t('ai.connectName', { name: 'ChatGPT' }), () => connectAssistant('chatgpt'), { help: t('ai.connectNameHelp', { name: 'ChatGPT' }), fk: 'ai-chatgpt' }),
+      actionRow(t('ai.copyLink'), () => copyText(c.url, t('ai.copiedPasteApp')), { name: t('ai.copyLinkName'), help: t('ai.copyLinkHelp'), fk: 'ai-copy' }),
     ));
-    out.push(foot(`Click Connect Claude or Connect ChatGPT: Saqme copies your link and opens the page to paste it in. Then ask things like “What’s due this week?” or “Add milk to Groceries”, on the web and your phone. Your AI can’t delete a list, and what it deletes waits in Recently deleted for 30 days.${c.lastUsedAt ? ` Last used ${ago(c.lastUsedAt)}.` : ''}`));
-    out.push(head('Your link'), card(
-      actionRow('Make a new link', () => confirmConnector('rotate'), { help: 'The old link stops working', fk: 'ai-rotate' }),
-      actionRow('Disconnect', () => confirmConnector('disconnect'), { danger: true, name: 'Disconnect your AI', help: 'No AI app can see your lists until you connect again', fk: 'ai-disconnect' }),
+    out.push(foot(c.lastUsedAt ? `${t('ai.onFoot')} ${t('ai.lastUsed', { ago: ago(c.lastUsedAt) })}` : t('ai.onFoot')));
+    out.push(head(t('ai.yourLink')), card(
+      actionRow(t('ai.rotate'), () => confirmConnector('rotate'), { help: t('ai.rotateHelp'), fk: 'ai-rotate' }),
+      actionRow(t('ai.disconnect'), () => confirmConnector('disconnect'), { danger: true, name: t('ai.disconnectName'), help: t('ai.disconnectHelp'), fk: 'ai-disconnect' }),
     ));
-    out.push(foot('Keep the link private, like a password: anyone who has it can see and change your lists. If it got out, make a new link; the old one stops working at once.'));
+    out.push(foot(t('ai.keepPrivate')));
   }
   return out;
 }
 function filesSection() {
-  return [head('Other ways'), card(
-    actionRow('Copy instructions for your AI', () => aiInstructions(false), { help: 'Where your list files are and how to edit them, for Claude Code, Codex, Cursor…' }),
-    actionRow('Save them as a file…', () => aiInstructions(true), { name: 'Save the instructions for your AI as a file', help: 'SAQME.md, to add to an AI app’s instructions or a skill' }),
-  ), foot('For AI apps that work with files on this computer (Claude Code, Codex, Cursor), also without sync: your lists are files, and these instructions tell the AI where they are and how to edit them safely.')];
+  return [head(t('ai.otherWays')), card(
+    actionRow(t('ai.copyInstructions'), () => aiInstructions(false), { help: t('ai.copyInstructionsHelp') }),
+    actionRow(t('ai.saveInstructions'), () => aiInstructions(true), { name: t('ai.saveInstructionsName'), help: t('ai.saveInstructionsHelp') }),
+  ), foot(t('ai.filesFoot'))];
 }
 function aiPage() {
   const order = aiOptions({ sync: hasOwnSync(), local: !!ui.local });
@@ -2382,89 +2455,82 @@ function aiPage() {
 async function aiInstructions(save) {
   try {
     const { text } = await api('local/ai-prompt');
-    if (!save) { await navigator.clipboard.writeText(text); toast('Instructions copied. Paste them into your AI assistant.'); return; }
+    if (!save) { await navigator.clipboard.writeText(text); toast(t('ai.instructionsCopied')); return; }
     const a = h('a', { href: URL.createObjectURL(new Blob([text], { type: 'text/markdown' })), download: 'SAQME.md' });
     document.body.append(a);
     a.click();
     a.remove();
     setTimeout(() => URL.revokeObjectURL(a.href), 60_000);
-    toast('Saved SAQME.md');
-  } catch (e) { toast(`Could not ${save ? 'save' : 'copy'} the instructions: ${e.message}`); }
+    toast(t('common.savedFile', { name: 'SAQME.md' }));
+  } catch (e) { toast(t(save ? 'ai.couldNotSave' : 'ai.couldNotCopy', { error: e.message })); }
 }
 
 function aboutPage() {
   const v = appVersion();
   const badge = updateBadge();
-  const where = ui.local ? 'Your lists are the markdown files in the lists folder (Your lists): this window, AI assistants and any editor can change them.'
-    : store.meta.token ? 'Your lists live in your own Cloudflare account; this device keeps a full offline copy and syncs in the background.'
-      : 'Your lists are stored on this device only. Export them now and then (Your lists), or pair with your own sync to keep a copy elsewhere.';
+  const where = ui.local ? t('about.whereLocal') : store.meta.token ? t('about.whereSync') : t('about.whereDevice');
   const svc = !ui.local && store.meta.token ? serviceSummary() : null;
   return [
     card(
-      v ? infoRow('Version', v) : null,
-      badge ? linkRow('Updates', badge.short, 'updates', { dot: badge.dot, help: badge.text })
-        : svc ? linkRow('Updates', svc.short, 'updates', { dot: !!svc.dot, help: 'Your sync service: its version, updating it by itself' }) : null,
+      v ? infoRow(t('about.version'), v) : null,
+      badge ? linkRow(t('page.updates'), badge.short, 'updates', { dot: badge.dot, help: badge.text })
+        : svc ? linkRow(t('page.updates'), svc.short, 'updates', { dot: !!svc.dot, help: t('settings.updatesHelp') }) : null,
     ),
-    foot(ui.local ? (ui.local.update?.supported ? 'It updates itself, and your sync service with it (Updates).' : 'This copy runs from a source folder and does not update itself.')
-      : svc ? 'It updates with your sync service, which serves it: by itself, or from the app on your computer (Updates).'
-        : v ? 'It updates with the sync service that serves it.' : 'This copy updates with the site that serves it.'),
-    note(`${where} Saqme To Do is free and open source (MIT license).`),
+    foot(ui.local ? (ui.local.update?.supported ? t('about.updatesItself') : t('about.sourceFolder'))
+      : svc ? t('about.updatesWithService') : v ? t('about.updatesWithServer') : t('about.updatesWithSite')),
+    note(`${where} ${t('about.openSource')}`),
   ];
 }
 
 /** Sync & sharing > Shared lists: join one (paste its invite link), and the lists shared with this device, each with Leave. */
 function sharedListSettings() {
-  const input = rowInput('join-input', 'Paste an invite link to join', 'Invite link', { help: 'From the person who shares the list with you' });
+  const input = rowInput('join-input', t('shared.pastePlaceholder'), t('share.inviteLink'), { help: t('shared.pasteHelp') });
   const submit = () => {
     const inv = parseInviteLink(input.value);
-    if (!inv) { input.classList.add('bad'); toast('That is not an invite link (it looks like https://…/join#code=…).'); return; }
+    if (!inv) { input.classList.add('bad'); toast(t('share.notInviteLink')); return; }
     confirmJoin(input.value.trim(), inv);
   };
   input.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); submit(); } });
   input.addEventListener('input', () => input.classList.remove('bad'));
   // (on an iPhone the clipboard is read only on a tap like this one)
-  const paste = navigator.clipboard?.readText ? textButton('Paste', async () => {
-    try { input.value = (await navigator.clipboard.readText()).trim(); input.classList.remove('bad'); input.focus(); } catch { toast('Paste it into the box instead.'); }
-  }, { name: 'Paste the invite link', fk: 'join-paste' }) : null;
-  const rows = [inputRow(input, paste, textButton('Join', submit, { name: 'Join the shared list', fk: 'join-go' }))];
-  const here = ui.local ? 'computer' : 'device';
+  const paste = navigator.clipboard?.readText ? textButton(t('btn.paste'), async () => {
+    try { input.value = (await navigator.clipboard.readText()).trim(); input.classList.remove('bad'); input.focus(); } catch { toast(t('common.pasteIntoBox')); }
+  }, { name: t('shared.pasteName'), fk: 'join-paste' }) : null;
+  const rows = [inputRow(input, paste, textButton(t('shareJoin.join'), submit, { name: t('shared.joinName'), fk: 'join-go' }))];
   for (const s of ui.local ? (ui.local.shares ?? []) : store.shares()) {
     const p = store.get('project', s.projectId);
     const name = p && !ui.local ? listName(p) : (p?.fields.name.v ?? s.name);
     const st = store.shareStatus.get(s.id) ?? s.status;
     const trouble = st?.state === 'offline' || st?.state === 'error' || st?.state === 'paused';
-    const access = ACCESS[s.access]?.name ?? s.access;
-    const about = `From ${hostOf(s.server)}, ${access.toLowerCase()}${inBrowser(s) ? ', in this browser' : ''}${trouble ? `, not synced: ${st.message || st.state}` : ''}`;
+    const a = ACCESS()[s.access];
+    const access = a?.name ?? s.access;
+    const aboutKey = `shared.about${inBrowser(s) ? 'Browser' : ''}${trouble ? 'Trouble' : ''}`;
+    const about = t(aboutKey, { host: hostOf(s.server), access: a?.lower ?? s.access, error: trouble ? localText(st.message) || st.state : '' });
     // a list used here in the browser can also move to one's Saqme app: its own small menu
     const end = inBrowser(s)
-      ? textButton('Options', () => sharedListMenu(s, name), { name: `Options for ${name}`, help: `${about}. Move it to your Saqme app, or leave it.`, fk: `share-opts:${s.id}` })
-      : textButton('Leave', () => confirmLeave(s.projectId, s), { danger: true, name: `Leave ${name}`, help: `${about}. It goes from this ${here}; nothing changes in the owner's list.`, fk: `leave:${s.id}` });
-    rows.push(infoRow(name, trouble ? 'Not synced' : access, end, { dot: trouble, title: about }));
+      ? textButton(t('shared.options'), () => sharedListMenu(s, name), { name: t('shared.optionsFor', { name }), help: t('shared.optionsHelp', { about }), fk: `share-opts:${s.id}` })
+      : textButton(t('share.leave'), () => confirmLeave(s.projectId, s), { danger: true, name: t('shared.leaveName', { name }), help: t(ui.local ? 'shared.leaveHelpComputer' : 'shared.leaveHelpDevice', { about }), fk: `leave:${s.id}` });
+    rows.push(infoRow(name, trouble ? t('shared.notSyncedShort') : access, end, { dot: trouble, title: about }));
   }
   return [
-    head('Shared lists'),
+    head(t('shared.head')),
     card(rows),
-    foot(ui.local ? 'Someone shared a list with you? Paste the invite link they sent (or run saqme join LINK); it works without cloud sync too. To share one of your own lists, right-click its name at the top (or in the lists menu) and choose Share.'
-      : store.meta.token ? 'Someone shared a list with you? Paste the invite link they sent: your sync service keeps the list for this app and your other phones. To share one of your own lists, long-press its name at the top (or in the lists menu) and choose Share.'
-        : 'Someone shared a list with you? No sync of your own needed: open the invite link itself, and its page opens the list in this browser.'),
+    foot(ui.local ? t('shared.footLocal') : store.meta.token ? t('shared.footSync') : t('shared.footBrowser')),
   ];
 }
 function sharedListMenu(s, name) {
   sheet(name, [
-    h('p', { class: 'sheet-note' }, `Shared with you from ${hostOf(s.server)} · ${ACCESS[s.access]?.name}. You use it here in this browser.`),
-    menuItem('share', 'Move to my Saqme app', () => moveToAppSheet(s), { keepOpen: true }),
+    h('p', { class: 'sheet-note' }, t('shared.inBrowserNote', { host: hostOf(s.server), access: ACCESS()[s.access]?.name })),
+    menuItem('share', t('share.moveToApp'), () => moveToAppSheet(s), { keepOpen: true }),
     h('div', { class: 'menu-sep' }),
-    menuItem('leave', 'Leave this list', () => confirmLeave(s.projectId, s), { danger: true }),
+    menuItem('leave', t('share.leaveList'), () => confirmLeave(s.projectId, s), { danger: true }),
   ]);
 }
 
 // ---------------------------------------------------------------- the Linux/macOS app (local server)
-const SETUP_HELP = 'Creates your own free sync service in your Cloudflare account. Your lists stay on this computer and are uploaded there; nothing is deleted. You need a free Cloudflare account and one sign-in in the browser.';
-const turnOffHelp = (here) => `This ${here} stops syncing. Your lists stay on this ${here}. The copy in your Cloudflare account is kept until you delete it there.`;
-
 /** The last lines of the cloud setup's output, links clickable (the Cloudflare sign-in link among them). */
 function setupOutput(lines) {
-  const pre = h('pre', { class: 'setup-log', 'aria-label': 'Setup output' });
+  const pre = h('pre', { class: 'setup-log', 'aria-label': t('local.setupOutput') });
   for (const line of lines.slice(-14)) {
     for (const part of linkify(line)) pre.append(part.url ? h('a', { href: part.url, target: '_blank', rel: 'noopener noreferrer' }, part.text) : part.text);
     pre.append('\n');
@@ -2482,12 +2548,12 @@ async function startCloudSetup() {
     if (ui.view !== 'list' && !ui.editing) render();
   }
   if (ui.cloudSetup?.result?.ok) {
-    announce('Sync is set up.');
+    announce(t('local.setUp'));
     await loadLocalInfo();
     render();
     showPairing();   // what comes next: the phone
   } else {
-    if (ui.cloudSetup?.result && !ui.cloudSetup.result.ok) announce(`Sync was not set up. ${ui.cloudSetup.result.message}`);
+    if (ui.cloudSetup?.result && !ui.cloudSetup.result.ok) announce(t('local.setupFailed', { message: ui.cloudSetup.result.message }));
     render();
   }
 }
@@ -2496,76 +2562,77 @@ async function startCloudSetup() {
 function localSyncSettings() {
   const c = ui.local.cloud;
   const run = ui.cloudSetup;
-  const out = [head('Sync')];
+  const out = [head(t('sync.head'))];
   if (!c && run?.running) {
     out.push(
-      card(infoRow('Sync with your phone', 'Setting up…'),
-        actionRow('Cancel', async () => { ui.cloudSetup = await api('local/cloud-setup/cancel', {}).catch(() => ui.cloudSetup); render(); }, { name: 'Cancel setting up sync' })),
-      foot('Sign in to Cloudflare in the browser (or create a free account) and click Allow. No browser opened? Use the sign-in link below.'),
+      card(infoRow(t('local.syncWithPhone'), t('sync.settingUp')),
+        actionRow(t('btn.cancel'), async () => { ui.cloudSetup = await api('local/cloud-setup/cancel', {}).catch(() => ui.cloudSetup); render(); }, { name: t('local.cancelSetup') })),
+      foot(t('local.signInHelp')),
       setupOutput(run.lines));
     return out;
   }
   if (!c) {
-    out.push(card(infoRow('Sync with your phone', 'Off'), actionRow('Set up sync', startCloudSetup, { help: SETUP_HELP }), conflictsRow()), foot(SETUP_HELP));
+    out.push(card(infoRow(t('local.syncWithPhone'), t('common.off')), actionRow(t('ai.setUpSync'), startCloudSetup, { help: t('local.setupHelp') }), conflictsRow()), foot(t('local.setupHelp')));
     if (run?.result && !run.result.ok) {
-      out.push(foot(`Sync was not set up. ${run.result.message} ${run.result.next || ''} Nothing changed on this computer.`.replace(/ {2,}/g, ' '), { alert: true }));
+      out.push(foot(t('local.setupFailedFoot', { message: run.result.message, next: run.result.next || '' }).replace(/ {2,}/g, ' '), { alert: true }));
       if (run.lines.length) out.push(setupOutput(run.lines));
     }
     // like the Windows app: a pairing link from a device that already syncs connects this computer too
-    const input = rowInput('connect-input', 'Paste its pairing link', 'Pairing link', { help: 'From a device that already syncs: Settings › Sync & sharing › Pair a phone, Copy link' });
+    const input = rowInput('connect-input', t('local.pastePairing'), t('local.pairingLink'), { help: t('local.pairingLinkHelp') });
     const submit = () => {
       const p = parsePairingLink(input.value);
-      if (!p?.server) { input.classList.add('bad'); toast('That is not a pairing link (https://saqme.<name>.workers.dev/#pair=...).'); return; }
+      if (!p?.server) { input.classList.add('bad'); toast(t('local.notPairingLink')); return; }
       const link = input.value.trim();
       confirmSyncWith(p.server, async () => {
         // (the page may have been rebuilt meanwhile: its box now is the one with the same key)
         const box = () => document.querySelector('[data-fk="connect-input"]');
-        try { await api('local/connect', { link }); if (box()) box().value = ''; toast('Connected. Syncing starts in a few seconds.'); setTimeout(loadLocalInfo, 2500); }
+        try { await api('local/connect', { link }); if (box()) box().value = ''; toast(t('local.connected')); setTimeout(loadLocalInfo, 2500); }
         catch (e) { box()?.classList.add('bad'); toast(e.message); }
       });
     };
     input.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); submit(); } });
     input.addEventListener('input', () => input.classList.remove('bad'));
-    out.push(head('Already syncing on another device?'),
-      card(inputRow(input, textButton('Connect', submit, { name: 'Connect with this pairing link', fk: 'connect-go' }))),
-      foot('There: Settings › Sync & sharing › Pair a phone › Copy link. It looks like https://saqme.<name>.workers.dev/#pair=…'));
+    out.push(head(t('local.alreadySyncing')),
+      card(inputRow(input, textButton(t('local.connect'), submit, { name: t('local.connectName'), fk: 'connect-go' }))),
+      foot(t('local.alreadySyncingFoot')));
     return out;
   }
   const short = syncShort();
   out.push(card(
-    infoRow('Status', short, null, { title: c.message || short }),
-    actionRow('Pair a phone', showPairing, { help: 'The QR code and a one-time code that connect your phone to the same lists' }),
+    infoRow(t('sync.status'), short, null, { title: localText(c.message) || short }),
+    actionRow(t('pair.title'), showPairing, { help: t('pair.helpLocal') }),
     conflictsRow(),
   ));
-  if (c.message && c.state !== 'synced' && c.state !== 'syncing') out.push(foot(c.message, { alert: c.state === 'error' }));
-  out.push(foot(`Your sync service: ${c.label}${c.workerVersion ? `, version ${c.workerVersion}` : ''}.${c.conflicts ? ` ${c.conflicts} ${c.conflicts === 1 ? 'conflict' : 'conflicts'} to look at on your phone.` : ''}`));
+  if (c.message && c.state !== 'synced' && c.state !== 'syncing') out.push(foot(localText(c.message), { alert: c.state === 'error' }));
+  const service = t(c.workerVersion ? 'local.serviceVersion' : 'local.service', { label: c.label, version: c.workerVersion });
+  out.push(foot(c.conflicts ? `${service} ${tn('local.conflictsOnPhone', c.conflicts)}` : service));
   return out;
 }
 /** Tasks that vanished from the lists folder at once: deleting them everywhere waits for a yes (shown while it does). */
 function guardedSettings() {
   const g = ui.local.guarded;
-  const msg = `${g} tasks disappeared from the lists folder at once, so deleting them everywhere is paused in case that was an accident. Restore them puts them back into their lists, as they were when they last synced. Delete them deletes them on your other devices too.`;
+  const msg = tn('local.guardedMsg', g);
   return [
-    head('Deletions paused'),
+    head(t('sync.deletionsPaused')),
     card(
-      infoRow('Waiting for you', `${g} tasks`, null, { dot: true, title: msg }),
-      actionRow('Restore them', async () => {
-        try { await api('local/restore-deletes', {}); toast('They go back into their lists.'); } catch (e) { toast(`Could not restore them: ${e.message}`); }
-      }, { help: 'Puts the tasks back into their lists, as they were when they last synced' }),
-      actionRow('Delete them', async () => {
-        try { await api('local/allow-deletes', {}); toast('Confirmed. They will be deleted everywhere.'); } catch (e) { toast(`Could not confirm: ${e.message}`); }
-      }, { danger: true, help: 'Confirms the paused deletions: the tasks are deleted everywhere' })),
+      infoRow(t('local.waitingForYou'), tn('local.guardedTasks', g), null, { dot: true, title: msg }),
+      actionRow(t('local.restoreThem'), async () => {
+        try { await api('local/restore-deletes', {}); toast(t('local.restored')); } catch (e) { toast(t('local.couldNotRestore', { error: e.message })); }
+      }, { help: t('local.restoreThemHelp') }),
+      actionRow(t('local.deleteThem'), async () => {
+        try { await api('local/allow-deletes', {}); toast(t('local.deletesConfirmed')); } catch (e) { toast(t('local.couldNotConfirm', { error: e.message })); }
+      }, { danger: true, help: t('local.deleteThemHelp') })),
     foot(msg),
   ];
 }
 
 /** Lists whose file vanished without being deleted in an app: the local app wrote them again from the last sync (docs/sync.md). */
 function rewrittenSettings() {
-  const time = (at) => new Date(at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+  const time = (at) => dateText(at, { hour: '2-digit', minute: '2-digit' });
   return [
-    head('Lists written again'),
-    card(...ui.local.rewritten.map((x) => infoRow(x.name, `${x.count} ${x.count === 1 ? 'task' : 'tasks'}, ${time(x.at)}`))),
-    foot('Their files vanished from the lists folder without being deleted in the app, so Saqme wrote them again from the last sync instead of deleting anything. To delete a list, use Delete list in its menu.'),
+    head(t('local.rewrittenHead')),
+    card(...ui.local.rewritten.map((x) => infoRow(x.name, tn('local.rewrittenRow', x.count, { time: time(x.at) })))),
+    foot(t('local.rewrittenFoot')),
   ];
 }
 
@@ -2573,22 +2640,21 @@ function rewrittenSettings() {
 function updateBadge() {
   const u = ui.local?.update;
   if (!u?.supported) return null;
-  if (u.running) return { text: `Updating to ${u.running.version}…`, short: 'Updating…', dot: false };
-  if (u.worker?.pending && u.worker.needsLogin) return { text: 'Sign in to Cloudflare to finish the update', short: 'Sign in needed', dot: true };
-  if (u.available) return { text: `Update available: ${u.latest}`, short: `${u.latest} available`, dot: true };
-  if (u.result && !u.result.ok) return { text: u.result.version ? `The update to ${u.result.version} is waiting` : 'The last update did not install', short: 'Waiting', dot: true };
+  if (u.running) return { text: t('upd.updatingTo', { version: u.running.version }), short: t('upd.updating'), dot: false };
+  if (u.worker?.pending && u.worker.needsLogin) return { text: t('upd.signInToFinish'), short: t('upd.signInNeeded'), dot: true };
+  if (u.available) return { text: t('upd.available', { version: u.latest }), short: t('upd.availableShort', { version: u.latest }), dot: true };
+  if (u.result && !u.result.ok) return { text: u.result.version ? t('upd.waitingTo', { version: u.result.version }) : t('upd.lastDidNotInstall'), short: t('upd.waiting'), dot: true };
   return null;
 }
 /** The Updates row when there is no news: in words (text) and as the row's value (short). */
 function updateSummary() {
   const u = ui.local?.update;
-  if (!u?.supported) return { text: 'this copy does not update itself', short: 'Off' };
-  if (u.checking) return { text: 'checking for updates', short: 'Checking…' };
-  if (u.error) return { text: 'could not check for updates', short: 'Couldn\'t check' };
-  if (u.checkedAt) return { text: 'up to date', short: 'Up to date' };
-  return u.auto ? { text: 'checked once a day, installed by itself', short: 'Automatic' } : { text: 'checked once a day', short: 'Manual' };
+  if (!u?.supported) return { text: t('upd.noSelfUpdate'), short: t('common.off') };
+  if (u.checking) return { text: t('upd.checkingText'), short: t('common.checking') };
+  if (u.error) return { text: t('upd.couldNotCheckText'), short: t('upd.couldNotCheck') };
+  if (u.checkedAt) return { text: t('upd.upToDateText'), short: t('upd.upToDate') };
+  return u.auto ? { text: t('upd.autoText'), short: t('upd.automatic') } : { text: t('upd.manualText'), short: t('upd.manual') };
 }
-const AUTO_HELP = 'When the app has not been used for a while, with your sync service. Off: only with Update now.';
 /**
  * Settings > Updates in the Linux/macOS window (local/updater.mjs): this version, the newest one with Update now,
  * what an update is doing, how the last one ended, the Cloudflare sign-in that finishes a Worker update, and
@@ -2597,41 +2663,42 @@ const AUTO_HELP = 'When the app has not been used for a while, with your sync se
 function updatesPage() {
   if (!ui.local) return serviceUpdateSettings();   // (a paired phone: its app is the sync service's)
   const u = ui.local?.update;
-  const version = infoRow('Version', u?.current ?? appVersion() ?? '');
-  if (!u?.supported) return [card(version), foot('This copy runs from a source folder, so it does not update itself: update it with git pull, then run scripts/setup.sh.'), ...(ui.local.cloud ? serviceUpdateSettings() : [])];
+  const version = infoRow(t('about.version'), u?.current ?? appVersion() ?? '');
+  if (!u?.supported) return [card(version), foot(t('upd.sourceFolder')), ...(ui.local.cloud ? serviceUpdateSettings() : [])];
   const out = [];
   const run = u.running;
   if (run) {
-    const what = { checking: 'Checking…', downloading: `Downloading ${run.version}…`, installing: `Installing ${run.version}…`, worker: 'Updating your sync service…', restarting: 'Restarting…' }[run.state] ?? `Updating to ${run.version}…`;
-    out.push(card(version, infoRow('Status', what, null, { long: true, title: what })),
-      foot('The app restarts by itself when it is done; your lists are not touched.'));
+    const steps = { checking: t('common.checking'), downloading: t('upd.downloading', { version: run.version }), installing: t('upd.installing', { version: run.version }), worker: t('upd.updatingService'), restarting: t('upd.restarting') };
+    const what = steps[run.state] ?? t('upd.updatingTo', { version: run.version });
+    out.push(card(version, infoRow(t('sync.status'), what, null, { long: true, title: what })),
+      foot(t('upd.restartsWhenDone')));
   } else if (u.available) {
-    out.push(card(version, infoRow('Available', u.latest, null, { dot: true }),
-      actionRow('Update now', () => updateAction('now'), { name: `Update now to ${u.latest}`, help: 'The app restarts by itself; your lists are not touched' })),
-    foot(`You have ${u.current}. It installs in the background, your sync service too, and the app restarts; your lists are not touched.`));
+    out.push(card(version, infoRow(t('upd.availableLabel'), u.latest, null, { dot: true }),
+      actionRow(t('upd.now'), () => updateAction('now'), { name: t('upd.nowTo', { version: u.latest }), help: t('upd.nowHelp') })),
+    foot(t('upd.youHave', { version: u.current })));
   } else {
-    out.push(card(version, infoRow('Status', u.checking ? 'Checking…' : u.error ? 'Couldn\'t check' : u.checkedAt ? 'Up to date' : 'Not checked yet'),
-      actionRow('Check now', () => updateAction('check'), { help: 'Looks for a new version now' })),
-    u.error ? foot(`Could not check for updates: ${u.error}`, { alert: true })
-      : foot(u.checkedAt ? `Checked ${ago(u.checkedAt)}, then again about once a day.` : 'Checked shortly after the app starts, then about once a day.'));
+    out.push(card(version, infoRow(t('sync.status'), u.checking ? t('common.checking') : u.error ? t('upd.couldNotCheck') : u.checkedAt ? t('upd.upToDate') : t('upd.notChecked')),
+      actionRow(t('upd.checkNow'), () => updateAction('check'), { help: t('upd.checkNowHelp') })),
+    u.error ? foot(t('upd.couldNotCheckError', { error: u.error }), { alert: true })
+      : foot(u.checkedAt ? t('upd.checkedAgo', { ago: ago(u.checkedAt) }) : t('upd.checkedSoon')));
   }
   // how the last one ended, when there is something to do about it
-  const signIn = () => actionRow('Sign in to Cloudflare', () => updateAction('login'), { help: 'Opens the browser; the update finishes by itself afterwards' });
+  const signIn = () => actionRow(t('upd.signIn'), () => updateAction('login'), { help: t('upd.signInHelp') });
   if (u.login?.running) {
-    out.push(card(infoRow('Signing in to Cloudflare…')), foot(['Sign in in the browser and click Allow; the update finishes by itself afterwards.',
-      u.login.url ? [' No browser opened? ', h('a', { href: u.login.url, target: '_blank', rel: 'noopener noreferrer' }, 'Open the sign-in page')] : null]));
+    out.push(card(infoRow(t('upd.signingIn'))), foot([t('upd.signInBrowser'),
+      u.login.url ? [` ${t('upd.noBrowser')} `, h('a', { href: u.login.url, target: '_blank', rel: 'noopener noreferrer' }, t('upd.openSignIn'))] : null]));
   } else if (u.worker?.pending) {
     out.push(card(u.worker.needsLogin ? signIn()
-      : [infoRow('Your sync service', 'Not updated yet'), actionRow('Try again', () => updateAction('worker'), { help: 'Updates your sync service again' })]),
-    foot(u.worker.message));
+      : [infoRow(t('upd.yourService'), t('upd.notUpdatedYet')), actionRow(t('upd.tryAgain'), () => updateAction('worker'), { help: t('upd.tryAgainServiceHelp') })]),
+    foot(localText(u.worker.message)));
   }
-  if (u.login?.message && !u.login.running) out.push(foot(u.login.message, { alert: true }));
+  if (u.login?.message && !u.login.running) out.push(foot(localText(u.login.message), { alert: true }));
   if (u.result && !u.result.ok && !run) {
-    out.push(card(infoRow(u.result.version ? `Update to ${u.result.version}` : 'The last update', u.result.held ? 'Waiting' : 'Didn\'t install', null, { dot: true }),
-      u.result.needsLogin ? signIn() : actionRow('Try again', () => updateAction('now'), { help: 'Tries the update again' })),
-    foot([u.result.message, u.result.next].filter(Boolean).join(' '), { alert: true }));
+    out.push(card(infoRow(u.result.version ? t('upd.updateTo', { version: u.result.version }) : t('upd.theLast'), u.result.held ? t('upd.waiting') : t('upd.didNotInstall'), null, { dot: true }),
+      u.result.needsLogin ? signIn() : actionRow(t('upd.tryAgain'), () => updateAction('now'), { help: t('upd.tryAgainHelp') })),
+    foot([u.result.message, u.result.next].filter(Boolean).map(localText).join(' '), { alert: true }));
   }
-  out.push(card(switchRow('Install updates automatically', !!u.auto, (on) => updateAction('auto', { on }), { help: AUTO_HELP })), foot(AUTO_HELP));
+  out.push(card(switchRow(t('upd.auto'), !!u.auto, (on) => updateAction('auto', { on }), { help: t('upd.autoHelp') })), foot(t('upd.autoHelp')));
   if (ui.local.cloud) out.push(...serviceUpdateSettings());
   return out;
 }
@@ -2656,115 +2723,115 @@ async function loadServiceUpdate() {
   clearTimeout(ui.svcTimer);
   if (ui.svc?.running && ui.view === 'updates') ui.svcTimer = setTimeout(loadServiceUpdate, 3000);
 }
-const SVC_STEPS = { checking: 'Checking…', downloading: 'Downloading…', uploading: 'Uploading…', switching: 'Switching over…' };
+const SVC_STEPS = { checking: 'common.checking', downloading: 'svc.downloading', uploading: 'svc.uploading', switching: 'svc.switching' };
 /** How the sync service's updates stand: the Updates row's value (short) and in words (text). */
 function serviceSummary() {
   const s = ui.svc;
   const v = s?.version ?? store.meta.serverVersion ?? '';
-  if (!serviceCanSelfUpdate() || !s) return { short: v, text: v ? `your sync service runs ${v}` : 'your sync service' };
-  if (s.running) return { short: 'Updating…', text: 'your sync service is updating itself' };
-  if (s.last && !s.last.ok) return { short: 'Didn\'t update', text: 'the last update of your sync service did not finish', dot: true };
-  if (!s.token) return { short: v, text: `your sync service runs ${v}; it is updated from your computer` };
-  return { short: s.auto ? 'Automatic' : 'Manual', text: `your sync service runs ${v}${s.auto ? ', and updates itself' : ''}` };
+  if (!serviceCanSelfUpdate() || !s) return { short: v, text: v ? t('svc.runs', { version: v }) : t('svc.yourService') };
+  if (s.running) return { short: t('upd.updating'), text: t('svc.updatingText') };
+  if (s.last && !s.last.ok) return { short: t('svc.didNotUpdate'), text: t('svc.lastDidNotFinish'), dot: true };
+  if (!s.token) return { short: v, text: t('svc.runsFromComputer', { version: v }) };
+  return { short: s.auto ? t('upd.automatic') : t('upd.manual'), text: t(s.auto ? 'svc.runsAuto' : 'svc.runs', { version: v }) };
 }
-const SVC_HELP = 'It then installs new versions of Saqme by itself, from this project\'s releases on GitHub, also when your computer is off. That needs a token from Cloudflare that only you can make (two minutes).';
 /** Updates > Your sync service: its version; giving it a token, or how updating itself stands, Update now, its log. */
 function serviceUpdateSettings() {
-  const out = [head(ui.local ? 'Your sync service' : 'Sync service')];
+  const out = [head(ui.local ? t('upd.yourService') : t('svc.head'))];
   const s = ui.svc;
   if (!serviceCanSelfUpdate()) {
     const v = ui.local ? ui.local.cloud?.workerVersion : store.meta.serverVersion;
-    out.push(card(infoRow('Version', v || 'An older one')), foot('It updates with the Saqme app on your computer (Settings > Updates there). From its next update on, it can also update itself.'));
+    out.push(card(infoRow(t('about.version'), v || t('svc.anOlderOne'))), foot(t('svc.tooOld')));
     return out;
   }
   if (!s) {
-    out.push(card(infoRow('Version', store.meta.serverVersion || '')), ui.svcError ? foot(`Could not ask your sync service: ${ui.svcError}`, { alert: true }) : null);
+    out.push(card(infoRow(t('about.version'), store.meta.serverVersion || '')), ui.svcError ? foot(t('svc.couldNotAsk', { error: ui.svcError }), { alert: true }) : null);
     return out;
   }
-  const version = infoRow('Version', s.version);
+  const version = infoRow(t('about.version'), s.version);
   if (!s.knowsItself) {
-    out.push(card(version), foot('It updates with the Saqme app on your computer. Once that has updated it, it can also update itself (it then knows its Cloudflare account).'));
+    out.push(card(version), foot(t('svc.notKnowsItself')));
     return out;
   }
   if (!s.token) {
-    out.push(card(version, actionRow('Let it update itself…', () => tokenSheet(s), { help: SVC_HELP, fk: 'svc-token' })), foot(`${ui.local ? 'Now it updates with this app.' : 'Now it updates with the Saqme app on your computer.'} Let it update itself, and ${SVC_HELP[0].toLowerCase()}${SVC_HELP.slice(1)}`));
+    out.push(card(version, actionRow(t('svc.letItUpdate'), () => tokenSheet(s), { help: t('svc.help'), fk: 'svc-token' })), foot(ui.local ? t('svc.noTokenFootLocal') : t('svc.noTokenFoot')));
     return out;
   }
   const newer = s.latest && s.latest !== s.version && !s.running ? s.latest : '';
-  const state = s.running ? SVC_STEPS[s.running] ?? 'Updating…' : newer ? `${newer} available` : s.checkedAt ? 'Up to date' : 'Not checked yet';
+  const state = s.running ? (SVC_STEPS[s.running] ? t(SVC_STEPS[s.running]) : t('upd.updating')) : newer ? t('upd.availableShort', { version: newer }) : s.checkedAt ? t('upd.upToDate') : t('upd.notChecked');
   out.push(card(
     version,
-    infoRow('Status', state, null, { dot: !!newer, long: true, title: state }),
-    actionRow('Update now', serviceUpdateNow, { help: 'Looks for a new version now and installs it', fk: 'svc-now' }),
-    switchRow('Update by itself', s.auto, async (on) => { try { ui.svc = await svcApi('/auto', { on }); } catch (e) { toast(e.message); } render(); },
-      { help: 'Looks every 6 hours and installs a new version. Off: only with Update now.', fk: 'svc-auto' }),
+    infoRow(t('sync.status'), state, null, { dot: !!newer, long: true, title: state }),
+    actionRow(t('upd.now'), serviceUpdateNow, { help: t('svc.nowHelp'), fk: 'svc-now' }),
+    switchRow(t('svc.auto'), s.auto, async (on) => { try { ui.svc = await svcApi('/auto', { on }); } catch (e) { toast(e.message); } render(); },
+      { help: t('svc.autoHelp'), fk: 'svc-auto' }),
   ));
   const last = s.last && !s.running ? s.last : null;
-  out.push(foot(last && !last.ok ? last.message : [last ? `${last.message} ` : '', s.checkedAt ? `Checked ${ago(s.checkedAt)}; ` : '', s.auto ? 'it looks every 6 hours by itself.' : 'it looks only with Update now.'].join(''), { alert: !!(last && !last.ok) }));
+  const looks = s.checkedAt ? t(s.auto ? 'svc.checkedAuto' : 'svc.checkedManual', { ago: ago(s.checkedAt) }) : t(s.auto ? 'svc.looksAuto' : 'svc.looksManual');
+  out.push(foot(last && !last.ok ? last.message : last ? `${last.message} ${looks}` : looks, { alert: !!(last && !last.ok) }));
   // what it did, and the token, under Advanced
   const open = ui.svcOpen;
   out.push(card(
-    h('button', { class: 'g-row link', 'aria-expanded': String(!!open), dataset: { fk: 'svc-advanced' }, onclick: () => { ui.svcOpen = !open; render(); } }, rowParts('What it did, the token', { trailing: chevron() })),
-    open ? actionRow('Remove the token', confirmRemoveToken, { danger: true, help: 'It stops updating itself; the app on your computer updates it again' }) : null,
+    h('button', { class: 'g-row link', 'aria-expanded': String(!!open), dataset: { fk: 'svc-advanced' }, onclick: () => { ui.svcOpen = !open; render(); } }, rowParts(t('svc.advanced'), { trailing: chevron() })),
+    open ? actionRow(t('svc.removeToken'), confirmRemoveToken, { danger: true, help: t('svc.removeTokenHelp') }) : null,
   ));
   if (open) {
-    const lines = (s.log ?? []).map((l) => `${new Date(l.at).toLocaleString([], { dateStyle: 'short', timeStyle: 'short' })}  ${l.text}`);
-    out.push(lines.length ? h('pre', { class: 'setup-log', 'aria-label': 'What your sync service did' }, lines.join('\n')) : foot('Nothing yet.'));
-    out.push(foot(`The token is kept by your sync service on Cloudflare (as the secret UPDATE_TOKEN of ${s.worker || 'your Worker'}), never on this ${ui.local ? 'computer' : 'device'}. It can change the Workers of your Cloudflare account and nothing else; deleting it at dash.cloudflare.com (My Profile, API Tokens) stops it too.`));
+    const lines = (s.log ?? []).map((l) => `${dateText(l.at, { dateStyle: 'short', timeStyle: 'short' })}  ${l.text}`);
+    out.push(lines.length ? h('pre', { class: 'setup-log', 'aria-label': t('svc.log') }, lines.join('\n')) : foot(t('svc.nothingYet')));
+    out.push(foot(t(ui.local ? 'svc.tokenFootComputer' : 'svc.tokenFootDevice', { worker: s.worker || t('svc.yourWorker') })));
   }
   return out;
 }
 async function serviceUpdateNow() {
   try {
     ui.svc = await svcApi('/now', {});
-    announce('Your sync service is looking for a new version.');
+    announce(t('svc.looking'));
   } catch (e) { toast(e.message); }
   render();
   clearTimeout(ui.svcTimer);
   ui.svcTimer = setTimeout(loadServiceUpdate, 3000);
 }
 function confirmRemoveToken() {
-  sheet('Remove the token?', [
-    h('p', {}, 'Your sync service then stops updating itself; the Saqme app on your computer updates it again, as before. You can give it a token again any time.'),
-    h('div', { class: 'btn-row' }, h('button', { class: 'btn', onclick: closeSheet }, 'Cancel'),
+  sheet(t('svc.removeTitle'), [
+    h('p', {}, t('svc.removeWhat')),
+    h('div', { class: 'btn-row' }, h('button', { class: 'btn', onclick: closeSheet }, t('btn.cancel')),
       h('button', { class: 'btn primary', onclick: async () => {
         closeSheet();
-        try { ui.svc = await svcApi('/token', { token: '' }); toast('The token is removed.'); } catch (e) { toast(e.message); }
+        try { ui.svc = await svcApi('/token', { token: '' }); toast(t('svc.removed')); } catch (e) { toast(e.message); }
         render();
-      } }, 'Remove')),
+      } }, t('btn.remove'))),
   ]);
 }
 /** Making the token on Cloudflare's page (prefilled) and pasting it here; the sync service checks it before it keeps it. */
 function tokenSheet(s) {
   const input = h('input', {
-    class: 'field', type: 'password', placeholder: 'Paste the token', 'aria-label': 'Cloudflare API token', autocomplete: 'off', autocapitalize: 'off', spellcheck: false, enterKeyHint: 'done',
+    class: 'field', type: 'password', placeholder: t('token.placeholder'), 'aria-label': t('token.label'), autocomplete: 'off', autocapitalize: 'off', spellcheck: false, enterKeyHint: 'done',
   });
   const msg = h('p', { class: 'g-foot alert', role: 'status' });
   const save = async () => {
     const token = input.value.trim();
     if (!token) { input.focus(); return; }
     btn.disabled = true;
-    msg.textContent = 'Checking it with Cloudflare…';
+    msg.textContent = t('token.checking');
     try {
       ui.svc = await svcApi('/token', { token });
       closeSheet();
-      toast('Your sync service updates itself from now on.');
+      toast(t('token.saved'));
       render();
     } catch (e) { msg.textContent = e.message; btn.disabled = false; }
   };
   input.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); save(); } });
-  const btn = h('button', { class: 'btn primary', onclick: save }, 'Save');
-  const paste = navigator.clipboard?.readText ? h('button', { class: 'btn', onclick: async () => { try { input.value = (await navigator.clipboard.readText()).trim(); } catch { toast('Paste it into the box instead.'); } } }, 'Paste') : null;
-  sheet('Let your sync service update itself', [
-    h('p', {}, 'It then installs new versions of Saqme by itself, from this project\'s releases on GitHub, also when your computer is off. For that, Cloudflare needs a token from you that may change the Workers of your account, and nothing else.'),
+  const btn = h('button', { class: 'btn primary', onclick: save }, t('btn.save'));
+  const paste = navigator.clipboard?.readText ? h('button', { class: 'btn', onclick: async () => { try { input.value = (await navigator.clipboard.readText()).trim(); } catch { toast(t('common.pasteIntoBox')); } } }, t('btn.paste')) : null;
+  sheet(t('token.title'), [
+    h('p', {}, t('token.what')),
     h('ol', { class: 'steps' },
-      h('li', {}, 'Open Cloudflare\'s token page and sign in. It is filled in already: Workers Scripts, Edit, on your account only. ', h('a', { href: s.tokenUrl, target: '_blank', rel: 'noopener noreferrer' }, 'Open Cloudflare')),
-      h('li', {}, 'Tap Continue to summary, then Create Token, and copy the token it shows.'),
-      h('li', {}, 'Paste it here:')),
+      h('li', {}, `${t('token.step1')} `, h('a', { href: s.tokenUrl, target: '_blank', rel: 'noopener noreferrer' }, t('token.openCloudflare'))),
+      h('li', {}, t('token.step2')),
+      h('li', {}, t('token.step3'))),
     h('div', { class: 'field-row' }, input, paste),
     msg,
-    h('p', { class: 'sheet-note' }, 'No permission shown on that page? Choose Create Custom Token; Permissions: Account, Workers Scripts, Edit; Account Resources: Include, your account.'),
-    h('div', { class: 'btn-row' }, h('button', { class: 'btn', onclick: closeSheet }, 'Cancel'), btn),
+    h('p', { class: 'sheet-note' }, t('token.noPermission')),
+    h('div', { class: 'btn-row' }, h('button', { class: 'btn', onclick: closeSheet }, t('btn.cancel')), btn),
   ]);
 }
 
@@ -2780,40 +2847,40 @@ async function pairingInfo() {
 /** "ABCD-EFGH, works once, for 10 minutes" in large type */
 const codeBlock = (code) => h('div', { class: 'pair-code' },
   h('span', { class: 'code', 'aria-hidden': 'true' }, code),
-  h('span', { class: 'sr-only' }, `Pairing code: ${code.replace('-', '').split('').join(' ')}.`),
-  h('span', { class: 'hint' }, 'works once, for 10 minutes'));
+  h('span', { class: 'sr-only' }, t('pair.codeSr', { code: code.replace('-', '').split('').join(' ') })),
+  h('span', { class: 'hint' }, t('pair.codeHint')));
 
 async function showPairing() {
   try {
     const { link, code } = await pairingInfo();
-    if (!link) { toast('Cloud sync is not set up yet'); return; }
+    if (!link) { toast(t('pair.notSetUp')); return; }
     const { qrMatrix, qrToSvg } = await import('./qr.js');
     const svg = qrToSvg(qrMatrix(link, 'M'), { margin: 4, scale: 6 });
-    sheet('Pair a phone', [
-      h('img', { class: 'qr', alt: 'QR code with the pairing link', src: `data:image/svg+xml;charset=utf-8,${encodeURIComponent(svg)}` }),
-      h('p', {}, 'Scan it with the phone camera and open the link, then add Saqme to the Home Screen.'),
-      code ? h('p', {}, 'On iPhone, the app on the Home Screen starts unpaired: open it and type this code.') : null,
+    sheet(t('pair.title'), [
+      h('img', { class: 'qr', alt: t('pair.qr'), src: `data:image/svg+xml;charset=utf-8,${encodeURIComponent(svg)}` }),
+      h('p', {}, t('pair.scan')),
+      code ? h('p', {}, t('pair.iphoneCode')) : null,
       code ? codeBlock(code) : null,
-      h('p', {}, 'The link is the key to your lists: keep it private.'),
+      h('p', {}, t('pair.keepPrivate')),
       h('div', { class: 'btn-row' },
-        h('button', { class: 'btn', onclick: () => copyText(link, 'Link copied') }, 'Copy link'),
-        h('button', { class: 'btn primary', onclick: closeSheet }, 'Done')),
+        h('button', { class: 'btn', onclick: () => copyText(link, t('common.linkCopied')) }, t('ai.copyLink')),
+        h('button', { class: 'btn primary', onclick: closeSheet }, t('btn.done'))),
     ]);
-  } catch (e) { toast(`Could not show it: ${e.message}`); }
+  } catch (e) { toast(t('pair.couldNotShow', { error: e.message })); }
 }
 
 /** iPhone Safari, just paired by the link: the Home Screen app has storage of its own, so hand it a code. */
 async function showHomeScreenStep() {
   const { link, code } = await pairingInfo();
-  sheet('Paired. Now the Home Screen app', [
+  sheet(t('pair.homeTitle'), [
     h('ol', { class: 'steps' },
-      h('li', {}, 'Tap ', h('b', {}, 'Share'), ', then ', h('b', {}, 'Add to Home Screen'), '.'),
-      h('li', {}, 'Open Saqme from the Home Screen and ', code ? 'type this code:' : 'paste the pairing link (Copy link below).')),
+      h('li', {}, richText('pair.homeStep1')),
+      h('li', {}, code ? t('pair.homeStep2Code') : t('pair.homeStep2Link'))),
     code ? codeBlock(code) : null,
-    h('p', {}, code ? 'Expired? Settings › Sync & sharing › Pair a phone, here or on your computer, shows a new one.' : 'The link is the key to your lists: keep it private.'),
+    h('p', {}, code ? t('pair.expired') : t('pair.keepPrivate')),
     h('div', { class: 'btn-row' },
-      h('button', { class: 'btn', onclick: () => copyText(link, 'Link copied') }, 'Copy link'),
-      h('button', { class: 'btn primary', onclick: closeSheet }, 'Done')),
+      h('button', { class: 'btn', onclick: () => copyText(link, t('common.linkCopied')) }, t('ai.copyLink')),
+      h('button', { class: 'btn primary', onclick: closeSheet }, t('btn.done'))),
   ]);
 }
 
@@ -2824,13 +2891,14 @@ async function loadLocalInfo() {
     const was = JSON.stringify(ui.local);
     const sharesWere = JSON.stringify([ui.local?.shares, ui.local?.sharedByMe, ui.local?.notices]);
     ui.local = cfg.local ?? null;
+    if (ui.local) reportLanguage();   // (the Linux/macOS app's notifications are in this window's language)
     if (JSON.stringify(ui.local) !== was && ui.view !== 'list' && !ui.editing) requestRender();
     // lists shared with this computer (and by it) change the lists, their badges and what can be edited: everywhere
     else if (JSON.stringify([ui.local?.shares, ui.local?.sharedByMe, ui.local?.notices]) !== sharesWere) requestRender();
     for (const x of ui.local?.rewritten ?? []) {
       if (ls.get(`rewritten.${x.name}.${x.at}`)) continue;
       ls.set(`rewritten.${x.name}.${x.at}`, '1');
-      toast(`'${x.name}' was missing from the lists folder, so it was written again from the last sync. Nothing was deleted.`);
+      toast(t('local.rewrittenToast', { name: x.name }));
     }
     for (const ended of ui.local?.ended ?? []) {
       if (ls.get(`ended.${ended.id}`)) continue;
@@ -2855,10 +2923,10 @@ async function readClaimLink() {
   try {
     const res = await fetch('api/local/claim', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ code: m[1] }) });
     const data = await res.json();
-    if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
+    if (!res.ok) throw new Error(serverMessage(data, res.status));
     if (data.token !== store.meta.token) { store.pair(data.token); ui.welcomeSkipped = true; }
     if (m[2]) openReminderTask(m[2]);
-  } catch (e) { toast(`Could not connect to the app: ${e.message}`); }
+  } catch (e) { toast(t('local.couldNotConnect', { error: e.message })); }
 }
 
 function copyText(text, done) {
@@ -2868,7 +2936,7 @@ function copyText(text, done) {
 // ---------------------------------------------------------------- export / import
 async function exportLists() {
   const { files, order } = store.exportLists();
-  if (!files.length) { toast('Nothing to export yet'); return; }
+  if (!files.length) { toast(t('lists.nothingToExport')); return; }
   const zip = await makeZip([...files, { name: '.order', text: `${order.join('\n')}\n` }]);
   const name = `saqme-lists-${new Date().toISOString().slice(0, 10)}.zip`;
   const file = new File([zip], name, { type: 'application/zip' });
@@ -2881,7 +2949,7 @@ async function exportLists() {
   a.click();
   a.remove();
   setTimeout(() => URL.revokeObjectURL(a.href), 60_000);
-  toast(`Saved ${name}`);
+  toast(t('common.savedFile', { name }));
 }
 
 function importLists() {
@@ -2898,22 +2966,23 @@ function importLists() {
           }
         } else if (!f.name.startsWith('.')) lists.push({ name: f.name, text: await f.text() });
       }
-      if (!lists.length) { toast('No markdown lists found in that selection'); return; }
+      if (!lists.length) { toast(t('lists.noneFound')); return; }
       const rank = (n) => { const i = order.indexOf(n.replace(/\.(md|markdown)$/i, '')); return i < 0 ? order.length : i; };
       lists.sort((a, b) => rank(a.name) - rank(b.name));
       const r = store.importLists(lists);
-      toast(`Imported ${r.added} task${r.added === 1 ? '' : 's'}${r.projects ? ` and ${r.projects} new list${r.projects === 1 ? '' : 's'}` : ''}${r.skipped ? ` (${r.skipped} already here)` : ''}`);
+      const done = t(r.projects ? 'import.tasksAndLists' : 'import.tasks', { tasks: tn('import.nTasks', r.added), lists: tn('import.nNewLists', r.projects) });
+      toast(r.skipped ? `${done} ${tn('import.skipped', r.skipped)}` : done);
       render();
-    } catch (e) { toast(`Could not import: ${e.message}`); }
+    } catch (e) { toast(t('import.failed', { error: e.message })); }
   });
   input.click();
 }
 
 function confirmUnpair() {
-  sheet('Unpair this device?', [
-    h('p', {}, `${turnOffHelp('device')} Changes not yet synced stay queued until you pair again.`),
-    h('div', { class: 'btn-row' }, h('button', { class: 'btn', onclick: closeSheet }, 'Cancel'),
-      h('button', { class: 'btn primary', onclick: async () => { closeSheet(); await disablePush(); store.unpair(); store.setMeta({ server: '' }); render(); } }, 'Unpair')),
+  sheet(t('sync.unpairTitle'), [
+    h('p', {}, t('sync.unpairHelp')),
+    h('div', { class: 'btn-row' }, h('button', { class: 'btn', onclick: closeSheet }, t('btn.cancel')),
+      h('button', { class: 'btn primary', onclick: async () => { closeSheet(); await disablePush(); store.unpair(); store.setMeta({ server: '' }); render(); } }, t('sync.unpairButton'))),
   ]);
 }
 
@@ -2925,13 +2994,13 @@ function localCounts() {
 function confirmSyncWith(server, onYes) {
   const host = new URL(server).host;
   const { lists, tasks } = localCounts();
-  const what = `${lists === 1 ? 'your list' : `your ${lists} lists`} (${tasks} ${tasks === 1 ? 'task' : 'tasks'})`;
-  sheet(`Sync with ${host}?`, [
-    h('p', {}, tasks ? `This uploads ${what} to ${host} and keeps them in step with it.` : `This device then shows and syncs the lists kept at ${host}.`),
-    h('p', {}, 'Only use a pairing link from your own devices: whoever runs that server can read your lists.'),
+  const what = t('syncWith.what', { lists: tn('syncWith.yourLists', lists), tasks: tn('import.nTasks', tasks) });
+  sheet(t('syncWith.title', { host }), [
+    h('p', {}, tasks ? t('syncWith.uploads', { what, host }) : t('syncWith.shows', { host })),
+    h('p', {}, t('syncWith.ownOnly')),
     h('div', { class: 'btn-row' },
-      h('button', { class: 'btn', onclick: closeSheet }, 'Cancel'),
-      h('button', { class: 'btn primary', onclick: () => { closeSheet(); onYes(); } }, 'Sync')),
+      h('button', { class: 'btn', onclick: closeSheet }, t('btn.cancel')),
+      h('button', { class: 'btn primary', onclick: () => { closeSheet(); onYes(); } }, t('syncWith.sync'))),
   ]);
 }
 
@@ -2943,15 +3012,16 @@ async function claimCode(code, input) {
     res = await fetch('api/pair/claim', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ code }) });
     data = await res.json();
   } catch { /* offline, or no sync service here */ }
-  if (!res) { toast('No connection. Try again when you are online.'); return; }
-  if (!data || !(data.token || data.error)) { input.classList.add('bad'); toast('Codes work in the app opened from your sync service\'s address. Here, paste the pairing link instead.'); return; }
-  if (!res.ok) { input.classList.add('bad'); toast(data.error); return; }
+  if (!res) { toast(t('common.noConnection')); return; }
+  if (!data || !(data.token || data.error)) { input.classList.add('bad'); toast(t('pair.codesHereOnly')); return; }
+  // (the sync service's own words, in this app's language: a wrong or used-up code is a 400)
+  if (!res.ok) { input.classList.add('bad'); toast(res.status === 400 ? t('server.pairCodeBad') : serverMessage(data, res.status)); return; }
   pair(data.token);
 }
 
 /** The pairing code (or link) box and what pairs with it: on the welcome screen, and in Settings > Sync & sharing. */
 function pairingControls(cls) {
-  const input = h('input', { class: cls, placeholder: 'Pairing code or link', 'aria-label': 'Pairing code or link', autocapitalize: 'characters', autocomplete: 'off', spellcheck: false, enterKeyHint: 'go', dataset: { fk: 'pair-input' } });
+  const input = h('input', { class: cls, placeholder: t('pair.inputLabel'), 'aria-label': t('pair.inputLabel'), autocapitalize: 'characters', autocomplete: 'off', spellcheck: false, enterKeyHint: 'go', dataset: { fk: 'pair-input' } });
   const submit = () => {
     const code = normalizePairingCode(input.value);
     if (code) {
@@ -2960,7 +3030,7 @@ function pairingControls(cls) {
     }
     // a link to the Worker's own address pairs this copy of the app with it, wherever this copy is served from
     const p = parsePairingLink(input.value, location.origin);
-    if (!p) { input.classList.add('bad'); toast('Type the 8-character code, or paste the whole pairing link.'); return; }
+    if (!p) { input.classList.add('bad'); toast(t('pair.badInput')); return; }
     if (!p.server && !localCounts().tasks) { pair(p.key); return; }   // this app's own server, nothing to upload yet
     confirmSyncWith(p.server || location.origin, () => pair(p.key, p.server));
   };
@@ -2970,12 +3040,12 @@ function pairingControls(cls) {
 }
 function pairingField() {
   const { input, submit } = pairingControls('field');
-  return h('div', { class: 'field-row' }, input, h('button', { class: 'btn primary', onclick: submit }, 'Pair'));
+  return h('div', { class: 'field-row' }, input, h('button', { class: 'btn primary', onclick: submit }, t('pair.pair')));
 }
 /** The same, as a row of a card. */
 function pairingRow() {
   const { input, submit } = pairingControls('g-input');
-  return inputRow(input, textButton('Pair', submit, { name: 'Pair this device', fk: 'pair-go' }));
+  return inputRow(input, textButton(t('pair.pair'), submit, { name: t('ai.pairDevice'), fk: 'pair-go' }));
 }
 
 // ---------------------------------------------------------------- notifications (Web Push)
@@ -2986,23 +3056,20 @@ const pushSupported = () => 'serviceWorker' in navigator && 'PushManager' in win
  * blocked, on, off), short (the row's value) and help (the footnote: what to do, or what it means).
  */
 function pushState() {
+  // (text: how it stands, inside a sentence: the Settings row's help)
   if (!pushSupported()) {
-    return { state: 'unsupported', short: 'Not available', help: isIOS() && !isStandalone()
-      ? 'On iPhone, notifications work only in the installed app (iOS 16.4 or later): Share › Add to Home Screen, then open Saqme from the Home Screen.'
-      : 'This browser does not support web push notifications.' };
+    return { state: 'unsupported', short: t('notif.notAvailable'), text: t('notif.notAvailableLower'), help: isIOS() && !isStandalone() ? t('notif.iphoneInstalledOnly') : t('notif.unsupported') };
   }
   const browserOnly = !store.meta.token && browserShares().length > 0;   // reminders from the lists' owner's server
   if (!store.meta.token && !browserOnly) {
-    return { state: 'unpaired', short: 'Need sync', help: 'On a phone, reminders come from your sync service: a web app cannot wake itself up at a deadline. Set up sync on a computer (free, in your own Cloudflare account), then pair this phone. Until then, deadlines show in your lists, but nothing reminds you of them here.' };
+    return { state: 'unpaired', short: t('notif.needSync'), text: t('notif.needSyncLower'), help: t('notif.unpairedHelp') };
   }
-  if (Notification.permission === 'denied') return { state: 'blocked', short: 'Blocked', help: 'Allow them in iPhone Settings › Notifications › Saqme.' };
+  if (Notification.permission === 'denied') return { state: 'blocked', short: t('notif.blocked'), text: t('notif.blockedLower'), help: t('notif.blockedHelp') };
   if (Notification.permission === 'granted' && ls.get('push') === '1') {
-    return { state: 'on', short: 'On', help: browserOnly ? 'On for the lists shared with you here; their owner\'s sync service sends them.' : 'On for this device.' };
+    return { state: 'on', short: t('common.on'), text: t('common.onLower'), help: browserOnly ? t('notif.onShared') : t('notif.onDevice') };
   }
-  if (isIOS() && !isStandalone()) return { state: 'install', short: 'Off', help: 'Install the app to the Home Screen first (Share › Add to Home Screen).' };
-  return { state: 'off', short: 'Off', help: browserOnly
-    ? 'Reminders for the lists shared with you here: 15 minutes before timed deadlines, and a daily summary at your time. Their owner\'s sync service sends them; it learns this browser\'s push address and time zone.'
-    : 'Reminders 15 minutes before timed deadlines and at the time, and the daily summary.' };
+  if (isIOS() && !isStandalone()) return { state: 'install', short: t('common.off'), text: t('common.offLower'), help: t('notif.installFirst') };
+  return { state: 'off', short: t('common.off'), text: t('common.offLower'), help: browserOnly ? t('notif.offShared') : t('notif.offHelp') };
 }
 
 /** The lists used here in the browser from their owner's address (no sync of one's own). */
@@ -3017,16 +3084,17 @@ async function syncSharePush({ quiet = true } = {}) {
   if (store.meta.token || ls.get('push') !== '1' || !pushSupported() || Notification.permission !== 'granted') return;
   const tz = Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC';
   const notifyAt = store.setting('notifyAt', '10:00');
+  const language = lang();   // (the reminders' language)
   for (const s of browserShares()) {
-    if (s.push?.endpoint && s.push.tz === tz && s.push.notifyAt === notifyAt) continue;
+    if (s.push?.endpoint && s.push.tz === tz && s.push.notifyAt === notifyAt && s.push.lang === language) continue;
     try {
       const reg = await navigator.serviceWorker.ready;
       const cfg = await store.shareCall(s, 'config');
-      if (!cfg.vapidPublicKey) throw new Error('the list\'s sync service has no push keys');
+      if (!cfg.vapidPublicKey) throw new Error(t('notif.shareNoKeys'));
       let sub = await reg.pushManager.getSubscription();
       if (!sub) sub = await reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: b64ToBytes(cfg.vapidPublicKey) });
-      await store.shareCall(s, 'push/subscribe', { subscription: sub.toJSON(), tz, notifyAt });
-      s.push = { endpoint: sub.endpoint, tz, notifyAt };
+      await store.shareCall(s, 'push/subscribe', { subscription: sub.toJSON(), tz, notifyAt, lang: language });
+      s.push = { endpoint: sub.endpoint, tz, notifyAt, lang: language };
       store.setMeta({ shares: store.shares() });
     } catch (e) { if (!quiet && !e.ended) throw e; }
   }
@@ -3045,35 +3113,76 @@ async function api(path, body) {
     body: body === undefined ? undefined : JSON.stringify(body),
   });
   const data = await res.json().catch(() => ({}));
-  if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
+  if (!res.ok) throw new Error(serverMessage(data, res.status));
   return data;
+}
+
+/** A server's error in this app's language when it is one the app knows (worker/src/index.js), else its own words. */
+function serverMessage(data, status) {
+  if (data?.error === 'revoked') return t('server.revoked');
+  if (data?.error === 'transferred') return t('server.transferred');
+  if (data?.code === 'schema') return t('server.schema');
+  if (data?.error === 'this link has expired - open Saqme again') return t('server.claimExpired');   // (local/server.mjs)
+  return localText(data?.message || data?.error) || `HTTP ${status}`;
+}
+
+// The Linux/macOS app's own messages (local/saqme.mjs, updater.mjs, claude-desktop.mjs) come in English, as they also go
+// to its command line and log: the ones this window shows are said in its language here; anything else as it came.
+const LOCAL_MESSAGES = [
+  [/^(?<n>\d+) tasks disappeared from the lists folder at once\. Deleting them everywhere is paused: restore them, or delete them \(Settings > Sync & sharing\)\.$/, 'local.msg.guarded'],
+  [/^The server refused a change \((?<why>.*)\)\.$/, 'local.msg.refused'],
+  [/^Offline - changes are kept and sent later \((?<why>.*)\)$/, 'local.msg.offline'],
+  [/^Sync failed: (?<why>.*)$/, 'local.msg.failed'],
+  [/^The update to (?<version>\S+) did not install: (?<why>.*)$/, 'local.msg.notInstalled'],
+  [/^Saqme (?<version>\S+) keeps running\. It is tried again later\.$/, 'local.msg.keepsRunning'],
+  [/^The sign-in did not finish\.$/, 'local.msg.signInUnfinished'],
+  [/^Updated to (?<version>\S+), your sync service too\.$/, 'local.msg.updated'],
+  [/^Sign in to Cloudflare to finish the update of your sync service\.$/, 'local.msg.signIn'],
+  [/^Your sync service could not be updated yet \((?<why>.*)\)\.$/, 'local.msg.serviceNotYet'],
+  [/^Sharing needs cloud sync \(Settings, Sync & sharing, Set up sync\)\.$/, 'local.msg.needsCloud'],
+  [/^This list is not on your sync service yet\. Wait a moment for it to sync, then try again\.$/, 'local.msg.notOnService'],
+  [/^Your sync service can update itself once sync is set up \(Settings, Sync & sharing\)\.$/, 'local.msg.selfUpdateNeedsSync'],
+  [/^Connecting an AI app needs sync \(Settings, Sync & sharing\)\.$/, 'local.msg.aiNeedsSync'],
+  [/^There is no such backup\.$/, 'local.msg.noBackup'],
+  [/^Claude Desktop's settings file is not plain JSON \(it may have a comment or a typo in it\), so Saqme left it alone\.$/, 'local.msg.claudeNotJson'],
+  [/^Claude Desktop's settings file does not look as expected, so Saqme left it alone\.$/, 'local.msg.claudeOdd'],
+  [/^Claude Desktop's settings file has an unexpected "mcpServers" part, so Saqme left it alone\.$/, 'local.msg.claudeMcp'],
+  [/^Claude Desktop is not installed on this computer\.$/, 'local.msg.claudeMissing'],
+];
+function localText(msg) {
+  if (!msg || lang() === 'en') return msg;
+  for (const [re, key] of LOCAL_MESSAGES) {
+    const m = re.exec(msg);
+    if (m) return t(key, { ...m.groups, why: m.groups?.why && localText(m.groups.why) });
+  }
+  return msg;
 }
 
 async function enablePush() {
   // must be the first await-free call inside the tap handler, or iOS refuses to ask
   const permission = await Notification.requestPermission();
-  if (permission !== 'granted') { toast('Notifications were not allowed'); render(); return; }
+  if (permission !== 'granted') { toast(t('notif.notAllowed')); render(); return; }
   if (!store.meta.token) {
     try {
       ls.set('push', '1');
       await syncSharePush({ quiet: false });
-      toast('Notifications are on');
-    } catch (e) { ls.set('push', '0'); toast(`Could not enable notifications: ${e.message}`); }
+      toast(t('notif.turnedOn'));
+    } catch (e) { ls.set('push', '0'); toast(t('notif.couldNotEnable', { error: e.message })); }
     render();
     return;
   }
   try {
     const reg = await navigator.serviceWorker.ready;
     const cfg = await api('/api/config');
-    if (!cfg.vapidPublicKey) throw new Error('the server has no push keys (re-run setup)');
+    if (!cfg.vapidPublicKey) throw new Error(t('notif.serverNoKeys'));
     let sub = await reg.pushManager.getSubscription();
     if (!sub) sub = await reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: b64ToBytes(cfg.vapidPublicKey) });
-    await api('/api/push/subscribe', { deviceId: store.meta.deviceId, subscription: sub.toJSON() });
+    await api('/api/push/subscribe', { deviceId: store.meta.deviceId, subscription: sub.toJSON(), lang: lang() });
     ls.set('push', '1');
     syncTimeZone();
-    toast('Notifications are on');
+    toast(t('notif.turnedOn'));
   } catch (e) {
-    toast(`Could not enable notifications: ${e.message}`);
+    toast(t('notif.couldNotEnable', { error: e.message }));
   }
   render();
 }
@@ -3100,93 +3209,108 @@ async function testPush() {
     const reg = await navigator.serviceWorker.ready;
     const sub = await reg.pushManager.getSubscription();
     const viaShare = !store.meta.token && browserShares().find((s) => s.push);
-    const r = viaShare ? await store.shareCall(viaShare, 'push/test', { endpoint: sub?.endpoint }) : await api('/api/push/test', { endpoint: sub?.endpoint });
-    toast(r.sent ? 'Test sent — it should arrive in a few seconds' : 'Nothing sent: this device is not subscribed any more');
-  } catch (e) { toast(`Test failed: ${e.message}`); }
+    const r = viaShare ? await store.shareCall(viaShare, 'push/test', { endpoint: sub?.endpoint, lang: lang() }) : await api('/api/push/test', { endpoint: sub?.endpoint, lang: lang() });
+    toast(r.sent ? t('notif.testSent') : t('notif.testNotSubscribed'));
+  } catch (e) { toast(t('notif.testFailed', { error: e.message })); }
 }
 
 /** The phone's time zone drives the server's reminder clock (only when this device gets the pushes). */
 function syncTimeZone() {
   const tz = Intl.DateTimeFormat().resolvedOptions().timeZone;
   if (tz && ls.get('push') === '1' && store.setting('tz') !== tz) store.setSetting('tz', tz);
+  reportLanguage();
+}
+
+/**
+ * The language of the reminders (the synced setting lang: the Worker's cron, the Linux/macOS app's notifications) is
+ * the one of the device that gets them. Written when this device's language changes (or the setting is empty), not
+ * whenever it differs: two devices in different languages would take turns overwriting it with every sync.
+ */
+function reportLanguage() {
+  if (!ui.local && !(store.meta.token && ls.get('push') === '1')) return;
+  if (ls.get('langReported') === lang() && store.setting('lang')) return;
+  store.setSetting('lang', lang());
+  ls.set('langReported', lang());
 }
 
 // ---------------------------------------------------------------- trash + conflicts
 /** Recently deleted: lists first, then the tasks under the name of the list they were in; each row with Restore. */
 function trashPage() {
   const items = store.trash();
-  if (!items.length) return [note('Nothing deleted.')];
+  if (!items.length) return [note(t('trash.empty'))];
   const row = (r, label) => {
     const project = r.kind === 'project';
     const when = ago(r.fields.deleted.ts);
-    const from = project ? 'A list' : `From ${store.get('project', r.fields.place.v.project)?.fields.name.v ?? 'a list that is gone'}`;
-    const restore = textButton('Restore', () => { if (project) store.restoreProject(r.id); else store.restoreTask(r.id); toast('Restored'); },
-      { name: `Restore ${label}`, help: `${from}, deleted ${when}`, fk: `restore:${r.id}` });
-    return infoRow(label, when, restore, { title: `${label}. ${from}, deleted ${when}` });
+    const from = project ? t('trash.aList') : t('trash.from', { list: store.get('project', r.fields.place.v.project)?.fields.name.v ?? t('trash.goneList') });
+    const restore = textButton(t('trash.restore'), () => { if (project) store.restoreProject(r.id); else store.restoreTask(r.id); toast(t('trash.restored')); },
+      { name: t('trash.restoreName', { label }), help: t('trash.fromDeleted', { from, when }), fk: `restore:${r.id}` });
+    return infoRow(label, when, restore, { title: t('trash.rowTitle', { label, from, when }) });
   };
   const out = [];
   const lists = items.filter((r) => r.kind === 'project');
-  if (lists.length) out.push(head('Lists'), card(lists.map((r) => row(r, r.fields.name.v))));
+  if (lists.length) out.push(head(t('list.lists')), card(lists.map((r) => row(r, r.fields.name.v))));
   const byList = new Map();
   for (const r of items.filter((x) => x.kind !== 'project')) {
     const pid = r.fields.place.v.project;
     if (!byList.has(pid)) byList.set(pid, []);
     byList.get(pid).push(r);
   }
-  for (const [pid, tasks] of byList) out.push(head(store.get('project', pid)?.fields.name.v ?? 'Other lists'), card(tasks.map((r) => row(r, r.fields.text.v || 'Untitled'))));
-  out.push(foot('Newest first. Right after a delete, Undo in its message brings it back too.'));
+  for (const [pid, tasks] of byList) out.push(head(store.get('project', pid)?.fields.name.v ?? t('trash.otherLists')), card(tasks.map((r) => row(r, r.fields.text.v || t('task.untitled')))));
+  out.push(foot(t('trash.foot')));
   return out;
 }
 
 // ---------------------------------------------------------------- Settings > Your lists > Backups (the Linux/macOS window)
 // Copies of the lists the app makes by itself (local/engine.mjs newBackup, docs/sync.md "Backups"); bringing one back
 // only adds what is missing now (backupRestorePlan) and changes nothing else. The Windows app has the same page.
-const BACKUP_REASONS = { start: 'when the app started', daily: 'daily', update: 'before an update', delete: 'before confirmed deletions', restore: 'before a restore' };
-const backupTime = (at) => new Date(at).toLocaleString([], { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' });
+const BACKUP_REASONS = ['start', 'daily', 'update', 'delete', 'restore'];
+const backupReason = (r) => (BACKUP_REASONS.includes(r) ? t(`backup.reason.${r}`) : r);
+const backupTime = (at) => dateText(at, { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' });
 async function loadBackups() {
-  try { ui.backups = await api('local/backups'); } catch (e) { ui.backups = { dir: '', backups: [] }; toast(`Could not read the backups: ${e.message}`); }
+  try { ui.backups = await api('local/backups'); } catch (e) { ui.backups = { dir: '', backups: [] }; toast(t('backup.couldNotRead', { error: e.message })); }
   if (ui.view === 'backups') requestRender();
 }
 function backupsPage() {
-  if (!ui.local) return [note('Backups are made by the desktop app.')];
-  if (!ui.backups) { loadBackups(); return [note('Reading the backups…')]; }
-  const about = 'Saqme copies your lists by itself when it starts, once a day, before an update and before deletions you confirm (only when they changed; the last 10 and one a day for 30 days are kept). Bringing one back adds what is missing now, whole lists or tasks, and changes nothing else.';
+  if (!ui.local) return [note(t('backup.desktopOnly'))];
+  if (!ui.backups) { loadBackups(); return [note(t('backup.reading'))]; }
+  const about = t('backup.about');
   const all = ui.backups.backups.slice(0, 20);
-  if (!all.length) return [note('No backups yet: one is made the next time the app starts.'), foot(about)];
+  if (!all.length) return [note(t('backup.none')), foot(about)];
   return [
-    head('Bring back what is missing from'),
+    head(t('backup.head')),
     card(all.map((b) => actionRow(backupTime(b.at), () => restoreBackup(b), {
-      value: `${b.lists} ${b.lists === 1 ? 'list' : 'lists'}, ${BACKUP_REASONS[b.reason] ?? b.reason}`, name: `Bring back from the backup of ${backupTime(b.at)}`, fk: `backup:${b.name}`,
+      value: t('backup.value', { lists: tn('backup.nLists', b.lists), reason: backupReason(b.reason) }), name: t('backup.restoreName', { time: backupTime(b.at) }), fk: `backup:${b.name}`,
     }))),
-    foot(`${about} They are in ${ui.backups.dir}.`),
+    foot(`${about} ${t('backup.where', { dir: ui.backups.dir })}`),
   ];
 }
 async function restoreBackup(b) {
   let r;
-  try { r = await api('local/backups/restore', { name: b.name, dryRun: true }); } catch (e) { toast(`Could not read that backup: ${e.message}`); return; }
-  if (r.busy) { toast('A list is being written right now. Try again in a moment.'); return; }
-  if (!r.tasks && !r.lists.length) { toast('Nothing is missing: everything in that backup is in your lists.'); return; }
-  const what = [r.lists.length ? `the ${r.lists.length === 1 ? 'list' : 'lists'} ${r.lists.join(', ')}` : '', `${r.tasks} ${r.tasks === 1 ? 'task' : 'tasks'} in all`].filter(Boolean).join(', ');
-  sheet(`Bring back from the backup of ${backupTime(b.at)}?`, [
-    h('p', {}, `Back come ${what}. Nothing in your lists is removed or changed.`),
+  try { r = await api('local/backups/restore', { name: b.name, dryRun: true }); } catch (e) { toast(t('backup.couldNotReadOne', { error: e.message })); return; }
+  if (r.busy) { toast(t('backup.busy')); return; }
+  if (!r.tasks && !r.lists.length) { toast(t('backup.nothingMissing')); return; }
+  const what = [r.lists.length ? tn('backup.whatLists', r.lists.length, { names: r.lists.join(', ') }) : '', tn('backup.whatTasks', r.tasks)].filter(Boolean).join(', ');
+  sheet(t('backup.confirmTitle', { time: backupTime(b.at) }), [
+    h('p', {}, t('backup.confirmText', { what })),
     h('div', { class: 'btn-row' },
-      h('button', { class: 'btn', onclick: closeSheet }, 'Cancel'),
+      h('button', { class: 'btn', onclick: closeSheet }, t('btn.cancel')),
       h('button', { class: 'btn primary', onclick: async () => {
         closeSheet();
-        try { const done = await api('local/backups/restore', { name: b.name }); toast(done.busy ? 'A list changed meanwhile. Try again.' : `Brought back ${what}.`); } catch (e) { toast(`Could not bring it back: ${e.message}`); }
+        try { const done = await api('local/backups/restore', { name: b.name }); toast(done.busy ? t('backup.changed') : t('backup.done', { what })); } catch (e) { toast(t('backup.failed', { error: e.message })); }
         ui.backups = null;
         if (ui.view === 'backups') requestRender();
-      } }, 'Bring back')),
+      } }, t('backup.bringBack'))),
   ]);
 }
 
 function describe(field, v) {
-  if (field === 'status') return statusOf(v).name;
-  if (field === 'due') return v ? dueLong(v) : 'No deadline';
-  if (field === 'deleted') return v ? 'Deleted' : 'Kept';
-  return v || '(empty)';
+  if (field === 'status') return t(`status.${statusOf(v).key}`);
+  if (field === 'due') return v ? dueLongText(v) : t('conflict.noDeadline');
+  if (field === 'deleted') return v ? t('conflict.deleted') : t('conflict.kept');
+  return v || t('conflict.empty');
 }
 
+const FIELDS = ['text', 'status', 'due', 'notes', 'deleted', 'new'];
 /** Changes a shared list's server did not take (the list became view-only, or its owner deleted it). */
 function allNotices() { return [...store.notices(), ...(ui.local?.notices ?? [])]; }
 
@@ -3200,34 +3324,33 @@ const versionRow = (label, value) => h('div', { class: 'g-row version' }, h('spa
 function conflictsPage() {
   const list = store.conflicts();
   const notices = allNotices();
-  if (!list.length && !notices.length) return [note('No conflicts. When the same thing is changed on two devices before they sync, the newest change wins and the other one is kept here for you to pick.')];
+  if (!list.length && !notices.length) return [note(t('conflict.none'))];
   const out = [];
   for (const n of notices) {
     const p = store.get('project', n.projectId);
-    const what = { text: 'Text', status: 'Status', due: 'Deadline', notes: 'Notes', deleted: 'Delete', new: 'New task' }[n.field] ?? n.field;
-    const value = n.field === 'deleted' ? 'Deleted' : describe(n.field, n.value);
-    const why = n.reason === 'this shared list is view-only' ? 'The list is view-only for you, so the owner\'s version stays.' : `The owner's server did not take it: ${n.reason}.`;
-    out.push(head(n.text || 'Untitled'), card(
-      versionRow('Your version', value),
-      actionRow('Copy', () => copyText(String(n.field === 'deleted' ? n.text : value), 'Copied'), { name: 'Copy your version', fk: `copy:${n.id}` }),
-      actionRow('Dismiss', async () => {
+    const what = FIELDS.includes(n.field) ? t(`conflict.fieldLower.${n.field}`) : n.field;
+    const value = n.field === 'deleted' ? t('conflict.deleted') : describe(n.field, n.value);
+    const why = n.reason === 'this shared list is view-only' ? t('conflict.viewOnly') : t('conflict.refused', { reason: n.reason });
+    out.push(head(n.text || t('task.untitled')), card(
+      versionRow(t('conflict.yourVersion'), value),
+      actionRow(t('btn.copy'), () => copyText(String(n.field === 'deleted' ? n.text : value), t('conflict.copied')), { name: t('conflict.copyName'), fk: `copy:${n.id}` }),
+      actionRow(t('conflict.dismiss'), async () => {
         if (n.local) { try { await api('local/notices/dismiss', { id: n.id }); await loadLocalInfo(); } catch (e) { toast(e.message); } } else store.dismissNotice(n.id);
         render();
-      }, { name: 'Dismiss: keep the owner\'s version', fk: `dismiss:${n.id}` })),
-    foot(`Not saved: ${what.toLowerCase()} in “${p?.fields.name.v ?? n.list ?? 'a shared list'}”, ${ago(n.at)}. ${why}`));
+      }, { name: t('conflict.dismissName'), fk: `dismiss:${n.id}` })),
+    foot(t('conflict.notSaved', { what, list: p?.fields.name.v ?? n.list ?? t('conflict.aSharedList'), when: ago(n.at), why })));
   }
   for (const c of list) {
-    const t = store.get('task', c.task);
-    const cur = c.field === 'deleted' ? t.fields.deleted.v : t.fields[c.field]?.v;
-    const what = { text: 'Text', status: 'Status', due: 'Deadline', notes: 'Notes' }[c.field] ?? c.field;
-    const use = c.field === 'deleted' ? (c.value ? 'Delete it' : 'Restore it') : 'Use other';
-    out.push(head(t.fields.text.v || 'Untitled'), card(
-      versionRow('Now', describe(c.field, cur)),
-      versionRow('Other version', describe(c.field, c.value)),
-      actionRow('Keep now', () => store.resolveConflict(c.id, false), { help: 'Keeps the version you have now', fk: `keep:${c.id}` }),
-      actionRow(use, () => store.resolveConflict(c.id, true), { help: c.field === 'deleted' ? '' : 'Uses the other version instead', fk: `use:${c.id}` })),
-    foot(c.field === 'deleted' ? `Deleted on one device and edited on another, ${ago(c.at)}.`
-      : `${what} changed on two devices at once, ${ago(c.at)}. The newest change won: it is the one you have now.`));
+    const task = store.get('task', c.task);
+    const cur = c.field === 'deleted' ? task.fields.deleted.v : task.fields[c.field]?.v;
+    const what = FIELDS.includes(c.field) ? t(`conflict.field.${c.field}`) : c.field;
+    const use = c.field === 'deleted' ? (c.value ? t('conflict.deleteIt') : t('conflict.restoreIt')) : t('conflict.useOther');
+    out.push(head(task.fields.text.v || t('task.untitled')), card(
+      versionRow(t('conflict.now'), describe(c.field, cur)),
+      versionRow(t('conflict.otherVersion'), describe(c.field, c.value)),
+      actionRow(t('conflict.keepNow'), () => store.resolveConflict(c.id, false), { help: t('conflict.keepNowHelp'), fk: `keep:${c.id}` }),
+      actionRow(use, () => store.resolveConflict(c.id, true), { help: c.field === 'deleted' ? '' : t('conflict.useOtherHelp'), fk: `use:${c.id}` })),
+    foot(c.field === 'deleted' ? t('conflict.deletedEdited', { when: ago(c.at) }) : t('conflict.changedTwice', { what, when: ago(c.at) })));
   }
   return out;
 }
@@ -3242,20 +3365,20 @@ function renderWelcome() {
   const logo = h('img', { src: 'icons/apple-touch-icon.png', alt: '' });
   if (ui.localUnpaired) {
     setListContent([h('div', { class: 'welcome' }, logo, h('h1', {}, 'Saqme To Do'),
-      h('p', {}, 'This window is not connected to Saqme on this computer yet. Open Saqme To Do from your applications, or run ', h('b', {}, 'saqme open'), ' in a terminal.'))]);
+      h('p', {}, richText('welcome.localUnpaired')))]);
     return;
   }
   setListContent([h('div', { class: 'welcome' }, logo,
     h('h1', {}, 'Saqme To Do'),
-    h('p', {}, 'To-do lists in plain markdown. No account needed: start on this device right away, and your lists stay on it. Sync with your computer through your own free Cloudflare account later, if you like.'),
-    h('button', { class: 'btn primary', onclick: () => { ui.welcomeSkipped = true; ls.set('localOnly', '1'); store.addProject('General'); render(); } }, 'Use it on this device'),
+    h('p', {}, t('welcome.intro')),
+    h('button', { class: 'btn primary', onclick: () => { ui.welcomeSkipped = true; ls.set('localOnly', '1'); store.addProject('General'); render(); } }, t('welcome.useHere')),
     h('ol', { class: 'steps' },
-      h('li', {}, 'Already syncing on your computer? Open ', h('b', {}, 'Pair phone'), ' in its settings (Settings › Sync & sharing).'),
+      h('li', {}, richText('welcome.step1')),
       // (in the installed app the camera would open the link in the browser, not here)
-      h('li', {}, isStandalone() ? 'Type the code it shows below.' : 'Type the code it shows below, or scan its QR code with the camera.'),
-      isIOS() && !isStandalone() ? h('li', {}, 'On iPhone, add Saqme to the Home Screen first (', h('b', {}, 'Share'), ' › ', h('b', {}, 'Add to Home Screen'), '), open it from there and type the code in it.') : null),
+      h('li', {}, isStandalone() ? t('welcome.step2Installed') : t('welcome.step2')),
+      isIOS() && !isStandalone() ? h('li', {}, richText('welcome.step3')) : null),
     pairingField(),
-    h('p', {}, 'Someone sent you an invite to a shared list? ', h('button', { class: 'linkish', onclick: () => joinSheet() }, 'Join it'), '.'))]);
+    h('p', {}, t('welcome.invite'), ' ', h('button', { class: 'linkish', onclick: () => joinSheet() }, t('welcome.joinIt')), '.'))]);
 }
 
 function pair(token, server = '') {
@@ -3263,7 +3386,7 @@ function pair(token, server = '') {
   ui.welcomeSkipped = true;
   closeSheet();
   render();
-  if (isIOS() && !isStandalone()) showHomeScreenStep(); else toast('Paired — syncing…');
+  if (isIOS() && !isStandalone()) showHomeScreenStep(); else toast(t('pair.pairedSyncing'));
 }
 
 /** #pair=<token> from the QR link. The fragment never reaches the server. */
@@ -3288,11 +3411,11 @@ function readPairingLink() {
     return;
   }
   if (seen) return;   // a link already used or declined (e.g. an old one after -RotateToken) never re-pairs by itself
-  sheet('Use this pairing link?', [
-    h('p', {}, 'This device is already paired with a different key. Use the key from this link instead (for example after a new key was issued)?'),
+  sheet(t('pair.useLinkTitle'), [
+    h('p', {}, t('pair.useLinkText')),
     h('div', { class: 'btn-row' },
-      h('button', { class: 'btn', onclick: () => { ls.set(`link.${linkId(token)}`, 'declined'); closeSheet(); } }, 'Keep current'),
-      h('button', { class: 'btn primary', onclick: () => { ls.set(`link.${linkId(token)}`, 'used'); pair(token); } }, 'Use this link')),
+      h('button', { class: 'btn', onclick: () => { ls.set(`link.${linkId(token)}`, 'declined'); closeSheet(); } }, t('pair.keepCurrent')),
+      h('button', { class: 'btn primary', onclick: () => { ls.set(`link.${linkId(token)}`, 'used'); pair(token); } }, t('pair.useLink'))),
   ]);
 }
 
@@ -3311,30 +3434,27 @@ store.addEventListener('change', () => {
 });
 store.addEventListener('rejected', (e) => {
   const r = e.detail[0];
-  const t = r.kind === 'task' ? store.get('task', r.id) : null;
-  toast(`Not saved${t ? ` (“${t.fields.text.v.slice(0, 40)}”)` : ''}: ${r.reason}`);
+  const task = r.kind === 'task' ? store.get('task', r.id) : null;
+  toast(task ? t('rejected.task', { text: task.fields.text.v.slice(0, 40), reason: r.reason }) : t('rejected.plain', { reason: r.reason }));
 });
 store.addEventListener('status', () => { renderStatus(); if (ui.view !== 'list' && !ui.editing) requestRender(); });
-store.addEventListener('readonly', () => toast('This list is view-only: only its owner can change it.'));
+store.addEventListener('readonly', () => toast(t('share.viewOnlyToast')));
 store.addEventListener('shareended', (e) => {
   const { name, kept, elsewhere, gone } = e.detail;
-  sheet(`“${name}” is no longer shared with you`, [
-    h('p', {}, gone ? 'Your sync service does not have it any more (it was set up again, or this app was paired with another one). It stays here as your own list; ask its owner for a new invite to share it again.'
-      : elsewhere ? 'Its owner stopped sharing it. Your other phone kept it as your own list, and it comes here with your sync: changes no longer go to them.'
-        : kept ? 'Its owner stopped sharing it. It stays here as your own list: changes no longer go to them, and theirs no longer come here.'
-          : 'Its owner stopped sharing it, and had deleted it.'),
-    h('div', { class: 'btn-row' }, h('button', { class: 'btn primary', onclick: closeSheet }, 'OK')),
+  sheet(t('share.endedTitle', { name }), [
+    h('p', {}, t(gone ? 'share.endedGone' : elsewhere ? 'share.endedElsewhere' : kept ? 'share.endedKept' : 'share.endedDeleted')),
+    h('div', { class: 'btn-row' }, h('button', { class: 'btn primary', onclick: closeSheet }, t('btn.ok'))),
   ]);
   render();
 });
 store.addEventListener('sharemoved', (e) => {
-  sheet(`“${e.detail.name}” moved to your Saqme app`, [
-    h('p', {}, 'Your Saqme app took this list over, so this browser no longer syncs it, and it is gone from here. Open it in Saqme from now on.'),
-    h('div', { class: 'btn-row' }, h('button', { class: 'btn primary', onclick: closeSheet }, 'OK')),
+  sheet(t('share.movedTitle', { name: e.detail.name }), [
+    h('p', {}, t('share.movedText')),
+    h('div', { class: 'btn-row' }, h('button', { class: 'btn primary', onclick: closeSheet }, t('btn.ok'))),
   ]);
   render();
 });
-store.addEventListener('savefailed', () => { requestRender(); announce('Changes are not saved on this phone right now.'); });
+store.addEventListener('savefailed', () => { requestRender(); announce(t('store.saveFailedNow')); });
 store.addEventListener('saved', requestRender);
 window.addEventListener('hashchange', () => { readPairingLink(); readClaimLink(); readJoinLink(); readTaskLink(); });
 // a tap on a deadline reminder while the app is open (sw.js focuses the window and says which task)
@@ -3369,7 +3489,7 @@ async function watchVersion() {
     if (ui.view !== 'list') requestRender();   // (the version line under Settings)
     const was = ls.get('appVersion');
     ls.set('appVersion', v);
-    if (was && was !== v) toast(`Saqme was updated to ${v}`);
+    if (was && was !== v) toast(t('app.updatedTo', { version: v }));
     return;
   }
   if (v !== bootVersion && !ui.editing && els.sheetWrap.hidden && document.visibilityState === 'visible') location.reload();   // (it says so after)

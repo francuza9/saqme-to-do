@@ -338,7 +338,12 @@ describe('a shared list\'s key', () => {
     expect((await call('/api/push/subscribe', { body: { subscription: { ...subscription, endpoint: 'https://evil.example/x' } }, token })).status).toBe(400);
     await ok('/api/push/subscribe', { body: { subscription, tz: 'Europe/Berlin', notifyAt: '7:30' }, token });
     expect((await env.DB.prepare('SELECT count(*) AS n FROM push_subscriptions').first('n'))).toBe(0);
-    expect((await env.DB.prepare('SELECT tz, notify_at FROM share_push').first())).toEqual({ tz: 'Europe/Berlin', notify_at: '7:30' });
+    expect((await env.DB.prepare('SELECT tz, notify_at, lang FROM share_push').first())).toEqual({ tz: 'Europe/Berlin', notify_at: '7:30', lang: '' });
+    // in the language of the app that subscribed (one it has; anything else is English)
+    await ok('/api/push/subscribe', { body: { subscription, tz: 'Europe/Berlin', notifyAt: '7:30', lang: 'ka' }, token });
+    expect((await env.DB.prepare('SELECT lang FROM share_push').first('lang'))).toBe('ka');
+    await ok('/api/push/subscribe', { body: { subscription, tz: 'Europe/Berlin', notifyAt: '7:30', lang: 'xx; DROP' }, token });
+    expect((await env.DB.prepare('SELECT lang FROM share_push').first('lang'))).toBe('');
     await ok('/api/push/unsubscribe', { body: { endpoint: subscription.endpoint }, token });
     expect((await env.DB.prepare('SELECT count(*) AS n FROM share_push').first('n'))).toBe(0);
     expect((await env.DB.prepare('SELECT count(*) AS n FROM shares').first('n'))).toBe(1);

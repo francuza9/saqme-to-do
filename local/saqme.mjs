@@ -43,6 +43,7 @@ import { createInterface } from 'node:readline';
 import { LOCAL_INSTRUCTIONS, LOCAL_TOOLS, PROTOCOL_VERSIONS } from '../worker/src/mcp.js';
 import { handleSync, HttpError } from '../worker/src/sync.js';
 import { computeReminders, localClock } from '../worker/src/reminders.js';
+import { textsFor } from '../worker/src/texts.js';
 import { parseInviteLink, parsePairingLink, serverLabel } from '../worker/public/js/pairing.js';
 import { parseItems } from '../worker/public/js/markdown.js';
 import { VERSION } from '../worker/src/version.js';
@@ -341,11 +342,12 @@ async function localReminders(d1, notifyFn, nowMs = Date.now()) {
   const notified = new Set((await d1.prepare('SELECT key FROM notified WHERE at > ?1').bind(nowMs - 8 * 86_400_000).all()).results.map((r) => r.key));
   const tasks = results.map((r) => ({ id: r.id, text: r.text, status: r.status, due: r.due, dueTime: r.due_time, project: r.project }));
   let shown = 0;
-  for (const r of computeReminders(tasks, { tz, notifyAt: settings.notifyAt || '10:00', nowMs, notified }).slice(0, 8)) {
+  // (in the window's language: it keeps the setting `lang` up to date, worker/public/js/app.js)
+  for (const r of computeReminders(tasks, { tz, notifyAt: settings.notifyAt || '10:00', nowMs, notified, lang: settings.lang }).slice(0, 8)) {
     const claimed = await d1.prepare(`INSERT INTO notified (key, at) SELECT value, ?2 FROM json_each(?1) WHERE true ON CONFLICT(key) DO NOTHING RETURNING key`)
       .bind(JSON.stringify(r.keys), nowMs).all();
     if (!claimed.results.some((x) => x.key === r.keys[0])) continue;
-    notifyFn(r);
+    notifyFn({ ...r, action: textsFor(settings.lang).t('notify.open') });
     shown++;
   }
   await d1.prepare('DELETE FROM notified WHERE at < ?1').bind(nowMs - 8 * 86_400_000).run();
@@ -617,7 +619,7 @@ export async function startApp({ dataDir = defaultDataDir(), port, interval = 10
   let reminderTimer = null;
   if (reminders) {
     // (a click on a deadline reminder opens the app on its task, where the notifier reports clicks: local/desktop.mjs)
-    const show = (r) => notify(r, { icon: appPaths.icon, onClick: () => { openApp(p, srv.port, r.task).catch((e) => log(`open: ${e?.message ?? e}`)); } });
+    const show = (r) => notify(r, { icon: appPaths.icon, action: r.action, onClick: () => { openApp(p, srv.port, r.task).catch((e) => log(`open: ${e?.message ?? e}`)); } });
     const tick = () => localReminders(d1, show).catch((e) => log(`reminders: ${e?.message ?? e}`));
     setTimeout(tick, 5000);
     reminderTimer = setInterval(tick, 60_000);

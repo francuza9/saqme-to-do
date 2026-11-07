@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { computeReminders, localClock, pushPayload } from '../../src/reminders.js';
+import { textsFor } from '../../src/texts.js';
 
 // 2026-10-25 10:00 in Tbilisi (UTC+4) == 06:00 UTC
 const at = (hm, date = '2026-10-25') => Date.parse(`${date}T${hm}:00+04:00`);
@@ -87,5 +88,25 @@ describe('edge cases: late summaries, payload size', () => {
     expect('task' in JSON.parse(pushPayload({ title: 'Due today', body: 'x', tag: 'digest', sub: 'Work' }))).toBe(false);
     const due = computeReminders([t('bbbbbbbb', '2026-10-25', '16:00')], { tz: TZ, notifyAt: '10:00', nowMs: at('15:50'), notified: new Set() });
     expect(due.map((r) => r.task)).toEqual(['bbbbbbbb']);
+  });
+});
+
+describe('in the language of the person they are for', () => {
+  const ka = textsFor('ka');
+  it('titles in that language; the tasks, their lists and the keys stay as they are', () => {
+    const tasks = [t('aaaaaaaa', '2026-10-25', '14:00', ' ', 'რძე'), t('bbbbbbbb', '2026-10-25'), t('cccccccc', '2026-10-24'), t('dddddddd', '2026-10-25'), t('eeeeeeee', '2026-10-23')];
+    const soon = computeReminders(tasks, { tz: TZ, notifyAt: '10:00', nowMs: at('13:50'), notified: new Set(['2026-10-25|digest']), lang: 'ka' });
+    expect(soon).toEqual([expect.objectContaining({ title: ka.t('remind.inMin', { n: 10 }), body: 'რძე', sub: 'Work · 14:00', keys: ['2026-10-25|soon|aaaaaaaa|14:00'] })]);
+    const late = computeReminders(tasks, { tz: TZ, notifyAt: '10:00', nowMs: at('14:30'), notified: new Set(['2026-10-25|digest']), lang: 'ka' });
+    expect(late[0].title).toBe(ka.t('remind.overdueSince', { time: '14:00' }));
+    const digest = computeReminders(tasks, { tz: TZ, notifyAt: '10:00', nowMs: at('10:00'), notified: new Set(), lang: 'ka' });
+    expect(digest[0].title).toBe(`${ka.t('remind.nDueToday', { n: 2 })}${ka.t('remind.join')}${ka.t('remind.nOverdue', { n: 2 })}`);
+    expect(digest[0].body.split('\n')).toEqual(['task bbbbbbbb', 'task cccccccc', 'task dddddddd', ka.t('remind.more', { n: 1 })]);
+    expect(digest[0].keys).toEqual(['2026-10-25|digest']);
+  });
+  it('English for no language or one the apps do not have', () => {
+    for (const lang of [undefined, '', 'pt', 'en-GB']) {
+      expect(computeReminders([t('aaaaaaaa', '2026-10-25', '14:00')], { tz: TZ, notifyAt: '10:00', nowMs: at('13:50'), notified: new Set(), lang })[0].title).toBe('In 10 min');
+    }
   });
 });

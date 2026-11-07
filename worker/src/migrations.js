@@ -176,4 +176,7 @@ CREATE TABLE IF NOT EXISTS connector (
 );
 INSERT OR IGNORE INTO connector (id, nonce, created_at) VALUES ('main', lower(hex(randomblob(16))), CAST(strftime('%s', 'now') AS INTEGER) * 1000);
 ` },
+  { name: '0005_lang.sql', sql: `
+ALTER TABLE share_push ADD COLUMN lang TEXT NOT NULL DEFAULT '';
+` },
 ];

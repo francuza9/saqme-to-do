@@ -406,6 +406,10 @@ button.g-row:not(:disabled):active { background: var(--card-pressed); transition
 .g-vtext { min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
 .g-row.long .g-label { flex: none; max-width: 60%; }
 .g-row.long .g-value { flex: 1 1 0; justify-content: flex-end; }
+/* a row that opens a page: its name stays whole and the status after it is the one cut short (Georgian and German
+   names and statuses run long: "სინქრონიზაცია და გაზიარება") */
+.g-row.link .g-label { flex: 0 1 auto; max-width: 70%; }
+.g-row.link .g-value { flex: 1 1 0; justify-content: flex-end; }
 .g-chev { display: grid; place-items: center; flex: none; color: var(--smoke); }
 .g-chev svg { width: 11px; height: 11px; transition: transform .15s; }
 .g-row[aria-expanded="true"] .g-chev svg { transform: rotate(90deg); }
@@ -530,6 +534,7 @@ button.version-line:active { background: var(--hover); transform: scale(var(--pr
 .g-row.sub { padding-left: calc(var(--card-padding) + 28px); --line-x: calc(var(--card-padding) + 28px); }
 .g-row.sub.info { color: var(--smoke); }
 .g-row .check { display: grid; place-items: center; flex: none; width: 16px; color: var(--violet); }
+.menu-item .check { display: grid; place-items: center; flex: none; width: 16px; }   /* (Language: the choices line up, checked or not) */
 .g-row .check svg { width: 14px; height: 14px; }
 .linkish { color: var(--violet); font-weight: 600; text-decoration: underline; text-underline-offset: 2px; transition: opacity var(--press-out) var(--ease-out); }
 .linkish:active { opacity: .6; transition-duration: var(--press-in); }

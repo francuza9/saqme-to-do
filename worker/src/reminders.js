@@ -8,6 +8,7 @@
 
 import { sendPush } from './push.js';
 import { pollRemotes, remoteDueTasks, pruneRemotes } from './remotes.js';
+import { textsFor } from './texts.js';
 
 const ACTIVE = new Set([' ', '/', '!']);
 const DAY = 1440;
@@ -44,25 +45,27 @@ export function localClock(tz, nowMs) {
  * Returns [{ keys: [...dedupe keys to record], title, body, tag, sub, task }] for keys not yet in `notified`; task is the
  * id of the task a deadline reminder is about (a click on the notification opens it), absent on the daily summary.
  * lastRun: minute of the day of the caller's last run, when it does not run every minute (the Worker's cron
- * runs every 5 minutes, last at 23:55): a daily summary time after it is moved to it.
+ * runs every 5 minutes, last at 23:55): a daily summary time after it is moved to it. lang: the language of the
+ * titles ('ka', 'fr', …; English for anything else); the tasks' own text is never translated.
  */
-export function computeReminders(tasks, { tz, notifyAt, nowMs, notified, lastRun = 1439 }) {
+export function computeReminders(tasks, { tz, notifyAt, nowMs, notified, lastRun = 1439, lang = 'en' }) {
+  const { t } = textsFor(lang);   // (the words: the language of the person they are for, src/texts.js)
   const now = localClock(tz, nowMs);
   const out = [];
   const digest = [];
-  for (const t of tasks) {
-    if (!ACTIVE.has(t.status) || !t.due) continue;
-    if (t.due < now.date) { digest.push({ ...t, over: true }); continue; }
-    const tm = minutesOf(t.dueTime);
-    if (tm === null) { if (t.due === now.date) digest.push({ ...t, over: false }); continue; }
-    const at = dayNumber(t.due) * DAY + tm;
-    const kSoon = `${t.due}|soon|${t.id}|${t.dueTime}`;
-    const kNow = `${t.due}|now|${t.id}|${t.dueTime}`;
+  for (const task of tasks) {
+    if (!ACTIVE.has(task.status) || !task.due) continue;
+    if (task.due < now.date) { digest.push({ ...task, over: true }); continue; }
+    const tm = minutesOf(task.dueTime);
+    if (tm === null) { if (task.due === now.date) digest.push({ ...task, over: false }); continue; }
+    const at = dayNumber(task.due) * DAY + tm;
+    const kSoon = `${task.due}|soon|${task.id}|${task.dueTime}`;
+    const kNow = `${task.due}|now|${task.id}|${task.dueTime}`;
     if (now.abs >= at - 15 && now.abs < at && !notified.has(kSoon)) {
-      out.push({ keys: [kSoon], title: `In ${at - now.abs} min`, body: t.text, tag: `due-${t.id}`, sub: `${t.project} · ${t.dueTime}`, task: t.id });
+      out.push({ keys: [kSoon], title: t('remind.inMin', { n: at - now.abs }), body: task.text, tag: `due-${task.id}`, sub: `${task.project} · ${task.dueTime}`, task: task.id });
     } else if (now.abs >= at && now.abs < at + 12 * 60 && !notified.has(kNow)) {
-      const title = now.abs - at < 5 ? 'Due now' : `Overdue since ${t.dueTime}`;
-      out.push({ keys: [kNow, kSoon], title, body: t.text, tag: `due-${t.id}`, sub: t.project, task: t.id });
+      const title = now.abs - at < 5 ? t('remind.dueNow') : t('remind.overdueSince', { time: task.dueTime });
+      out.push({ keys: [kNow, kSoon], title, body: task.text, tag: `due-${task.id}`, sub: task.project, task: task.id });
     }
   }
   const kDig = `${now.date}|digest`;
@@ -71,10 +74,10 @@ export function computeReminders(tasks, { tz, notifyAt, nowMs, notified, lastRun
     const over = digest.filter((d) => d.over).length;
     const due = digest.length - over;
     let title;
-    if (digest.length === 1) title = over ? 'Overdue' : 'Due today';
-    else title = [due && `${due} due today`, over && `${over} overdue`].filter(Boolean).join(', ');
+    if (digest.length === 1) title = over ? t('remind.overdue') : t('remind.dueToday');
+    else title = [due && t('remind.nDueToday', { n: due }), over && t('remind.nOverdue', { n: over })].filter(Boolean).join(t('remind.join'));
     const lines = digest.slice(0, 3).map((d) => d.text);
-    if (digest.length > 3) lines.push(`+${digest.length - 3} more`);
+    if (digest.length > 3) lines.push(t('remind.more', { n: digest.length - 3 }));
     out.push({ keys: [kDig], title, body: lines.join('\n'), tag: 'digest', sub: digest.length === 1 ? digest[0].project : 'Saqme To Do' });
   }
   return out;
@@ -201,7 +204,7 @@ async function deliver(db, vapid, due, subs, { prefix = '', budget, after, nowMs
 async function shareReminders(env, vapid, nowMs, notified, budget, after) {
   const db = env.DB;
   const { results } = await db.prepare(
-    `SELECT sp.share_id, sp.endpoint, sp.p256dh, sp.auth, sp.tz, sp.notify_at, s.project_id FROM share_push sp JOIN shares s ON s.id = sp.share_id
+    `SELECT sp.share_id, sp.endpoint, sp.p256dh, sp.auth, sp.tz, sp.notify_at, sp.lang, s.project_id FROM share_push sp JOIN shares s ON s.id = sp.share_id
       WHERE s.revoked_at IS NULL AND s.token_hash IS NOT NULL AND (s.relayed_at IS NULL OR s.relayed_at < ?1)
       ORDER BY sp.created_at DESC`,
   ).bind(nowMs - 7 * 86_400_000).all();
@@ -210,11 +213,11 @@ async function shareReminders(env, vapid, nowMs, notified, budget, after) {
   let count = 0;
   for (const [shareId, subs] of byShare) {
     if (budget.left < subs.length) break;
-    const { tz, notify_at: notifyAt, project_id: projectId } = subs[0];   // (the newest subscription's settings)
+    const { tz, notify_at: notifyAt, lang, project_id: projectId } = subs[0];   // (the newest subscription's settings)
     const { results: rows } = await db.prepare(`${DUE_TASKS} AND t.project_id = ?2`).bind(horizonOf(tz, nowMs), projectId).all();
     const prefix = `s:${shareId}|`;
     const mine = new Set([...notified].filter((k) => k.startsWith(prefix)).map((k) => k.slice(prefix.length)));
-    const due = computeReminders(rows.map(asTask), { tz, notifyAt, nowMs, notified: mine, lastRun: 23 * 60 + 55 });
+    const due = computeReminders(rows.map(asTask), { tz, notifyAt, nowMs, notified: mine, lastRun: 23 * 60 + 55, lang });
     count += await deliver(db, vapid, due, subs, { prefix, budget, after, nowMs, outcomes: (u) => shareOutcomeStatements(db, shareId, u) });
   }
   return count;
@@ -254,7 +257,7 @@ export async function runReminders(env, nowMs = Date.now()) {
     const horizon = horizonOf(tz, nowMs);
     const { results } = await db.prepare(DUE_TASKS).bind(horizon).all();
     const tasks = [...results.map(asTask), ...(await remoteDueTasks(env, horizon))];
-    const due = computeReminders(tasks, { tz, notifyAt: settings.notifyAt || '10:00', nowMs, notified, lastRun: 23 * 60 + 55 });   // the */5 cron's last run
+    const due = computeReminders(tasks, { tz, notifyAt: settings.notifyAt || '10:00', nowMs, notified, lastRun: 23 * 60 + 55, lang: settings.lang });   // the */5 cron's last run; lang: the phone's (app.js)
     count += await deliver(db, vapid, due, subsRes.results, { budget, after, nowMs, outcomes: (u) => outcomeStatements(db, u) });
   }
   if (shared) count += await shareReminders(env, vapid, nowMs, notified, budget, after);

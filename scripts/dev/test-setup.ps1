@@ -93,7 +93,7 @@ try {
   Check ($r.Code -eq 0) "setup exit code 0`n$($r.Out)"
   Check ($r.Out -notmatch 'Cloudflare account' -and $r.Out -match 'Settings > Sync & sharing > Set up sync' -and $r.Out -match 'setup.cmd -Cloud') 'sync left out by default, with a hint how to add it'
   $vdir = Join-Path $app "versions\$ver"
-  foreach ($f in 'widget.ps1', 'tokens.ps1', 'rules.ps1', 'a11y.cs', 'sync-core.ps1', 'sync-worker.ps1', 'qr.ps1', 'start-widget.vbs', 'update.ps1', 'update-core.ps1', 'setup.ps1', 'release.json', 'assets\saqme.ico', 'fonts\FiraGO-Regular.ttf', 'fonts\OFL.txt') { Check (Test-Path (Join-Path $vdir $f)) "app file versions\$ver\$f" }
+  foreach ($f in 'widget.ps1', 'tokens.ps1', 'rules.ps1', 'i18n.ps1', 'lang\en.js', 'lang\ka.js', 'a11y.cs', 'sync-core.ps1', 'sync-worker.ps1', 'qr.ps1', 'start-widget.vbs', 'update.ps1', 'update-core.ps1', 'setup.ps1', 'release.json', 'assets\saqme.ico', 'fonts\FiraGO-Regular.ttf', 'fonts\OFL.txt') { Check (Test-Path (Join-Path $vdir $f)) "app file versions\$ver\$f" }
   foreach ($f in 'start-widget.vbs', 'setup.ps1', 'assets\saqme.ico', 'cloud\scripts\cloud-setup.mjs', 'cloud\worker\src\index.js', 'cloud\worker\package.json') { Check (Test-Path (Join-Path $app $f)) "install file $f" }
   Check ((Get-Pointer 'current.txt') -eq $ver) "current.txt names $ver"
   Check ((Get-Content (Join-Path $vdir 'release.json') -Raw | ConvertFrom-Json).version -eq $ver) 'release.json has the version of worker\package.json'

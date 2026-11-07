@@ -14,7 +14,7 @@ const osaQuote = (s) => `"${String(s).replace(/\\/g, '\\\\').replace(/"/g, '\\"'
  * Shows a desktop notification; returns true if a notifier ran. onClick runs when the notification is clicked, where
  * the notifier can say so (notify-send 0.8 or later on Linux; macOS's osascript cannot, and neither can gdbus here).
  */
-export function notify({ title, body = '', sub = '' }, { icon, onClick } = {}) {
+export function notify({ title, body = '', sub = '' }, { icon, onClick, action = 'Open Saqme' } = {}) {
   const os = platform();
   if (os === 'darwin') {
     const script = `display notification ${osaQuote(body)} with title ${osaQuote(title)}${sub ? ` subtitle ${osaQuote(sub)}` : ''}`;
@@ -25,7 +25,7 @@ export function notify({ title, body = '', sub = '' }, { icon, onClick } = {}) {
     if (has('notify-send')) {
       // '--': a task text starting with "-" is text, not an option
       const args = ['-a', 'Saqme To Do', ...(icon && existsSync(icon) ? ['-i', icon] : []), '--', title, text];
-      if (onClick) return notifyWithAction(args, onClick);
+      if (onClick) return notifyWithAction(args, onClick, action);
       return spawnSync('notify-send', args, { stdio: 'ignore', timeout: 10_000 }).status === 0;
     }
     if (has('gdbus')) {
@@ -43,9 +43,9 @@ export function notify({ title, body = '', sub = '' }, { icon, onClick } = {}) {
  * goes away. A notify-send that does not know those options fails at once without showing anything: then it is shown
  * the plain way (a click does nothing).
  */
-function notifyWithAction(args, onClick) {
+function notifyWithAction(args, onClick, action) {
   const at = Date.now();
-  const p = spawn('notify-send', ['--action=default=Open Saqme', '--wait', ...args], { stdio: ['ignore', 'pipe', 'ignore'] });
+  const p = spawn('notify-send', [`--action=default=${action}`, '--wait', ...args], { stdio: ['ignore', 'pipe', 'ignore'] });
   let out = '';
   p.stdout.on('data', (d) => { out += d; });
   p.on('error', () => {});

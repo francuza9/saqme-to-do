@@ -8,6 +8,7 @@ import { join } from 'node:path';
 import { Store, OLDER_SERVER, SHARING_API, SELF_UPDATE_API } from '../../public/js/store.js';
 import { SHARING_API as WORKER_SHARING_API, SELF_UPDATE_API as WORKER_SELF_UPDATE_API, API_VERSION, MIN_WORKER_API } from '../../src/version.js';
 import { newState, syncCycle } from '../../../local/engine.mjs';
+import { t } from '../../public/js/i18n.js';
 
 /** A sync service that answers every sync with `extra` on top of an empty answer, and 404 to anything else. */
 function server(extra) {
@@ -42,7 +43,7 @@ describe('API versions', () => {
     await store.sync();
     expect(store.status.state).toBe('idle');
     expect(store.meta.serverApi).toBe(1);
-    await expect(store.joinShare('https://owner.test/join#code=cccccccccccccccccccccc', { fetchImpl: s.fetchImpl })).rejects.toThrow(OLDER_SERVER);
+    await expect(store.joinShare('https://owner.test/join#code=cccccccccccccccccccccc', { fetchImpl: s.fetchImpl })).rejects.toThrow(t(OLDER_SERVER));   // (OLDER_SERVER is the key of what the app says)
     expect(s.calls.some((u) => u.includes('/api/remotes/'))).toBe(false);
   });
 

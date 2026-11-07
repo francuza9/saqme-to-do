@@ -14,6 +14,7 @@ $tmp = Join-Path ([IO.Path]::GetTempPath()) ('saqme-files-' + [guid]::NewGuid().
 $app = Join-Path $tmp 'app'; $data = Join-Path $tmp 'data'; $lists = Join-Path $data 'lists'
 New-Item -ItemType Directory -Path $app, $lists -Force | Out-Null
 Copy-Item -Path (Join-Path $root 'desktop\*') -Destination $app -Recurse -Force -Exclude 'cache'
+Copy-Item -Path (Join-Path $root 'worker\public\js\lang') -Destination (Join-Path $app 'lang') -Recurse -Force   # the words (i18n.ps1)
 $utf8 = New-Object System.Text.UTF8Encoding($false)
 [IO.File]::WriteAllText((Join-Path $lists 'Work.md'), "- [ ] one ^aaaaaaaa`n", $utf8)
 [IO.File]::WriteAllText((Join-Path $lists 'Home.md'), "- [ ] home ^hhhhhhhh`n", $utf8)

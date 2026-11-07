@@ -21,6 +21,7 @@ $app = Join-Path $tmp 'app'; $data = Join-Path $tmp 'data'
 New-Item -ItemType Directory -Path $app, (Join-Path $data 'lists'), $Out -Force | Out-Null
 Copy-Item -Path (Join-Path $root 'desktop\*') -Destination $app -Recurse -Force -Exclude 'cache'
 Copy-Item -Path (Join-Path $root 'worker\public\fonts') -Destination (Join-Path $app 'fonts') -Recurse -Force
+Copy-Item -Path (Join-Path $root 'worker\public\js\lang') -Destination (Join-Path $app 'lang') -Recurse -Force   # the words (i18n.ps1)
 $utf8 = New-Object System.Text.UTF8Encoding($false)
 foreach ($f in Get-ChildItem (Join-Path $root 'scripts\dev\sample') -Force -File) {
   $text = [regex]::Replace([IO.File]::ReadAllText($f.FullName), 'due:\{([+-]?\d+)\}', { param($m) 'due:' + (Get-Date).Date.AddDays([int]$m.Groups[1].Value).ToString('yyyy-MM-dd') })

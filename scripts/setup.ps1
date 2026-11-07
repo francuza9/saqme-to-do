@@ -93,8 +93,8 @@ $VersionsDir = Join-Path $AppDir 'versions'
 $CloudDir = Join-Path $AppDir 'cloud'     # where the user's Worker is deployed from (wrangler stays there)
 $NodeDir = Join-Path $AppDir 'node'       # Node.js, when this setup downloaded it
 $UpdateDir = Join-Path $AppDir 'update'
-# a version's folder: these from desktop\, plus assets\, fonts\, setup.ps1 and release.json
-$AppFiles = @('widget.ps1', 'tokens.ps1', 'rules.ps1', 'a11y.cs', 'sync-core.ps1', 'sync-worker.ps1', 'qr.ps1', 'start-widget.vbs', 'update.ps1', 'update-core.ps1',
+# a version's folder: these from desktop\, plus assets\, fonts\, lang\, setup.ps1 and release.json
+$AppFiles = @('widget.ps1', 'tokens.ps1', 'rules.ps1', 'i18n.ps1', 'a11y.cs', 'sync-core.ps1', 'sync-worker.ps1', 'qr.ps1', 'start-widget.vbs', 'update.ps1', 'update-core.ps1',
                'claude-desktop.ps1', 'mcp-core.ps1', 'mcp-server.ps1', 'mcp-tools.json', 'saqme-mcp.ps1')
 # the app's files as installs before 1.1.0 kept them, all in one folder (removed once a version folder runs)
 $FlatFiles = @('widget.ps1', 'tokens.ps1', 'rules.ps1', 'a11y.cs', 'sync-core.ps1', 'sync-worker.ps1', 'qr.ps1')
@@ -324,11 +324,13 @@ function Read-Pointer([string]$name) {
 
 # One version's folder from a source tree (a release or the repository).
 function Copy-AppFiles([string]$src, [string]$dest, $rel) {
-  New-Item -ItemType Directory -Path $dest, (Join-Path $dest 'assets'), (Join-Path $dest 'fonts') -Force | Out-Null
+  New-Item -ItemType Directory -Path $dest, (Join-Path $dest 'assets'), (Join-Path $dest 'fonts'), (Join-Path $dest 'lang') -Force | Out-Null
   foreach ($f in $AppFiles) { Copy-Item -LiteralPath (Join-Path $src "desktop\$f") -Destination (Join-Path $dest $f) -Force }
   Copy-Item -Path (Join-Path $src 'desktop\assets\*') -Destination (Join-Path $dest 'assets') -Force
   # the same FiraGO files the phone app serves (OFL, see fonts\OFL.txt); the widget falls back to Segoe UI without them
   Copy-Item -Path (Join-Path $src 'worker\public\fonts\*') -Destination (Join-Path $dest 'fonts') -Force
+  # the app's words in its languages: the phone app's files (desktop\i18n.ps1 reads them)
+  Copy-Item -Path (Join-Path $src 'worker\public\js\lang\*.js') -Destination (Join-Path $dest 'lang') -Force
   Copy-Item -LiteralPath (Join-Path $src 'scripts\setup.ps1') -Destination (Join-Path $dest 'setup.ps1') -Force
   # (worker\package.json's version: what the app and its updater read about themselves)
   [IO.File]::WriteAllText((Join-Path $dest 'release.json'), (@{ version = $rel.Version; repo = $rel.Repo } | ConvertTo-Json -Compress), (New-Object System.Text.UTF8Encoding($false)))

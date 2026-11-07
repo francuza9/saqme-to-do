@@ -9,10 +9,11 @@
 
 import { isValidKey } from '../public/js/keys.js';
 import { cleanText as normalizeText, cleanNotes as normalizeNotes, isValidDate } from '../public/js/markdown.js';
+import { LANGS } from '../public/js/i18n.js';
 
 export const STATUSES = [' ', '/', 'x', '>', '!', '-', '~'];
 export const CONTENT_FIELDS = ['text', 'status', 'due', 'notes'];
-export const SETTING_KEYS = ['notifyAt', 'tz'];
+export const SETTING_KEYS = ['notifyAt', 'tz', 'lang'];   // lang: the language of your reminders (docs/architecture.md, Languages)
 export const MAX_TEXT = 10_000;
 export const MAX_NOTES = 50_000;
 export const MAX_NAME = 120;
@@ -140,6 +141,7 @@ export function normalizeChange(raw, now) {
     if (nv?.error) err = nv.error;
     else if (!err && kind === 'setting' && id === 'notifyAt' && normalizeTime(nv.v) === null) err = 'notifyAt must be H:MM';
     else if (!err && kind === 'setting' && id === 'tz' && !isValidTimeZone(nv.v)) err = 'unknown time zone';
+    else if (!err && kind === 'setting' && id === 'lang' && nv.v !== '' && !LANGS.includes(nv.v)) err = 'unknown language';
     if (err) { fieldErrors.push({ field: name, reason: `${name}: ${err}` }); continue; }
     const base = Number.isSafeInteger(f.base) ? f.base : -1;
     fields[name] = { v: kind === 'setting' && id === 'notifyAt' ? normalizeTime(nv.v) : nv.v, ts: Math.min(f.ts, now), base };

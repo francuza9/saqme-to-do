@@ -8,6 +8,8 @@
 #   Get-ForToday                the "For Today" view: open tasks overdue, due today or in the next 3 days, in order
 # Every function takes "now" as a local wall-clock [datetime] (default: the computer's clock).
 
+# (the reminders' words: i18n.ps1, in the app's language; English unless the app chose another)
+if (-not (Get-Command Set-AppLanguage -CommandType Function -ErrorAction SilentlyContinue)) { . (Join-Path $PSScriptRoot 'i18n.ps1') }
 $script:RuleCI = [Globalization.CultureInfo]::InvariantCulture
 $script:RuleDayNames = @('sunday', 'monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday')
 $script:RuleMonthNames = @('january', 'february', 'march', 'april', 'may', 'june', 'july', 'august', 'september', 'october', 'november', 'december')
@@ -141,9 +143,9 @@ function Get-Reminders($tasks, [datetime]$Now, [string]$notifyAt, $notified) {
     $kSoon = "$($t.Due)|soon|$($t.Id)|$($t.DueTime)"
     $kNow = "$($t.Due)|now|$($t.Id)|$($t.DueTime)"
     if ($left -le 15 -and $left -gt 0 -and -not $notified.ContainsKey($kSoon)) {
-      [void]$out.Add(@{ Keys = @($kSoon); Title = "In $left min"; Body = $t.Text; Sub = "$($t.Project) $([char]0x00B7) $($t.DueTime)"; Task = [string]$t.Id })
+      [void]$out.Add(@{ Keys = @($kSoon); Title = (T 'remind.inMin' @{ n = $left }); Body = $t.Text; Sub = "$($t.Project) $([char]0x00B7) $($t.DueTime)"; Task = [string]$t.Id })
     } elseif ($left -le 0 -and $left -gt -720 -and -not $notified.ContainsKey($kNow)) {
-      $title = $(if (-$left -lt 5) { 'Due now' } else { "Overdue since $($t.DueTime)" })
+      $title = $(if (-$left -lt 5) { T 'remind.dueNow' } else { T 'remind.overdueSince' @{ time = $t.DueTime } })
       [void]$out.Add(@{ Keys = @($kNow, $kSoon); Title = $title; Body = $t.Text; Sub = $t.Project; Task = [string]$t.Id })
     }
   }
@@ -152,10 +154,10 @@ function Get-Reminders($tasks, [datetime]$Now, [string]$notifyAt, $notified) {
   if ($digest.Count -and $nowMin -ge $at -and -not $notified.ContainsKey($kDig)) {
     $over = @($digest | Where-Object { $_.Over }).Count
     $due = $digest.Count - $over
-    if ($digest.Count -eq 1) { $title = $(if ($over) { 'Overdue' } else { 'Due today' }) }
-    else { $parts = @(); if ($due) { $parts += "$due due today" }; if ($over) { $parts += "$over overdue" }; $title = $parts -join ', ' }
+    if ($digest.Count -eq 1) { $title = $(if ($over) { T 'remind.overdue' } else { T 'remind.dueToday' }) }
+    else { $parts = @(); if ($due) { $parts += (T 'remind.nDueToday' @{ n = $due }) }; if ($over) { $parts += (T 'remind.nOverdue' @{ n = $over }) }; $title = $parts -join (T 'remind.join') }
     $lines = @($digest | Select-Object -First 3 | ForEach-Object { $_.T.Text })
-    if ($digest.Count -gt 3) { $lines += "+$($digest.Count - 3) more" }
+    if ($digest.Count -gt 3) { $lines += (T 'remind.more' @{ n = $digest.Count - 3 }) }
     [void]$out.Add(@{ Keys = @($kDig); Title = $title; Body = ($lines -join "`n"); Sub = $(if ($digest.Count -eq 1) { $digest[0].T.Project } else { 'Saqme To Do' }) })
   }
   return ,$out

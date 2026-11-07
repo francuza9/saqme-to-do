@@ -13,6 +13,7 @@ import { D1 } from '../../../local/d1.mjs';
 import worker from '../../src/index.js';
 import { runReminders } from '../../src/reminders.js';
 import { generateVapidKeys } from '../../src/push.js';
+import { textsFor } from '../../src/texts.js';
 
 const MIGRATIONS = fileURLToPath(new URL('../../migrations', import.meta.url));
 const OWNER = 'https://owner.test';
@@ -243,6 +244,27 @@ describe('someone using the list in the browser (no Worker of their own)', () =>
     expect(db(OWNER).prepare('SELECT count(*) AS n FROM share_push').get().n).toBe(0);
     await cron(OWNER, '2026-10-25T12:00:00Z');
     expect(pushed).toEqual([]);
+  });
+});
+
+describe('in the language of the person they are for', () => {
+  it('yours in the language your phone reported (setting lang); a shared list\'s in the browser\'s; the texts as they are', async () => {
+    const phone = await browser('my-phone');
+    await api(MINE, '/api/push/subscribe', { token: MY_KEY, body: { deviceId: 'phone1', subscription: phone } });
+    await sync(MINE, MY_KEY, [setting('lang', 'ka'), task('call0001', 'home0001', 'დარეკვა', { date: '2026-10-25', time: '14:00' })]);
+    const claim = (await api(OWNER, '/api/shares/claim', { body: { code: (await invite()).code } })).data;
+    const web = await browser('browser-phone');
+    await api(OWNER, '/api/push/subscribe', { token: claim.token, body: { subscription: web, tz: 'UTC', notifyAt: '8:00', lang: 'de' } });
+    await cron(MINE, '2026-10-25T09:50:00Z');   // 13:50 in Tbilisi
+    await cron(OWNER, '2026-10-25T13:50:00Z');
+    expect(to(phone.endpoint).filter((p) => p.tag !== 'digest')).toEqual([
+      expect.objectContaining({ title: textsFor('ka').t('remind.inMin', { n: 10 }), body: 'დარეკვა', sub: 'Home · 14:00' })]);
+    expect(to(phone.endpoint).find((p) => p.tag === 'digest').title).toBe(textsFor('ka').t('remind.dueToday'));
+    expect(to(web.endpoint).filter((p) => p.tag !== 'digest')).toEqual([expect.objectContaining({ title: textsFor('de').t('remind.inMin', { n: 10 }), body: 'buy eggs' })]);
+    // the test notification, in the language of the app that asks for it
+    pushed = [];
+    await api(MINE, '/api/push/test', { token: MY_KEY, body: { lang: 'fr' } });
+    expect(to(phone.endpoint)).toEqual([expect.objectContaining({ title: 'Saqme To Do', body: textsFor('fr').t('remind.test') })]);
   });
 });
 

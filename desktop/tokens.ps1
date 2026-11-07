@@ -1,7 +1,7 @@
 # Generated from design/tokens.json by scripts/build-tokens.mjs - do not edit by hand.
 # Dot-sourced by widget.ps1. Colours are WPF ARGB strings.
 $Tokens = @{
-  Font = @{ Family = 'FiraGO'; Fallback = 'Segoe UI Variable Text, Segoe UI'; Files = @('FiraGO-Regular.ttf', 'FiraGO-Italic.ttf', 'FiraGO-Medium.ttf', 'FiraGO-SemiBold.ttf') }
+  Font = @{ Family = 'FiraGO'; Fallback = 'Segoe UI Variable Text, Segoe UI, Sylfaen'; Files = @('FiraGO-Regular.ttf', 'FiraGO-Italic.ttf', 'FiraGO-Medium.ttf', 'FiraGO-SemiBold.ttf') }
   Type = @{ display = @{ Size = 22; Line = 28; Weight = 600 }; title = @{ Size = 18; Line = 24; Weight = 600 }; body = @{ Size = 15; Line = 22; Weight = 400 }; label = @{ Size = 14; Line = 20; Weight = 500 }; meta = @{ Size = 13; Line = 18; Weight = 400 }; small = @{ Size = 12; Line = 16; Weight = 500 } }
   Space = @(2, 4, 8, 12, 16, 24, 32)
   Radius = @{ container = 14; card = 12; tab = 10; control = 7; chip = 5 }
