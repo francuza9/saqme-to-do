@@ -1,6 +1,6 @@
 # Changes
 
-## Unreleased
+## 1.2.6
 
 **Five languages: English, Georgian (ქართული), French, Spanish and German.** Every app speaks them: the phone app,
 the Windows app, the Linux/macOS window, the invite page of a shared list, and the notifications (reminders, the daily
