@@ -132,6 +132,24 @@ Windows, for every pull request (no secrets needed). The browser checks under `t
 `scripts/dev` that drive the widget are run by hand. Never commit `worker/wrangler.toml`, `.dev.vars` or
 anything with a token in it.
 
+## Pull requests
+
+1. **Bigger change? Open an issue first** and say what you want to change and why, so no one builds the
+   same thing twice or something that won't be merged. Typos, small fixes and translations can go straight
+   to a pull request.
+2. **Fork, then branch from `main`** (`fix-tab-switch`, `lang-italian`): one topic per pull request.
+3. **Make the change and its tests.** Run `cd worker && npm test`; if you touched `desktop/`, the PowerShell
+   suites above too. If users see the change, update the matching page in `docs/` and add a line under a new
+   `## Unreleased` heading at the top of [CHANGELOG.md](CHANGELOG.md) (the release takes it from there).
+4. **Commit messages say what changed for the user**, in one plain sentence, naming the app when it is only
+   one (`Windows: switching lists no longer waits on sync`). No need to squash: the maintainer does.
+5. **Open the pull request against `main`** and fill in the template: what, why, how you tested it, and
+   screenshots for anything visible (phone and desktop if both changed). Tests run on their own; a maintainer
+   reviews, usually within a few days.
+
+Translations: a wrong or clumsy word in any language is a welcome pull request on its own; change only the
+`lang/<code>.js` file ([Words and languages](#words-and-languages)).
+
 ## Style
 
 - Match the surrounding code: short functions, comments that explain *why*, no new dependencies unless
