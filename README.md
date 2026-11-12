@@ -117,7 +117,8 @@ Prefer to look first? Download the repository as a ZIP and run **`setup.cmd`** (
 1. **Scan the QR code** the computer app shows after setting up sync with the phone camera, and open the
    link (Safari on iPhone, Chrome on Android). To see it again: **Settings > Sync & sharing > Pair phone**
    (Linux and macOS: **Pair a phone**).
-2. **Add it to the Home Screen:** on iPhone tap **Share**, then **Add to Home Screen**; on Android, **Install app**.
+2. **Add it to the Home Screen:** on iPhone tap **Share** (on iOS 26: **⋯**, then **Share**), then
+   **Add to Home Screen**; on Android, **Install app**.
    On iPhone, open Saqme from the Home Screen and type the **pairing code** shown under the QR code (and in
    Safari after step 1): iOS gives Home Screen apps storage of their own, so the app starts unpaired.
 3. **Turn on reminders:** in Saqme on the Home Screen, tap the ☰ button to open **Settings**, then

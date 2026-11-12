@@ -252,8 +252,9 @@ Needs iOS 16.4 or later for notifications (everything else works on older versio
    **Camera** app and tap the banner. It opens in **Safari**, which shows your lists. The apps show the QR code
    again under **Settings > Sync & sharing > Pair phone** (Linux and macOS: **Pair a phone**, or
    `saqme pair-phone` in a terminal).
-2. **Install.** In Safari tap the **Share** button (square with an arrow), scroll, **Add to Home Screen**,
-   **Add**.
+2. **Install.** In Safari tap the **Share** button (square with an arrow; on iOS 26 it is in the **⋯** menu at
+   the bottom right), scroll (or tap **View More**), **Add to Home Screen**, then **Add**. Leave **Open as Web App**
+   on if iOS shows it.
 3. **Open Saqme from the Home Screen and type the pairing code.** iOS starts a Home Screen app at its own
    address, with storage of its own, so neither the link nor Safari's pairing reaches it: it opens on the
    welcome screen. Type the 8-character code that Safari showed after step 1, or the one under the QR code on
