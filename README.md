@@ -30,8 +30,8 @@ What it changes shows up in Saqme within seconds.
 - **Without sync:** click **Connect Claude Desktop**, then quit Claude Desktop and open it again. Ask in any chat.
   Nothing to paste, nothing to install besides Claude Desktop.
 
-Every click, for each app: [docs/ai.md](docs/ai.md). Keep the link private, like a password. Your AI can't delete a
-list, and anything it deletes waits in **Recently deleted** for 30 days.
+Every click, for each app: [docs/ai.md](docs/ai.md). Keep the link private, like a password. Anything your AI
+deletes, a whole list too, waits in **Recently deleted** for 30 days.
 
 **Other AI apps on your computer** (Claude Code, Codex, Cursor) can edit your list files: [Other ways](docs/ai.md#other-ways).
 

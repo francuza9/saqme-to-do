@@ -739,6 +739,37 @@ function updateListFromRemote(st, items, projId, depth) {
   return items;
 }
 
+/**
+ * A deleted list that comes back (restored on another device, or by the AI connector) is written as its file was when
+ * it went to lists/.trash, headings and prose included: the newest copy there that holds exactly its tasks, with what
+ * the server changed since applied (updateListFromRemote). text null when there is none: it is then written from its
+ * tasks. Every copy of it there is renamed to *.restored: otherwise the list's file vanishing later would look like a
+ * delete made on purpose (trashedCopy) and would not be held back. -> { text, renames }
+ */
+function trashedListText(st, listsDir, projId, file, depth) {
+  const out = { text: null, renames: [] };
+  let names = [];
+  try { names = readdirSync(join(listsDir, '.trash')); } catch { return out; }
+  const live = new Set(liveTaskIds(st.R, projId));
+  let best = null;
+  for (const fn of names) {
+    const m = /^(.+)-(\d{8}-\d{6})\.md$/i.exec(fn);   // (letter case ignored, as in sync-core.ps1)
+    if (!m) continue;
+    const path = join(listsDir, '.trash', fn);
+    const text = readText(path);
+    if (text == null) continue;
+    const items = parseItems(text);
+    const ids = new Set(items.filter((it) => it.kind === 'task' && it.text !== '' && it.id).map((it) => it.id));
+    const mine = live.size ? [...ids].some((id) => live.has(id)) : m[1].toLowerCase() === file.toLowerCase() && !ids.size;
+    if (!mine) continue;
+    out.renames.push({ type: 'rename', from: path, to: path.replace(/\.md$/i, '.restored') });
+    if (ids.size !== live.size || [...ids].some((id) => !live.has(id))) continue;   // not all of it, or more
+    if (!best || ordinal(m[2], best.stamp) > 0) best = { stamp: m[2], text, items };
+  }
+  if (best) out.text = formatItems(updateListFromRemote(st, best.items, projId, depth), 0, detectEol(best.text));
+  return out;
+}
+
 function newListFromRows(st, projId, depth) {
   const items = [];
   const rows = Object.values(st.R).filter((r) => r.kind === 'task' && !getField(r, 'deleted')?.v && placeOf(r)?.project === projId);
@@ -917,7 +948,14 @@ export function remotePlan(st, local, listsDir, scope = null) {
     const exists = file && Object.hasOwn(local.files, file);
     if (live && !exists) {
       const n = scope ? (file ?? scope.file) : uniqueFileName(listsDir, String(getField(r, 'name')?.v ?? ''), reserved);
-      creates.push({ type: 'create', path: join(listsDir, `${n}.md`), text: newListFromRows(st, id, depth()) });
+      let text = null;
+      if (s && getField(s, 'deleted')?.v) {
+        // a deleted list restored elsewhere: from its copy in lists/.trash when there is one
+        const tc = trashedListText(st, listsDir, id, n, depth());
+        ({ text } = tc);
+        after.push(...tc.renames);
+      }
+      creates.push({ type: 'create', path: join(listsDir, `${n}.md`), text: text ?? newListFromRows(st, id, depth()) });
       fileOf[id] = n; plan.files[id] = n;
       if (scope) orderChanged = true;
     } else if (!live && exists && wasLive) {

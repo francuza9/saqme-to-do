@@ -174,8 +174,12 @@ describe('the local tools Claude Desktop gets (POST /api/local/mcp, saqme mcp)',
     expect(init.instructions).toMatch(/on this computer/);
     const tools = (await rpc('tools/list')).result.tools;
     expect(tools).toEqual(LOCAL_TOOLS);
-    expect(tools.map((t) => t.name)).toEqual(TOOLS.map((t) => t.name));
-    expect(tools.map((t) => t.inputSchema)).toEqual(TOOLS.map((t) => t.inputSchema));
+    // the Worker's tools and shapes, but lists are renamed and deleted in the app only: no list file is renamed or goes
+    const listTools = ['update_list', 'delete_list', 'restore_list'];
+    expect(tools.map((t) => t.name)).toEqual(TOOLS.map((t) => t.name).filter((n) => !listTools.includes(n)));
+    expect(tools.map((t) => t.inputSchema)).toEqual(TOOLS.filter((t) => !listTools.includes(t.name)).map((t) => t.inputSchema));
+    expect(init.instructions).toMatch(/Lists cannot be renamed or deleted here/);
+    expect((await rpc('tools/call', { name: 'delete_list', arguments: { list: 'Work' } })).error.code).toBe(-32602);
   });
 
   it('get_lists: the lists, and the shared one says whose and that it is view only', async () => {
@@ -184,6 +188,7 @@ describe('the local tools Claude Desktop gets (POST /api/local/mcp, saqme mcp)',
     expect(r.lists.find((l) => l.name === 'Groceries')).toMatchObject({ shared_from: 'nuca', can_edit: false });
     expect(r.lists.find((l) => l.name === 'Work').shared_from).toBeUndefined();
     expect(r.today.date).toMatch(/^\d{4}-\d{2}-\d{2}$/);
+    expect(r.deleted_lists).toBeUndefined();   // (nothing here restores a list)
   });
 
   it('add_tasks: into the file, with ids, the rest of the file kept', async () => {
@@ -214,7 +219,8 @@ describe('the local tools Claude Desktop gets (POST /api/local/mcp, saqme mcp)',
     expect(await call('restore_task', { id: anna.id })).toMatchObject({ restored: 1 });
     await until(() => file('Work').includes(`- [ ] Call Anna ^${anna.id}`));
     expect(readdirSync(join(dir, 'lists')).filter((n) => n.endsWith('.md')).sort()).toEqual(['Groceries.md', 'Home.md', 'Work.md']);
-    expect(TOOLS.map((t) => t.name).some((n) => /delete_list|remove_list/.test(n))).toBe(false);
+    expect(LOCAL_TOOLS.map((t) => t.name).some((n) => /_list$/.test(n) && n !== 'create_list')).toBe(false);
+    expect((await call('list_tasks', { status: 'deleted' })).deleted_lists).toBeUndefined();
   });
 
   it('a view-only shared list is not changed', async () => {

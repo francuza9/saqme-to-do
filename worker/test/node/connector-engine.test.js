@@ -2,7 +2,7 @@
 // folder through the desktop engine's normal sync (local/engine.mjs, the port of the Windows engine), with the
 // same ids, and the AI sees what was typed into a file. The Worker's own code on SQLite (local/d1.mjs), in process.
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync, utimesSync } from 'node:fs';
+import { existsSync, mkdtempSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync, utimesSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { D1 } from '../../../local/d1.mjs';
@@ -87,5 +87,56 @@ describe('AI connector <-> a computer\'s lists folder', () => {
     const t = await tool('list_tasks', { list: 'Work', status: 'all' });
     expect(t.tasks.map((x) => [x.text, x.status])).toEqual([['Plan the launch', 'done'], ['Book the room', 'todo'], ['Written by hand', 'todo']]);
     expect(t.tasks[1].id).toBe(id);
+  });
+
+  it('lists renamed, moved, deleted and restored through the connector: the files, .order and lists/.trash follow', async () => {
+    const groceries = '# Groceries\nFor the weekend.\n- [ ] Milk ^milk0001\n- [x] Bread ^bread001\n  - [ ] Rye ^rye00001\n';
+    write('Work', '- [ ] Plan the launch ^plan0001\n');
+    write('Groceries', groceries);
+    write('Home', '- [ ] Call the plumber ^home0001\n');
+    writeFileSync(join(lists, '.order'), 'Work\nGroceries\nHome\n');
+    await cycle();
+    expect((await cycle()).status).toBe('synced');
+    const order = () => readFileSync(join(lists, '.order'), 'utf8');
+    const files = () => readdirSync(lists).filter((f) => f.endsWith('.md')).sort();
+    const trash = () => (existsSync(join(lists, '.trash')) ? readdirSync(join(lists, '.trash')).sort() : []);
+
+    // renamed: the same file (its heading and prose too) under the new name, in the same place
+    await tool('update_list', { list: 'Groceries', name: 'Shopping' });
+    await cycle();
+    expect(files()).toEqual(['Home.md', 'Shopping.md', 'Work.md']);
+    expect(read('Shopping')).toBe(groceries);
+    expect(order()).toBe('Work\nShopping\nHome\n');
+    // moved: .order follows
+    await tool('update_list', { list: 'Shopping', position: 'top' });
+    await cycle();
+    expect(order()).toBe('Shopping\nWork\nHome\n');
+
+    // deleted: the file goes to lists/.trash, no task is deleted, nothing is held back
+    await tool('delete_list', { list: 'Shopping' });
+    const del = await cycle();
+    expect(del.guarded).toBe(0);
+    expect(files()).toEqual(['Home.md', 'Work.md']);
+    expect(trash()).toEqual([expect.stringMatching(/^Shopping-\d{8}-\d{6}\.md$/)]);
+    expect(order()).toBe('Work\nHome\n');
+    expect(d1.db.prepare('SELECT COUNT(*) AS n FROM tasks WHERE deleted = 1').get().n).toBe(0);
+    await cycle();
+    expect(files()).toEqual(['Home.md', 'Work.md']);   // (and it stays gone)
+
+    // restored: the file as it was, back in its place; its copy in lists/.trash is marked restored
+    await tool('restore_list', { list: 'Shopping' });
+    await cycle();
+    expect(read('Shopping')).toBe(groceries);
+    expect(order()).toBe('Shopping\nWork\nHome\n');
+    expect(trash()).toEqual([expect.stringMatching(/^Shopping-\d{8}-\d{6}\.restored$/)]);
+    expect((await cycle()).status).toBe('synced');
+    expect((await tool('get_lists')).lists.map((l) => [l.name, l.open])).toEqual([['Shopping', 2], ['Work', 1], ['Home', 1]]);
+    // the restored file vanishing now (not through the apps) is held back and written again, not deleted
+    rmSync(join(lists, 'Shopping.md'));
+    await cycle();
+    state.Missing = Object.fromEntries(Object.keys(state.Missing).map((k) => [k, Date.now() - 60_000]));
+    await cycle();
+    expect(read('Shopping')).toContain('- [ ] Milk ^milk0001');
+    expect(d1.db.prepare('SELECT deleted FROM projects WHERE name = ?').get('Shopping').deleted).toBe(0);
   });
 });

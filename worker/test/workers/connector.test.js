@@ -4,7 +4,7 @@
 import { describe, it, expect, beforeEach } from 'vitest';
 import { env, createExecutionContext, waitOnExecutionContext } from 'cloudflare:test';
 import worker from '../../src/index.js';
-import { RATE_LIMIT, DELETE_LIMIT, connectorKey } from '../../src/connector.js';
+import { RATE_LIMIT, DELETE_LIMIT, LIST_DELETE_COST, connectorKey } from '../../src/connector.js';
 import { AI_DEVICE, PROTOCOL_VERSIONS, TOOLS, todayInfo } from '../../src/mcp.js';
 
 const OWNER = env.AUTH_TOKEN;
@@ -176,21 +176,29 @@ describe('the MCP protocol (Streamable HTTP, stateless)', () => {
     expect(out.map((x) => x.id)).toEqual(['a', 'b']);
   });
 
-  it('tools/list: the tools, each saying what it does; nothing deletes a list', async () => {
+  it('tools/list: the tools, each saying what it does; deleting a list is as restorable as deleting a task', async () => {
     const { result } = await rpc('tools/list');
     const names = result.tools.map((t) => t.name);
-    expect(names).toEqual(['today', 'get_lists', 'list_tasks', 'add_tasks', 'update_task', 'move_task', 'delete_task', 'restore_task', 'create_list']);
+    expect(names).toEqual(['today', 'get_lists', 'list_tasks', 'add_tasks', 'update_task', 'move_task', 'delete_task', 'restore_task', 'create_list',
+      'update_list', 'delete_list', 'restore_list']);
     expect(result.tools).toEqual(TOOLS);
-    expect(names.filter((n) => /list/.test(n) && /delete|remove/.test(n))).toEqual([]);
     for (const t of result.tools) {
       expect(t.inputSchema.type).toBe('object');
       expect(t.description.length).toBeGreaterThan(40);
       expect(typeof t.annotations.readOnlyHint).toBe('boolean');
     }
-    const d = (n) => result.tools.find((t) => t.name === n).description;
-    expect(d('update_task')).toMatch(/in_progress.*postponed.*blocked/);
+    const tool = (n) => result.tools.find((t) => t.name === n);
+    expect(tool('update_task').description).toMatch(/in_progress.*postponed.*blocked/);
     expect(JSON.stringify(result.tools)).toMatch(/YYYY-MM-DDTHH:MM/);
-    expect((await rpc('tools/call', { name: 'delete_list', arguments: { list: 'Work' } })).error.code).toBe(-32602);
+    expect(tool('delete_list').description).toMatch(/Recently deleted \(30 days; restore_list/);
+    expect(tool('delete_list').description).toContain(`counts as ${LIST_DELETE_COST} of the ${DELETE_LIMIT}`);
+    expect(tool('delete_list').annotations).toMatchObject({ destructiveHint: true, readOnlyHint: false });
+    expect(tool('update_list').annotations.destructiveHint).toBe(false);
+    expect(tool('create_list').description).not.toMatch(/no tool to delete/);
+    const init = await rpc('initialize', { protocolVersion: PROTOCOL_VERSIONS[0] });
+    expect(init.result.instructions).toMatch(/delete_list puts a whole list .* restore_list brings it back/);
+    expect(init.result.instructions).not.toMatch(/cannot be deleted/);
+    expect((await rpc('tools/call', { name: 'drop_list', arguments: { list: 'Work' } })).error.code).toBe(-32602);
   });
 });
 
@@ -363,5 +371,145 @@ describe('the tools', () => {
     const p = next.changes.find((x) => x.kind === 'project');
     expect(p).toMatchObject({ id: c.list.id, fields: { name: { v: 'Trip Berlin' }, deleted: { v: false } } });
     expect(p.fields.pos.v > 'a1').toBe(true);
+  });
+});
+
+describe('managing lists', () => {
+  const projectRow = (id) => env.DB.prepare('SELECT * FROM projects WHERE id = ?1').bind(id).first();
+  const names = async () => (await tool('get_lists')).lists.map((l) => l.name);
+  const projectsSeen = (out) => out.changes.filter((c) => c.kind === 'project');
+
+  it('update_list renames a list: same id, same tasks, every device gets the new name', async () => {
+    const before = await sync([], 0, 'phone-1');
+    const r = await tool('update_list', { list: 'work', name: '  Office: 2027?  ' });
+    expect(r).toMatchObject({ list: { id: WORK, name: 'Office 2027' }, lists: ['Office 2027', 'Home'] });
+    expect((await projectRow(WORK)).name).toBe('Office 2027');
+    expect((await tool('list_tasks', { list: 'Office 2027', status: 'all' })).tasks.map((t) => t.id)).toEqual(['plan0001', 'plan0002', 'plan0003', 'mail0001']);
+    const next = await sync([], before.cursor, 'phone-1');
+    expect(projectsSeen(next).map((p) => [p.id, p.fields.name.v])).toEqual([[WORK, 'Office 2027']]);
+    expect(next.changes.filter((c) => c.kind === 'task')).toEqual([]);   // its tasks are not touched
+    // only the letter case: fine; another list's name, an empty one, nothing at all: refused
+    expect((await tool('update_list', { list: WORK, name: 'office 2027' })).list.name).toBe('office 2027');
+    expect(await toolError('update_list', { list: WORK, name: 'HOME' })).toMatch(/There is a list "Home" already/);
+    expect(await toolError('update_list', { list: WORK, name: ' :? ' })).toMatch(/name/);
+    expect(await toolError('update_list', { list: WORK })).toMatch(/Nothing to change/);
+    expect(await toolError('update_list', { list: 'Nope', name: 'x' })).toMatch(/no list "Nope"/);
+    expect((await tool('update_list', { list: WORK, name: 'office 2027' })).unchanged).toBe(true);
+  });
+
+  it('update_list moves a list among the lists (top, bottom, after another), as Move up / down does', async () => {
+    const trip = (await tool('create_list', { name: 'Trip' })).list;
+    expect(await names()).toEqual(['Work', 'Home', 'Trip']);
+    expect((await tool('update_list', { list: 'Trip', position: 'top' })).lists).toEqual(['Trip', 'Work', 'Home']);
+    expect((await tool('update_list', { list: 'Trip', after: 'Work' })).lists).toEqual(['Work', 'Trip', 'Home']);
+    expect((await tool('update_list', { list: trip.id, position: 'bottom', name: 'Berlin trip' })).lists).toEqual(['Work', 'Home', 'Berlin trip']);
+    expect((await tool('update_list', { list: 'Home', after: 'Work' })).unchanged).toBe(true);   // there already
+    expect(await toolError('update_list', { list: 'Home', after: 'Home' })).toMatch(/after itself/);
+    expect(await toolError('update_list', { list: 'Home', position: 'middle' })).toMatch(/top or bottom/);
+    // the order is the project rows' order keys, which every device sorts its lists by
+    const { results } = await env.DB.prepare('SELECT name, position FROM projects ORDER BY position, id').all();
+    expect(results.map((r) => r.name)).toEqual(['Work', 'Home', 'Berlin trip']);
+  });
+
+  it('delete_list: the list and all its tasks go to Recently deleted, untouched; restore_list brings back exactly that', async () => {
+    const before = await sync([], 0, 'phone-1');
+    const d = await tool('delete_list', { list: 'Work' });
+    expect(d.deleted).toEqual({ id: WORK, name: 'Work', tasks: 4 });
+    expect(d.note).toMatch(/Recently deleted for 30 days, with its 4 tasks: restore_list/);
+    expect((await projectRow(WORK)).deleted).toBe(1);
+    // its tasks are not deleted one by one (done ones included): they stay with the list, as the apps' Delete list leaves them
+    for (const id of ['plan0001', 'plan0002', 'plan0003', 'mail0001']) expect((await row(id)).deleted).toBe(0);
+    const next = await sync([], before.cursor, 'phone-1');
+    expect(next.changes.map((c) => [c.kind, c.id, c.fields?.deleted?.v])).toEqual([['project', WORK, true]]);
+    // gone from the lists, there to restore
+    const lists = await tool('get_lists');
+    expect(lists.lists.map((l) => l.name)).toEqual(['Home']);
+    expect(lists.deleted_lists).toEqual([{ id: WORK, name: 'Work', tasks: 4, deleted_at: expect.stringMatching(/^\d{4}-\d\d-\d\dT/) }]);
+    expect((await tool('list_tasks', { status: 'deleted' })).deleted_lists.map((l) => l.id)).toEqual([WORK]);
+    expect((await tool('list_tasks', { status: 'deleted', query: 'nothing like it' })).deleted_lists).toEqual([]);
+    expect((await tool('list_tasks', { status: 'all' })).tasks.map((t) => t.id)).toEqual(['home0001']);
+    // nothing in it can be changed, it says why
+    expect(await toolError('list_tasks', { list: 'Work' })).toMatch(/"Work" is deleted/);
+    expect(await toolError('add_tasks', { list: WORK, tasks: [{ text: 'x' }] })).toMatch(/is deleted/);
+    expect(await toolError('update_task', { id: 'mail0001', status: 'done' })).toMatch(/in the list "Work", which is deleted/);
+    expect(await toolError('update_list', { list: 'Work', name: 'x' })).toMatch(/is deleted/);
+    expect(await toolError('delete_list', { list: 'Work' })).toMatch(/is deleted/);
+    expect(await toolError('restore_list', { list: 'Home' })).toMatch(/"Home" is not deleted/);
+    expect(await toolError('restore_list', { list: 'Nope' })).toMatch(/no deleted list "Nope"/);
+    // back: same id, same place in the order, every task as it was
+    const r = await tool('restore_list', { list: 'work' });
+    expect(r).toEqual({ restored: { id: WORK, name: 'Work', tasks: 4 }, lists: ['Work', 'Home'] });
+    expect((await tool('list_tasks', { list: 'Work', status: 'all' })).tasks.map((t) => [t.id, t.status])).toEqual([
+      ['plan0001', 'todo'], ['plan0002', 'todo'], ['plan0003', 'done'], ['mail0001', 'todo']]);
+    expect((await tool('get_lists')).deleted_lists).toEqual([]);
+    const after = await sync([], next.cursor, 'phone-1');
+    expect(after.changes.map((c) => [c.kind, c.id, c.fields?.deleted?.v])).toEqual([['project', WORK, false]]);
+  });
+
+  it('a list deleted on a device is in deleted_lists too, and restore_list undoes it there', async () => {
+    const p = await projectRow(HOME);
+    await sync([{ kind: 'project', id: HOME, fields: { deleted: f(true, Date.now(), p.deleted_ts) } }], 0, 'phone-1');
+    expect((await tool('get_lists')).deleted_lists.map((l) => [l.name, l.tasks])).toEqual([['Home', 1]]);
+    await tool('restore_list', { list: HOME });
+    const out = await sync([], 0, 'phone-1');
+    expect(out.changes.find((c) => c.id === HOME).fields.deleted.v).toBe(false);
+  });
+
+  it('restore_list when another list has the name by now: asks for a new one, and keeps the id', async () => {
+    await tool('delete_list', { list: 'Home' });
+    const newer = (await tool('create_list', { name: 'home' })).list;
+    expect(await toolError('restore_list', { list: HOME })).toMatch(/There is a list "home" now: give restore_list a new name/);
+    expect(await toolError('restore_list', { list: HOME, name: 'HOME' })).toMatch(/already/);
+    const r = await tool('restore_list', { list: HOME, name: 'Home (old)' });
+    expect(r.restored).toEqual({ id: HOME, name: 'Home (old)', tasks: 1 });
+    // (the new list took the deleted one's order key: the two tie, broken by their random ids)
+    expect((await names()).sort()).toEqual(['Home (old)', 'Work', 'home']);
+    expect((await projectRow(HOME)).name).toBe('Home (old)');
+    expect((await tool('list_tasks', { list: newer.id, status: 'all' })).tasks).toEqual([]);
+  });
+
+  it('the user\'s last list is not deleted', async () => {
+    await tool('delete_list', { list: 'Home' });
+    expect(await toolError('delete_list', { list: 'Work' })).toMatch(/only list/);
+    expect((await projectRow(WORK)).deleted).toBe(0);
+  });
+
+  it('a list counts as several deletes in the hourly budget, however many tasks it holds', async () => {
+    for (let i = 0; i < DELETE_LIMIT / LIST_DELETE_COST + 1; i++) await tool('create_list', { name: `Old ${i}` });
+    for (let i = 0; i < DELETE_LIMIT / LIST_DELETE_COST; i++) await tool('delete_list', { list: `Old ${i}` });
+    expect(await toolError('delete_list', { list: `Old ${DELETE_LIMIT / LIST_DELETE_COST}` })).toMatch(/Not deleted.*a list counting as 5/);
+    expect(await toolError('delete_task', { id: 'home0001' })).toMatch(/Not deleted/);   // the same budget
+    await env.DB.prepare('UPDATE connector SET delete_start = ?1').bind(Date.now() - 3601_000).run();
+    expect((await tool('delete_list', { list: `Old ${DELETE_LIMIT / LIST_DELETE_COST}` })).deleted.name).toBe('Old 5');
+    // and tasks deleted before leave less room for a list
+    await env.DB.prepare('UPDATE connector SET delete_count = ?1, delete_start = ?2').bind(DELETE_LIMIT - LIST_DELETE_COST + 1, Date.now()).run();
+    expect(await toolError('delete_list', { list: 'Home' })).toMatch(/Not deleted/);
+  });
+
+  it('a list the owner shares: deleting it hides it from its people and keeps the sharing; restoring brings it back to them', async () => {
+    const inv = await ok('/api/shares/invite', { body: { projectId: WORK, alias: 'Nuca', access: 'edit' } });
+    const { token } = await ok('/api/shares/claim', { body: { code: inv.code }, token: null });
+    const theirs = await sync([], 0, 'nuca-1', token);
+    // a rename reaches them as one
+    await tool('update_list', { list: 'Work', name: 'Team' });
+    const renamed = await sync([], theirs.cursor, 'nuca-1', token);
+    expect(projectsSeen(renamed).map((p) => p.fields.name.v)).toEqual(['Team']);
+    const d = await tool('delete_list', { list: 'Team' });
+    expect(d.deleted).toEqual({ id: WORK, name: 'Team', tasks: 4, shared_with: 1 });
+    expect(d.note).toMatch(/people the user shares it with do not see it/);
+    expect((await tool('get_lists')).deleted_lists[0]).toMatchObject({ id: WORK, shared_by_you: true });
+    const gone = await sync([], renamed.cursor, 'nuca-1', token);
+    expect(projectsSeen(gone).map((p) => p.fields.deleted.v)).toEqual([true]);
+    const t1 = await row('mail0001');
+    const refused = await sync([{ kind: 'task', id: 'mail0001', fields: { text: f('edited meanwhile', Date.now(), t1.text_ts) } }], gone.cursor, 'nuca-1', token);
+    expect(refused.rejected[0].reason).toBe('the owner deleted this list');
+    expect((await env.DB.prepare('SELECT COUNT(*) AS n FROM shares WHERE revoked_at IS NULL').first('n'))).toBe(1);
+    await tool('restore_list', { list: WORK });
+    const back = await sync([], refused.cursor, 'nuca-1', token);
+    expect(projectsSeen(back).map((p) => [p.fields.name.v, p.fields.deleted.v])).toEqual([['Team', false]]);
+    const t2 = await row('mail0001');
+    const edit = await sync([{ kind: 'task', id: 'mail0001', fields: { text: f('edited after', Date.now(), t2.text_ts) } }], back.cursor, 'nuca-1', token);
+    expect(edit.rejected).toEqual([]);
+    expect((await row('mail0001')).text).toBe('edited after');
   });
 });

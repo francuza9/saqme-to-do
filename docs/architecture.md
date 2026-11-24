@@ -318,8 +318,9 @@ files have no English left in them.
   key can show it (`GET /api/connector`). *New connector URL* replaces the nonce; *Disconnect* turns it off (and
   replaces it). The endpoint ignores `Authorization` headers, so neither the sync key nor a share key reaches the
   tools; keys are compared as SHA-256 digests in constant time; a wrong one reads one row and writes nothing (404).
-  Its writes go through the sync merge as device `ai-connector`; no tool deletes a list; deletes are tombstones, at
-  most 25 tasks an hour; 120 calls a minute. Lists shared with the user are not reachable through it (they are on
+  Its writes go through the sync merge as device `ai-connector`; deletes are tombstones (a list's is its project's
+  `deleted`, its tasks untouched), at most 25 tasks an hour, a list counting as 5; 120 calls a minute. The local
+  servers for Claude Desktop have the same tools but the three that rename, delete and restore lists. Lists shared with the user are not reachable through it (they are on
   their owners' Workers). The Linux/macOS local server serves no connector of its own and passes the window's
   Settings > Use with AI to the cloud Worker. Covered by `worker/test/workers/connector.test.js` and
   `test/node/connector-engine.test.js` (MCP edits reach a lists folder through the desktop engine).

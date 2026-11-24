@@ -209,13 +209,11 @@ function Get-McpInsertAt($items, $siblings, $parent, $position, $after) {
 
 # ---------------------------------------------------------------- Recently deleted (the widget's recently-deleted.json)
 function Get-McpDeletedPath($ctx) { return (Join-Path $ctx.DataDir 'recently-deleted.json') }
+# (the lists the app deleted are entries too: kept as they are when this rewrites the file, never shown as tasks)
 function Read-McpDeleted($ctx) {
   if (-not $ctx) { $ctx = $script:McpCtx }
   if (-not $ctx) { return }
-  $t = Read-TextFile (Get-McpDeletedPath $ctx)
-  if (-not $t) { return }
-  try { $o = ConvertFrom-JsonText $t } catch { return }
-  $o | Where-Object { $_ -is [System.Collections.IDictionary] -and $_['text'] }
+  Read-RecentlyDeleted (Get-McpDeletedPath $ctx)
 }
 function Save-McpDeleted($ctx, $entries) { Write-TextFileAtomic (Get-McpDeletedPath $ctx) (ConvertTo-JsonText @($entries)) }
 

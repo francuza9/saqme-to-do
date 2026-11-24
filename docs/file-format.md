@@ -102,11 +102,11 @@ Windows (`%APPDATA%\SaqmeToDo`):
 | `lists\.remotes.json` | lists shared with this PC: which file syncs with whose server (`id`, `file`, `server`, `project`, `access`, `name`, `joinedAt`; no keys). Changed only by the app ([shared lists](sync.md#shared-lists)) |
 | `lists\.state` | which tasks are open or closed (per device, not synced) |
 | `lists\.notified` | reminders already shown on this PC (dedupe, last 7 days) |
-| `lists\.trash\` | deleted projects (`Name-YYYYMMDD-HHMMSS.md`), never erased automatically |
+| `lists\.trash\` | deleted projects (`Name-YYYYMMDD-HHMMSS.md`), never erased automatically; a copy whose list was restored is renamed `Name-YYYYMMDD-HHMMSS.restored` |
 | `lists\.recovery\` | edits the app could not save before you quit or switched lists (the file was locked by another program); copy back what you need |
 | `.widget-settings` | app settings (`theme`, `lang`, `notifyAt`, window size, …), `key=value` |
 | `.widget-pos` | window position |
-| `recently-deleted.json` | tasks deleted in the widget in the last 30 days, as list lines with their ids (*Settings > Your lists > Recently deleted* restores them) |
+| `recently-deleted.json` | tasks deleted in the widget in the last 30 days, as list lines with their ids, and lists deleted there (their file in `.trash`, their place in the order; *Settings > Your lists > Recently deleted* restores them) |
 | `backups\<yyyyMMdd-HHmmss>-<reason>\` | copies of the lists (`*.md` and `.order`), made by the app: at start, once a day, before an update, before confirmed deletions; the 10 newest and one a day for 30 days are kept (*Settings > Your lists > Backups* brings back what is missing, [sync.md](sync.md#desktop-engine-powershell-and-its-javascript-port)) |
 | `sync\config.json` | server address, access token, this device's id (private) |
 | `sync\state.json` | sync engine state (server rows, last synced base, unsent changes) |

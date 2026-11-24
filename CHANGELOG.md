@@ -1,5 +1,33 @@
 # Changes
 
+## Unreleased
+
+**Your AI can rename, reorder, delete and restore lists** (Connect Claude / Connect ChatGPT, through your sync
+service). Three new tools: `update_list` (rename a list, or move it to the top, the bottom or after another list; same
+id, tasks and sharing, and your computers rename its file and `.order`), `delete_list` (the whole list with all its
+tasks, done ones too, into *Recently deleted* for 30 days, as *Delete list* in the apps does: nothing is erased) and
+`restore_list` (back with its tasks, id and place, under a new name if another list took its name meanwhile).
+`get_lists` and `list_tasks` with status `deleted` show the deleted lists. A deleted list counts as 5 of the 25 deletes
+the connector may make an hour, and your last list is never deleted. A list you share disappears for the people you
+share it with while it is deleted and comes back for them when it is restored (the sharing is never changed). Claude
+Desktop (Connect Claude Desktop) does not get these three: on the computer it never renames or removes a list file.
+
+- **Windows: deleted lists are in Recently deleted** (Settings › Your lists), above the tasks, each with *Restore*.
+  With sync: every list deleted on any device (by the AI too); Restore brings it back everywhere. Without sync: the
+  lists deleted in the app; Restore moves the file back from `lists\.trash` into its old place.
+- **A list restored on another device comes back as its file was** on Windows, Linux and macOS: from its copy in
+  `lists/.trash`, headings and notes between the tasks included, instead of from its tasks alone. That copy is then
+  renamed `*.restored`, so the restored list's file vanishing later is never taken for a delete made on purpose.
+- Windows: Recently deleted no longer lists a task of a deleted list on its own (it comes back with its list, as on
+  the phone).
+
+Code: `worker/src/mcp.js` (the tools; `LIST_TOOLS` are left out of `LOCAL_TOOLS`), `worker/src/connector.js`
+(`LIST_DELETE_COST`), `Get-TrashedListText` / `trashedListText` in `desktop/sync-core.ps1` / `local/engine.mjs`,
+`Get-DeletedLists` / `Restore-DeletedList` in `desktop/widget.ps1`, `Read-RecentlyDeleted` (sync-core.ps1, shared by the
+widget and `mcp-core.ps1`). Tests: `connector.test.js` ("managing lists"), four new `plan` cases in
+`shared/fixtures/engine.json` (both engines), the widget's self-check (`LIST RESTORE OK`; `LIST SYNC RESTORE OK` with
+a sync service), `claude-desktop.test.js`.
+
 ## 1.2.6
 
 **Five languages: English, Georgian (ქართული), French, Spanish and German.** Every app speaks them: the phone app,

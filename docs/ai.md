@@ -70,13 +70,15 @@ paste it there, and choose no sign-in if it asks.
 - "Move everything about the Berlin trip to Travel."
 - "Mark the first two as done and set the third for Friday at 2 pm."
 - "What have I been putting off?"
+- "Rename *Errands* to *Groceries* and put it first." / "Delete the *Old trip* list." / "Bring back the list I deleted."
 
 ## Good to know
 
 - **Keep the link private, like a password.** Anyone who has it can see and change your lists. If it got out, click
   **Make a new link** in Saqme: the old one stops working at once. **Disconnect** turns it off completely.
-- **Your AI can't delete a list,** and anything it deletes waits in **Recently deleted** for 30 days, where you can
-  bring it back (or ask the AI to).
+- **Anything your AI deletes waits in Recently deleted** for 30 days, a whole list too, where you can bring it back
+  (or ask the AI to). A list comes back with all its tasks, in its old place. Claude Desktop can't rename or delete
+  lists: do that in Saqme.
 - **It only does what you ask,** and Claude and ChatGPT ask you before they change anything (unless you tell them
   not to).
 - **Lists someone else shares with you** can't be reached through the link: change those in Saqme. Claude Desktop
@@ -109,8 +111,18 @@ no instructions from you.
 | `delete_task` | A task and its subtasks, into *Recently deleted* (30 days). |
 | `restore_task` | Brings a deleted task back, with the subtasks deleted together with it. |
 | `create_list` | A new, empty list at the end. |
+| `update_list` | Renames a list or moves it among your lists (top, bottom, after another). Same id, tasks and sharing. |
+| `delete_list` | A list with all its tasks, done ones too, into *Recently deleted* (30 days). Not your last list. |
+| `restore_list` | Brings a deleted list back with its tasks, id and place (under a new name if its old one is taken). |
 
-There is no tool that deletes a list, and none that renames, reorders or shares one.
+`get_lists` also names the lists in *Recently deleted* (`deleted_lists`), and so does `list_tasks` with status
+`deleted`. There is no tool that shares a list. **Claude Desktop** (Connect Claude Desktop, no sync) has every tool
+but `update_list`, `delete_list` and `restore_list`: on the computer it never renames or removes a list file.
+
+**What a deleted list is.** The same as *Delete list* in the apps: the list (its project row) is marked deleted and
+its tasks stay with it, untouched, so restoring it brings back exactly what was there. Your computers move its file to
+`lists/.trash`; when it comes back they write it again from that copy, headings and notes included (and mark the copy
+`*.restored`). Renaming a list renames its file and `.order` on your computers, the same way.
 
 **How its changes travel.** The tools write through the same path as your devices' sync (the merge rules of
 [sync.md](sync.md), as the device `ai-connector`). Your phone and computers get the changes with their next sync, ids
@@ -121,12 +133,14 @@ deadlines. If you edit the same task on a device at the same moment, the newer e
 **Shared lists.** Lists shared with you by someone else live on *their* sync service, so the connector cannot reach
 them: `get_lists` names the ones your phone app joined, and tells the model to send you to the app. Lists *you* share
 are yours: the connector edits them like any other list, and the people you share them with get the changes through
-their sync (a task moved out of the list leaves their copy).
+their sync (a task moved out of the list leaves their copy, a rename renames it). Deleting a list you share hides it
+from them, as *Delete list* in the app does; the sharing itself stays, so `restore_list` brings it back for them too.
+To stop sharing, revoke the person in the app's Share view.
 
 ### Security: the link is a key
 
-- Whoever has the link can read and change your lists (not delete a list; deletes stay restorable). Claude and
-  ChatGPT keep it in your account's connector settings.
+- Whoever has the link can read and change your lists; what it deletes, tasks or lists, stays restorable for 30 days.
+  Claude and ChatGPT keep it in your account's connector settings.
 - **Make a new link** (`POST /api/connector/rotate`) replaces it; the old link stops working at once. **Disconnect**
   (`POST /api/connector/disconnect`) turns it off until **Connect your AI** makes a new one.
 - It is **not your sync key**, and the sync key cannot be worked out from it. The connector key is
@@ -147,7 +161,9 @@ AI app you want requires OAuth, it can be added on the same Worker later.
 
 - At most **25 deleted tasks an hour** (subtasks count). More is refused with a message that sends you to the app:
   the same care the apps take when many tasks vanish from the lists folder at once (*Deletions paused*,
-  [sync.md](sync.md)). A task with more than 25 subtasks is left to the app altogether.
+  [sync.md](sync.md)). A task with more than 25 subtasks is left to the app altogether. A deleted list counts as 5,
+  however many tasks it holds (they all come back with it), so at most 5 lists an hour; your last list is never
+  deleted.
 - At most **120 calls a minute**, 50 new tasks per call, 200 tasks per answer (the model narrows its filter when there
   are more). That keeps the Worker well inside Cloudflare's free plan.
 - **Text in your lists is text, not orders.** If an assistant also reads web pages or mail, a note copied from there

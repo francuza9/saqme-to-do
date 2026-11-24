@@ -162,7 +162,11 @@ One cycle:
    in-place line edits, removed lines (subtasks move up a level), moves and new tasks placed among their
    siblings by `pos` (after the previous sibling's subtree, so a task stays in its heading's section),
    new/renamed/deleted (→ `lists\.trash`, only if the list still holds what the plan saw) list files, list
-   order. Only the fields the server changed are
+   order. A deleted list that comes back (restored on another device) is written from its newest copy in
+   `lists/.trash` when that holds exactly its tasks, with the server's changes since applied, so its headings and
+   prose come back too (`Get-TrashedListText` / `trashedListText`; else from its tasks); its copies there are
+   renamed `*.restored`, so that the restored file vanishing later is not taken for a delete made on purpose.
+   Only the fields the server changed are
    written into a line. Moved and arriving tasks are placed parents first, each after the already-placed
    sibling with the next smaller `(pos, id)`. All files are staged first; lists that gain tasks are
    replaced before lists that lose them. Headings, prose and blank lines are kept as they are.
@@ -193,7 +197,10 @@ done.)
 one list, a move to another list both), as long as nothing else has changed them since. Deleted tasks are
 kept for 30 days in `recently-deleted.json` in the data folder, outside the lists folder. With sync on, tasks
 deleted on other devices (from the engine's state) show there too. A restore writes the lines back with their
-ids, which sync sends as not deleted. A restore of a task that a plan removed tells the engine so, otherwise
+ids, which sync sends as not deleted. Deleted lists come first: with sync on, every list deleted on any device (the
+engine's state); restoring one sends its project as not deleted, as the phone does, and the next plan writes its
+file again in its old place. Without sync, the lists deleted in the app (an entry in `recently-deleted.json`):
+restoring one moves its file back from `lists\.trash` into its old place in `.order`. A restore of a task that a plan removed tells the engine so, otherwise
 the engine would take the line for a save from an older copy (below) and keep the delete.
 
 On first contact with a server (empty state), the desktop pulls first and adopts server projects with the
@@ -629,8 +636,12 @@ make the field changes a device would (`{ v, ts: now, base: <the ts it read> }`)
 the write path of `/api/sync`, as the device `ai-connector`. So its edits get a `seq`, reach every device with its next
 sync and merge with concurrent edits like a device's (newest wins, the other kept as a conflict); moves change `place`
 only (the subtasks' project too, when a task moves to another list); deletes and restores set `deleted`; a new list is
-a project row. It never removes a row and never deletes a project. A task moved out of a list the owner shares
-leaves the people's copies as `gone`, as any move does. It reads `tz` (the setting the apps sync) for "today".
+a project row. Lists are changed as the apps change them: `update_list` sets the project's `name` or `pos`,
+`delete_list` and `restore_list` its `deleted` (its tasks are not touched, so they come back with it; a list counts
+as 5 of the 25 deletes an hour; the last live list is refused). It never removes a row. A task moved out of a list the
+owner shares leaves the people's copies as `gone`, as any move does; a list the owner shares and deletes is refused to
+its people ("the owner deleted this list") and hidden by their apps until it is restored, the shares untouched. It
+reads `tz` (the setting the apps sync) for "today".
 
 ## Guarantees and limits
 

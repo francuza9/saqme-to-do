@@ -2431,7 +2431,7 @@ function linkSection() {
       actionRow(t('ai.connectName', { name: 'ChatGPT' }), () => connectAssistant('chatgpt'), { help: t('ai.connectNameHelp', { name: 'ChatGPT' }), fk: 'ai-chatgpt' }),
       actionRow(t('ai.copyLink'), () => copyText(c.url, t('ai.copiedPasteApp')), { name: t('ai.copyLinkName'), help: t('ai.copyLinkHelp'), fk: 'ai-copy' }),
     ));
-    out.push(foot(c.lastUsedAt ? `${t('ai.onFoot')} ${t('ai.lastUsed', { ago: ago(c.lastUsedAt) })}` : t('ai.onFoot')));
+    out.push(foot(c.lastUsedAt ? `${t('ai.onFootLists')} ${t('ai.lastUsed', { ago: ago(c.lastUsedAt) })}` : t('ai.onFootLists')));
     out.push(head(t('ai.yourLink')), card(
       actionRow(t('ai.rotate'), () => confirmConnector('rotate'), { help: t('ai.rotateHelp'), fk: 'ai-rotate' }),
       actionRow(t('ai.disconnect'), () => confirmConnector('disconnect'), { danger: true, name: t('ai.disconnectName'), help: t('ai.disconnectHelp'), fk: 'ai-disconnect' }),
