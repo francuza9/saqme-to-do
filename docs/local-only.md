@@ -10,7 +10,7 @@ This page lists what you get on each platform, how to start, and what only works
 | **Linux** | Yes, by default | `curl -fsSL …/scripts/setup.sh \| bash` ([setup.md, 2](setup.md#2-install-on-linux-or-macos)) | the same. Needs Node.js 22.13+; setup downloads one. It runs on x64 with glibc 2.17+ (Ubuntu 18.04, CentOS 7 and newer) and on arm64 with glibc 2.28+; musl (Alpine) needs your own Node.js |
 | **macOS** | Yes, by default | the same command | the same. macOS 11 or newer (setup downloads Node.js 22 on 11–13.4, 24 on 13.5+) |
 | **Android** | Yes | open <https://francuza9.github.io/saqme-to-do/> in Chrome, **Use it on this device**, then **Install app** | **reminders** (push notifications come from your sync service); lists on other devices. Back up with **Export lists** |
-| **iPhone** | Yes | the same address in Safari, **Use it on this device**, then **Share > Add to Home Screen** and use it from there | the same as Android |
+| **iPhone** | Yes | the same address in Safari, **Use it on this device**, then **Share > Add to Home Screen** (on iOS 26, **Share** is in the **⋯** menu) and use it from there | the same as Android |
 | **WSL** | (use the Windows app) | the Linux command prints the Windows one-liner; `--app` installs the Linux app inside WSL | — |
 
 ## What "without an account" means on each
@@ -53,8 +53,9 @@ This page lists what you get on each platform, how to start, and what only works
 - **Android (Chrome):** open the Pages address, **Use it on this device**, add a task, menu **Install app**. Open
   it from the app drawer: the task is there. Airplane mode, then reopen it: it still opens. Check that
   **Settings > Notifications** says *Need sync*.
-- **iPhone (Safari):** the same, with **Share > Add to Home Screen**. Lists made in Safari do not carry over
-  to the Home Screen app (iOS gives it storage of its own); export and import them if you need to.
+- **iPhone (Safari):** the same, with **Share > Add to Home Screen** (on iOS 26, **Share** is in the **⋯**
+  menu). Lists made in Safari do not carry over to the Home Screen app (iOS gives it storage of its own);
+  export and import them if you need to.
 - **macOS 12 or 13.0–13.4** (if you have one): the setup one-liner should download *Node.js v22…* and finish.
   On any Mac, a deadline reminder should show in Notification Center. They are shown through AppleScript, so
   if none appears, allow **Script Editor** in System Settings > Notifications.
