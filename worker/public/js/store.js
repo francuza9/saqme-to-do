@@ -13,7 +13,7 @@
 // project. Each sync runs one session per list, and a shared list's server can only ever change rows of its
 // own list here.
 
-import { buildTree, positionAt, subtreeIds, newId, cleanProjectName } from './model.js';
+import { buildTree, positionAt, posNode, subtreeIds, newId, cleanProjectName } from './model.js';
 import { keyBetween, cmpPos } from './keys.js';
 import { listTree, treeToMarkdown, toFileName, MARKS, isValidDate as validDate } from './markdown.js';
 import { parseInviteLink } from './pairing.js';
@@ -318,8 +318,7 @@ export class Store extends EventTarget {
     if (i < 0 || j < 0 || j >= list.length) return;
     const others = list.filter((p) => p.id !== id);
     const at = dir < 0 ? j : j;   // index among the others
-    const nodes = others.map((p) => ({ id: p.id, task: { fields: { place: { v: { pos: this.projectPos(p) } } } } }));
-    const { pos, rekeys } = positionAt(nodes, at);
+    const { pos, rekeys } = positionAt(others.map((p) => posNode(p.id, this.projectPos(p))), at);
     for (const [rid, k] of rekeys) this.setProjectPos(rid, k);
     this.setProjectPos(id, pos);
   }

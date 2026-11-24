@@ -185,6 +185,106 @@
       "filesAfter": { "pwork001": "Work" }
     },
     {
+      "name": "a deleted list restored elsewhere comes back as its file in lists/.trash was (headings, prose, done tasks), in its old place; the copy is marked restored",
+      "lists": {
+        "Work.md": "- [ ] A ^aaaaaaaa\n", "Home.md": "- [ ] H ^hhhhhhhh\n", ".order": "Work\nHome\n",
+        ".trash/Groceries-20261101-101010.md": "# Groceries\nFor the weekend.\n- [ ] Milk ^gggggg01\n- [x] Bread ^gggggg02\n  - [ ] Rye ^gggggg03\n\n## Later\n- [ ] Coffee ^gggggg04\n"
+      },
+      "files": { "pwork001": "Work", "phome001": "Home" },
+      "S": [
+        { "p": "pwork001", "name": "Work", "pos": "a0" },
+        { "p": "pgroc001", "name": "Groceries", "pos": "a1", "deleted": true },
+        { "p": "phome001", "name": "Home", "pos": "a2" },
+        { "t": "aaaaaaaa", "in": "pwork001", "pos": "a0", "text": "A" },
+        { "t": "hhhhhhhh", "in": "phome001", "pos": "a0", "text": "H" },
+        { "t": "gggggg01", "in": "pgroc001", "pos": "a0", "text": "Milk" },
+        { "t": "gggggg02", "in": "pgroc001", "pos": "a1", "text": "Bread", "status": "x" },
+        { "t": "gggggg03", "in": "pgroc001", "pos": "a0", "text": "Rye", "parent": "gggggg02" },
+        { "t": "gggggg04", "in": "pgroc001", "pos": "a2", "text": "Coffee" }
+      ],
+      "R": [
+        { "p": "pwork001", "name": "Work", "pos": "a0" },
+        { "p": "pgroc001", "name": "Groceries", "pos": "a1" },
+        { "p": "phome001", "name": "Home", "pos": "a2" },
+        { "t": "aaaaaaaa", "in": "pwork001", "pos": "a0", "text": "A" },
+        { "t": "hhhhhhhh", "in": "phome001", "pos": "a0", "text": "H" },
+        { "t": "gggggg01", "in": "pgroc001", "pos": "a0", "text": "Milk" },
+        { "t": "gggggg02", "in": "pgroc001", "pos": "a1", "text": "Bread", "status": "x" },
+        { "t": "gggggg03", "in": "pgroc001", "pos": "a0", "text": "Rye", "parent": "gggggg02" },
+        { "t": "gggggg04", "in": "pgroc001", "pos": "a2", "text": "Coffee" }
+      ],
+      "after": {
+        "Work.md": "- [ ] A ^aaaaaaaa\n", "Home.md": "- [ ] H ^hhhhhhhh\n", ".order": "Work\nGroceries\nHome\n",
+        "Groceries.md": "# Groceries\nFor the weekend.\n- [ ] Milk ^gggggg01\n- [x] Bread ^gggggg02\n  - [ ] Rye ^gggggg03\n\n## Later\n- [ ] Coffee ^gggggg04\n"
+      },
+      "trash": ["Groceries-20261101-101010.restored"],
+      "filesAfter": { "pwork001": "Work", "phome001": "Home", "pgroc001": "Groceries" }
+    },
+    {
+      "name": "a restored list whose copy in lists/.trash lacks one of its tasks now (restored on its own) is written from its tasks; the copy is marked restored all the same",
+      "lists": {
+        "Work.md": "- [ ] A ^aaaaaaaa\n",
+        ".trash/Groceries-20261101-101010.md": "# Groceries\n- [ ] Milk ^gggggg01\n",
+        ".trash/Work-20261001-090000.md": "- [ ] Old work ^wwwwwww1\n"
+      },
+      "files": { "pwork001": "Work" },
+      "S": [
+        { "p": "pwork001", "name": "Work", "pos": "a0" },
+        { "p": "pgroc001", "name": "Groceries", "pos": "a1", "deleted": true },
+        { "t": "aaaaaaaa", "in": "pwork001", "pos": "a0", "text": "A" },
+        { "t": "gggggg01", "in": "pgroc001", "pos": "a0", "text": "Milk" },
+        { "t": "gggggg05", "in": "pgroc001", "pos": "a1", "text": "Eggs", "deleted": true }
+      ],
+      "R": [
+        { "p": "pwork001", "name": "Work", "pos": "a0" },
+        { "p": "pgroc001", "name": "Groceries", "pos": "a1" },
+        { "t": "aaaaaaaa", "in": "pwork001", "pos": "a0", "text": "A" },
+        { "t": "gggggg01", "in": "pgroc001", "pos": "a0", "text": "Milk" },
+        { "t": "gggggg05", "in": "pgroc001", "pos": "a1", "text": "Eggs" }
+      ],
+      "after": { "Work.md": "- [ ] A ^aaaaaaaa\n", "Groceries.md": "- [ ] Milk ^gggggg01\n- [ ] Eggs ^gggggg05\n", ".order": "Work\nGroceries\n" },
+      "trash": ["Groceries-20261101-101010.restored", "Work-20261001-090000.md"],
+      "filesAfter": { "pwork001": "Work", "pgroc001": "Groceries" }
+    },
+    {
+      "name": "a deleted list restored elsewhere that this computer has no copy of is written from its tasks, done ones too",
+      "lists": { "Work.md": "- [ ] A ^aaaaaaaa\n" },
+      "files": { "pwork001": "Work" },
+      "S": [
+        { "p": "pwork001", "name": "Work", "pos": "a1" },
+        { "p": "pgroc001", "name": "Groceries", "pos": "a0", "deleted": true },
+        { "t": "aaaaaaaa", "in": "pwork001", "pos": "a0", "text": "A" },
+        { "t": "gggggg01", "in": "pgroc001", "pos": "a0", "text": "Milk", "status": "x" }
+      ],
+      "R": [
+        { "p": "pwork001", "name": "Work", "pos": "a1" },
+        { "p": "pgroc001", "name": "Groceries", "pos": "a0" },
+        { "t": "aaaaaaaa", "in": "pwork001", "pos": "a0", "text": "A" },
+        { "t": "gggggg01", "in": "pgroc001", "pos": "a0", "text": "Milk", "status": "x" }
+      ],
+      "after": { "Work.md": "- [ ] A ^aaaaaaaa\n", "Groceries.md": "- [x] Milk ^gggggg01\n", ".order": "Groceries\nWork\n" },
+      "filesAfter": { "pwork001": "Work", "pgroc001": "Groceries" }
+    },
+    {
+      "name": "lists put in another order elsewhere: lists/.order follows",
+      "lists": { "Work.md": "- [ ] A ^aaaaaaaa\n", "Home.md": "- [ ] H ^hhhhhhhh\n", ".order": "Work\nHome\n" },
+      "files": { "pwork001": "Work", "phome001": "Home" },
+      "S": [
+        { "p": "pwork001", "name": "Work", "pos": "a0" },
+        { "p": "phome001", "name": "Home", "pos": "a1" },
+        { "t": "aaaaaaaa", "in": "pwork001", "pos": "a0", "text": "A" },
+        { "t": "hhhhhhhh", "in": "phome001", "pos": "a0", "text": "H" }
+      ],
+      "R": [
+        { "p": "pwork001", "name": "Work", "pos": "a2" },
+        { "p": "phome001", "name": "Home", "pos": "a1" },
+        { "t": "aaaaaaaa", "in": "pwork001", "pos": "a0", "text": "A" },
+        { "t": "hhhhhhhh", "in": "phome001", "pos": "a0", "text": "H" }
+      ],
+      "after": { "Work.md": "- [ ] A ^aaaaaaaa\n", "Home.md": "- [ ] H ^hhhhhhhh\n", ".order": "Home\nWork\n" },
+      "filesAfter": { "pwork001": "Work", "phome001": "Home" }
+    },
+    {
       "name": "a list saved with CRLF keeps CRLF when a change from elsewhere is written",
       "lists": { "Work.md": "- [ ] A ^aaaaaaaa\r\n  > note\r\n- [ ] B ^bbbbbbbb\r\n" },
       "files": { "pwork001": "Work" },

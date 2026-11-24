@@ -85,6 +85,9 @@ export function isAncestor(maybeAncestor, node) {
 /** Siblings list (ordered) of a node, given the tree. */
 export const siblingsOf = (tree, node) => (node.parent ? node.parent.kids : tree.roots);
 
+/** A list (or anything else with an order key) as a node positionAt takes. */
+export const posNode = (id, pos) => ({ id, task: { fields: { place: { v: { pos } } } } });
+
 /**
  * Position for inserting into `siblings` (ordered nodes) at index `at` (0..length).
  * Returns { pos, rekeys: [[id, pos], ...] } — rekeys only when neighbours share a key.

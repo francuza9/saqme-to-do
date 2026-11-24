@@ -107,8 +107,10 @@ export async function connectorRateOk(env, now = Date.now()) {
 
 // Deletes through the connector have a budget, as a mass delete in the lists folder is held back by the apps
 // ("Deletions paused", docs/sync.md): at most DELETE_LIMIT tasks (subtasks count) an hour. More is left to the user,
-// in the app.
+// in the app. A whole list counts as LIST_DELETE_COST, however many tasks it holds (they all come back with it, in
+// one restore), so at most 5 lists an hour.
 export const DELETE_LIMIT = 25;
+export const LIST_DELETE_COST = 5;
 const DELETE_WINDOW = 3600_000;
 
 /** Takes n deletes from this hour's budget: false (and nothing taken) when they do not fit. */

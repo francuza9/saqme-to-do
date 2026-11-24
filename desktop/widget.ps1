@@ -1137,27 +1137,24 @@ function Undo-Last {
 }
 
 # ---------------------------------------------------------------- recently deleted
-# Tasks deleted here, and with sync on also those deleted on other devices, can be restored for 30 days. The
-# widget's own deletes are kept in recently-deleted.json in the data folder (outside the lists folder: nothing
-# syncs or reads it as a list). Restoring writes the lines back with their ids; sync sends them as not deleted.
+# Tasks and lists deleted here, and with sync on also those deleted on other devices, can be restored for 30 days.
+# The widget's own deletes are kept in recently-deleted.json in the data folder (sync-core.ps1 Read-RecentlyDeleted).
+# Restoring a task writes its lines back with their ids; sync sends them as not deleted. A list: see Get-DeletedLists.
 $deletedFile = Join-Path $DataDir 'recently-deleted.json'
 $TrashMs = [long]30 * 86400000
 function Get-NowMs { return [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds() }
-function Read-DeletedJournal {   # the entries, one by one
-  $t = Read-TextFile $deletedFile
-  if (-not $t) { return }
-  try { $o = ConvertFrom-JsonText $t } catch { return }
-  $o | Where-Object { $_ -is [System.Collections.IDictionary] -and $_['text'] }
-}
+function Read-DeletedJournal { Read-RecentlyDeleted $deletedFile }   # the entries, one by one
 function Save-DeletedJournal($entries) { try { Write-TextFileAtomic $deletedFile (ConvertTo-JsonText @($entries)) } catch {} }
+function Add-DeletedJournalEntry($entry) {
+  $now = Get-NowMs
+  $keep = @(Read-DeletedJournal | Where-Object { $now - [long]$_['at'] -lt $TrashMs } | Select-Object -Last 199)
+  Save-DeletedJournal ($keep + ,$entry)
+}
 function Add-DeletedEntry($block, [string]$parent, [string]$listName) {
   $tasks = @($block | Where-Object { $_.Kind -eq 'task' -and $_.Text -ne '' })
   if (-not $tasks.Count) { return }
-  $now = Get-NowMs
-  $keep = @(Read-DeletedJournal | Where-Object { $now - [long]$_['at'] -lt $TrashMs } | Select-Object -Last 199)
-  $entry = @{ key = (New-SaqmeId 10); list = $listName; at = $now; parent = $parent; text = (Serialize-Block $tasks); first = [string]$tasks[0].Text
-              count = $tasks.Count; ids = @($tasks | ForEach-Object { [string]$_.Id }) }
-  Save-DeletedJournal ($keep + ,$entry)
+  Add-DeletedJournalEntry @{ key = (New-SaqmeId 10); list = $listName; at = (Get-NowMs); parent = $parent; text = (Serialize-Block $tasks); first = [string]$tasks[0].Text
+                             count = $tasks.Count; ids = @($tasks | ForEach-Object { [string]$_.Id }) }
 }
 # the ids in every list (the open one as it is in memory)
 function Get-AllListIds {
@@ -1175,7 +1172,7 @@ function Get-DeletedEntries {
   $seen = New-Object 'System.Collections.Generic.HashSet[string]'
   $out = New-Object System.Collections.ArrayList
   foreach ($e in (Read-DeletedJournal)) {
-    if ($now - [long]$e['at'] -ge $TrashMs) { continue }
+    if ($e['kind'] -eq 'list' -or $now - [long]$e['at'] -ge $TrashMs) { continue }   # (lists: Get-DeletedLists)
     $ids = @($e['ids'] | ForEach-Object { [string]$_ })
     foreach ($id in $ids) { [void]$seen.Add($id) }
     if (-not @($ids | Where-Object { -not $present.Contains($_) }).Count) { continue }   # all back already
@@ -1203,9 +1200,11 @@ function Get-SyncTombstones($present, $seen, [long]$now) {
     $id = [string]$r['id']; $ts = [long](Get-Field $r 'deleted')['ts']; $p = [string](Get-PlaceOf $r)['parent']
     if ($p -and $del.ContainsKey($p) -and [Math]::Abs([long](Get-Field $del[$p] 'deleted')['ts'] - $ts) -le 5000) { continue }   # went with its parent
     if ($seen.Contains($id) -or $present.Contains($id)) { continue }
+    $projId = [string](Get-PlaceOf $r)['project']
+    $proj = $st.R["project:$projId"]
+    if ($proj -and (Get-Field $proj 'deleted')['v']) { continue }   # its list is deleted: back with it (as on the phone)
     $its = New-Object System.Collections.ArrayList
     Add-TombstoneItems $its $r 0 $kids $ts $present
-    $projId = [string](Get-PlaceOf $r)['project']
     $listName = $(if ($st.Files.ContainsKey($projId)) { [string]$st.Files[$projId] } elseif ($st.R.ContainsKey("project:$projId")) { [string](Get-Field $st.R["project:$projId"] 'name')['v'] } else { '' })
     [void]$out.Add(@{ Key = "sync:$id"; List = $listName; At = $ts; Parent = $p; Text = (ConvertTo-MarkdownText $its 0); First = [string]$its[0].Text; Count = $its.Count })
   }
@@ -1253,18 +1252,81 @@ function Restore-Deleted($en) {
   Render
   if ($block.Count) { Show-Notice (T 'win.notice.restored' @{ task = $en.First; list = $target }) -Undo } else { Show-Notice (T 'win.notice.alreadyBack' @{ task = $en.First }) }
 }
+# Deleted lists, newest first: @{ Key; List; At; Count; Project } with sync, @{ Key; List; At; Count; File; Index } without.
+# With sync every list deleted on any device (the AI connector's too) is in the sync state; Restore undeletes it on the
+# server, as the phone does, and the next sync writes its file again (from its copy in lists\.trash: sync-core.ps1
+# Get-TrashedListText). Without sync, the lists deleted here (Delete-Project's entries): Restore moves the file back
+# from lists\.trash into its old place in the order.
+$script:restoringLists = @{}   # project id -> when Restore was clicked (hidden until the sync state has it back)
+function Get-DeletedLists {
+  $now = Get-NowMs
+  $out = New-Object System.Collections.ArrayList
+  if ($script:sync) {
+    try { $st = Read-SyncState (Join-Path $syncDir 'state.json') } catch { return }
+    foreach ($r in @($st.R.Values)) {
+      if ($r['kind'] -ne 'project') { continue }
+      $id = [string]$r['id']; $d = Get-Field $r 'deleted'; $name = [string](Get-Field $r 'name')['v']
+      if (-not $d['v'] -or -not $name -or $now - [long]$d['ts'] -ge $TrashMs) { continue }
+      if ($script:restoringLists.ContainsKey($id) -and $now - [long]$script:restoringLists[$id] -lt 60000) { continue }
+      [void]$out.Add(@{ Key = "list:$id"; List = $name; At = [long]$d['ts']; Count = (Get-LiveTaskIds $st.R $id).Count; Project = $id })
+    }
+  } else {
+    foreach ($e in (Read-DeletedJournal)) {
+      if ($e['kind'] -ne 'list' -or $now - [long]$e['at'] -ge $TrashMs) { continue }
+      if (-not (Test-Path -LiteralPath (Join-Path (Join-Path $listsDir '.trash') ([string]$e['file'])))) { continue }   # back already, or removed by hand
+      [void]$out.Add(@{ Key = [string]$e['key']; List = [string]$e['list']; At = [long]$e['at']; Count = [int]$e['count']; File = [string]$e['file']; Index = [int]$e['index'] })
+    }
+  }
+  $out | Sort-Object { $_.At } -Descending
+}
+function Restore-DeletedList($en) {
+  Commit-Edit
+  if ($en.Project) {
+    if (-not $script:sync) { Render; return }
+    $script:restoringLists[$en.Project] = Get-NowMs
+    $script:sync.Queue.Enqueue(@{ kind = 'project'; id = $en.Project; field = 'deleted'; value = $false })
+    Request-Sync
+    Render
+    Show-Notice (T 'win.notice.listComingBack' @{ list = $en.List })
+    return
+  }
+  $names = @(Get-ProjectNames)
+  $reserved = @{}; foreach ($n in $names) { $reserved[$n] = $true }
+  $name = Get-UniqueFileName $listsDir $en.List $reserved
+  try { Move-Item -LiteralPath (Join-Path (Join-Path $listsDir '.trash') $en.File) -Destination (Proj-Path $name) -ErrorAction Stop }
+  catch { Render; Show-Notice (T 'win.notice.listNotRestored' @{ list = $en.List }); return }
+  $order = New-Object System.Collections.ArrayList
+  foreach ($n in $names) { [void]$order.Add($n) }
+  $order.Insert([Math]::Max(0, [Math]::Min($en.Index, $order.Count)), $name)
+  Save-Order $order
+  Save-DeletedJournal @(Read-DeletedJournal | Where-Object { [string]$_['key'] -ne $en.Key })
+  $script:view = 'list'
+  Switch-Project $name
+  Show-Notice (T 'win.notice.listRestored' @{ list = $name })
+}
 function Format-Deleted([long]$ms) {
   $t = [DateTimeOffset]::FromUnixTimeMilliseconds($ms).LocalDateTime
   if ($t.Date -eq (Get-Date).Date) { return (T 'win.trash.today' @{ time = (Format-UiDate $t 'H:mm') }) }
   if ($t.Date -eq (Get-Date).Date.AddDays(-1)) { return (T 'win.trash.yesterday' @{ time = (Format-UiDate $t 'H:mm') }) }
   return (Format-UiDate $t 'd MMM H:mm')
 }
-# one card per list, newest first; a row is the task (with its subtasks), when it was deleted, and Restore
+# the deleted lists first (as on the phone), then one card per list, newest first; a row is the task (with its
+# subtasks), when it was deleted, and Restore
 function Render-TrashView {
   [void]$list.Children.Add((New-SettingsHeader (T 'win.trash.title')))
   $entries = @(Get-DeletedEntries)
-  $about = $(if (Read-SyncConfigUi) { T 'win.trash.aboutSync' } else { T 'win.trash.about' })
-  if (-not $entries.Count) { Add-Note (T 'win.trash.empty') $Ink; Add-Note $about; return }
+  $gone = @(Get-DeletedLists)
+  $about = $(if (Read-SyncConfigUi) { T 'win.trash.aboutListsSync' } else { T 'win.trash.aboutLists' })
+  if (-not $entries.Count -and -not $gone.Count) { Add-Note (T 'win.trash.empty') $Ink; Add-Note $about; return }
+  if ($gone.Count) {
+    Add-Heading (T 'win.trash.lists')
+    foreach ($en in $gone) {
+      $v = @{ list = $en.List; when = (Format-Deleted $en.At) }
+      $b = New-TextButton (T 'win.trash.restore') { param($x) Restore-DeletedList $x } $Accent $en
+      Set-Name $b (T 'win.trash.restoreList' $v) (TN 'win.trash.listHelp' $en.Count $v)
+      Add-CardRow (New-InfoRow $en.List $v.when $b -Tip (TN 'win.trash.listTip' $en.Count $v))
+    }
+  }
   $lists = New-Object System.Collections.ArrayList
   foreach ($en in $entries) { if (-not $lists.Contains($en.List)) { [void]$lists.Add($en.List) } }
   foreach ($ln in $lists) {
@@ -2174,18 +2236,22 @@ function Finish-TabEdit($box, [bool]$apply) {
   Render-Tabs
 }
 
-function Delete-Project([string]$name) {
+function Delete-Project([string]$name, [switch]$Confirmed) {   # (-Confirmed: the self-check, without the question)
   Commit-Edit
   if (Get-ShareOf $name) { Leave-SharedList $name; return }   # someone else's list: leave it instead
   $names = @(Get-ProjectNames)
   if ($names.Count -le 1) { return }
-  $r = [System.Windows.MessageBox]::Show($w, (T 'win.ask.deleteList' @{ list = $name }), 'Saqme To Do', 'YesNo', 'Warning')
-  if ("$r" -ne 'Yes') { return }
+  if (-not $Confirmed) {
+    $r = [System.Windows.MessageBox]::Show($w, (T 'win.ask.deleteListRestorable' @{ list = $name }), 'Saqme To Do', 'YesNo', 'Warning')
+    if ("$r" -ne 'Yes') { return }
+  }
   $trash = Join-Path $listsDir '.trash'
   if (-not (Test-Path -LiteralPath $trash)) { [void](New-Item -ItemType Directory -Path $trash) }
-  try {
-    Move-Item -LiteralPath (Proj-Path $name) -Destination (Join-Path $trash ("{0}-{1}.md" -f $name, (Get-Date -Format 'yyyyMMdd-HHmmss'))) -ErrorAction Stop
-  } catch { return }
+  $file = "{0}-{1}.md" -f $name, (Get-Date -Format 'yyyyMMdd-HHmmss')
+  $count = (Get-TaskIdSet (Read-Items (Read-TextFile (Proj-Path $name)))).Count
+  try { Move-Item -LiteralPath (Proj-Path $name) -Destination (Join-Path $trash $file) -ErrorAction Stop } catch { return }
+  # into Recently deleted (shown when there is no sync; with sync, Get-DeletedLists takes it from the sync state)
+  Add-DeletedJournalEntry @{ key = (New-SaqmeId 10); kind = 'list'; list = $name; at = (Get-NowMs); file = $file; index = [array]::IndexOf($names, $name); count = $count }
   $names = @($names | Where-Object { $_ -ne $name })
   Save-Order $names
   if ($script:proj -eq $name) { Switch-Project $names[0] } else { Render-Tabs }
@@ -3449,7 +3515,7 @@ function Render-YourListsPage {
   if ($script:copyFindings.Count) { Render-CopyFindings }
   Add-Heading (T 'win.yourlists.lists')
   Add-CardRow (New-ActionRow (T 'win.yourlists.openFolder') { Start-Process explorer.exe -ArgumentList "`"$listsDir`"" } -Help (Format-Path $listsDir))
-  Add-CardRow (New-LinkRow (T 'win.trash.title') '' 'trash' -Help (T 'win.yourlists.trashHelp'))
+  Add-CardRow (New-LinkRow (T 'win.trash.title') '' 'trash' -Help (T 'win.yourlists.trashListsHelp'))
   Add-CardRow (New-LinkRow (T 'win.backups.title') '' 'backups' -Help (T 'win.yourlists.backupsHelp'))
   Add-Footnote (T 'win.yourlists.note' @{ path = (Format-Path $listsDir) })
 }
@@ -3569,7 +3635,7 @@ function Render-AiLink {
     Add-CardRow (New-ActionRow (T 'win.ai.connectApp' @{ app = 'Claude' }) { Connect-Assistant 'Claude' } -Help (T 'win.ai.connectAppHelp' @{ app = 'Claude' }))
     Add-CardRow (New-ActionRow (T 'win.ai.connectApp' @{ app = 'ChatGPT' }) { Connect-Assistant 'ChatGPT' } -Help (T 'win.ai.connectAppHelp' @{ app = 'ChatGPT' }))
     Add-CardRow (New-ActionRow (T 'win.ai.copyLink') { [void](Copy-ConnectorUrl) } -Name (T 'win.ai.copyLinkName') -Help (T 'win.ai.copyLinkHelp'))
-    Add-Footnote (T 'win.ai.onNote')
+    Add-Footnote (T 'win.ai.onNoteLists')
     foreach ($app in $script:AiSteps.Keys) {
       Add-Heading (T 'win.ai.connectApp' @{ app = $app })
       Add-Footnote ($script:AiSteps[$app] -join "`n")
@@ -5154,7 +5220,7 @@ if ($SmokeTest) {
     $mustHave = [ordered]@{
       general       = @('Dark', 'Light', 'Auto', 'Start with Windows', 'open-keys')
       notifications = @('Daily summary time', 'Send a test notification')
-      sync          = @('Set up sync', 'Pairing link', 'Connect', 'Invite link', 'Join')
+      sync          = $(if (Read-SyncConfigUi) { @('Sync now', 'open-pair', 'Invite link', 'Join') } else { @('Set up sync', 'Pairing link', 'Connect', 'Invite link', 'Join') })
       yourlists     = @('Open the lists folder', 'open-trash', 'open-backups')
       ai            = @('Copy instructions for your AI', 'Save the instructions for your AI as a file')
       updates       = @('back')
@@ -5220,21 +5286,23 @@ if ($SmokeTest) {
     # Use with AI without sync: Claude Desktop first. Not there: Install. There (a scratch profile in the temp data folder,
     # never the real one): Connect adds Saqme next to what its settings have, Disconnect takes out only Saqme
     if (-not $script:claudeRoots.AppData.StartsWith($DataDir)) { throw 'the self-check would look at the real Claude Desktop' }
-    $script:desk.At = 0; Show-View 'ai'
-    $aiTexts = @($list.Children | Where-Object { $_ -is [System.Windows.Controls.TextBlock] } | ForEach-Object { $_.Text })
-    if ([array]::IndexOf($aiTexts, 'Claude Desktop on this PC') -lt 0 -or [array]::IndexOf($aiTexts, 'Claude Desktop on this PC') -gt [array]::IndexOf($aiTexts, 'Connect your AI')) { throw 'Use with AI without sync: Claude Desktop comes first' }
-    if (-not (& $find $list 'Install Claude Desktop') -or (& $find $list 'Connect Claude Desktop')) { throw 'Use with AI: Install Claude Desktop when it is not there' }
-    [void](New-Item -ItemType Directory -Force -Path (Join-Path $script:claudeRoots.Local 'Packages\Claude_pzs8sxrjxfjjc'), (Join-Path $script:claudeRoots.AppData 'Claude'))
-    $deskCfg = Join-Path $script:claudeRoots.AppData 'Claude\claude_desktop_config.json'
-    [IO.File]::WriteAllText($deskCfg, '{"mcpServers":{"other":{"command":"x"}},"preferences":{"a":1}}')
-    $script:desk.At = 0; Show-View 'ai'
-    & $activate (& $find $list 'Connect Claude Desktop')
-    $o = ConvertFrom-JsonText ([IO.File]::ReadAllText($deskCfg))
-    if ((@($o['mcpServers'].Keys) -join ',') -ne 'other,saqme' -or -not $o['preferences'] -or -not (Test-Path -LiteralPath "$deskCfg.saqme-backup")) { throw 'Connect Claude Desktop: Saqme added next to the rest, with a backup' }
-    if (@($o['mcpServers']['saqme']['args'])[-1] -ne [IO.Path]::GetFullPath($DataDir).TrimEnd('\')) { throw 'Connect Claude Desktop: the data folder' }
-    if (-not (& $find $list 'Disconnect Claude Desktop')) { throw 'Use with AI: connected, it offers Disconnect Claude Desktop' }
-    & $activate (& $find $list 'Disconnect Claude Desktop')
-    if ((@((ConvertFrom-JsonText ([IO.File]::ReadAllText($deskCfg)))['mcpServers'].Keys) -join ',') -ne 'other') { throw 'Disconnect Claude Desktop takes out Saqme only' }
+    if (-not $hadCfg) {   # (a self-check with a sync service, widget-shots.ps1 -SyncUrl, has sync)
+      $script:desk.At = 0; Show-View 'ai'
+      $aiTexts = @($list.Children | Where-Object { $_ -is [System.Windows.Controls.TextBlock] } | ForEach-Object { $_.Text })
+      if ([array]::IndexOf($aiTexts, 'Claude Desktop on this PC') -lt 0 -or [array]::IndexOf($aiTexts, 'Claude Desktop on this PC') -gt [array]::IndexOf($aiTexts, 'Connect your AI')) { throw 'Use with AI without sync: Claude Desktop comes first' }
+      if (-not (& $find $list 'Install Claude Desktop') -or (& $find $list 'Connect Claude Desktop')) { throw 'Use with AI: Install Claude Desktop when it is not there' }
+      [void](New-Item -ItemType Directory -Force -Path (Join-Path $script:claudeRoots.Local 'Packages\Claude_pzs8sxrjxfjjc'), (Join-Path $script:claudeRoots.AppData 'Claude'))
+      $deskCfg = Join-Path $script:claudeRoots.AppData 'Claude\claude_desktop_config.json'
+      [IO.File]::WriteAllText($deskCfg, '{"mcpServers":{"other":{"command":"x"}},"preferences":{"a":1}}')
+      $script:desk.At = 0; Show-View 'ai'
+      & $activate (& $find $list 'Connect Claude Desktop')
+      $o = ConvertFrom-JsonText ([IO.File]::ReadAllText($deskCfg))
+      if ((@($o['mcpServers'].Keys) -join ',') -ne 'other,saqme' -or -not $o['preferences'] -or -not (Test-Path -LiteralPath "$deskCfg.saqme-backup")) { throw 'Connect Claude Desktop: Saqme added next to the rest, with a backup' }
+      if (@($o['mcpServers']['saqme']['args'])[-1] -ne [IO.Path]::GetFullPath($DataDir).TrimEnd('\')) { throw 'Connect Claude Desktop: the data folder' }
+      if (-not (& $find $list 'Disconnect Claude Desktop')) { throw 'Use with AI: connected, it offers Disconnect Claude Desktop' }
+      & $activate (& $find $list 'Disconnect Claude Desktop')
+      if ((@((ConvertFrom-JsonText ([IO.File]::ReadAllText($deskCfg)))['mcpServers'].Keys) -join ',') -ne 'other') { throw 'Disconnect Claude Desktop takes out Saqme only' }
+    }
     $keys = @(Read-Lines $cfgFile | Where-Object { $_ -match '^\w+=' } | ForEach-Object { ($_ -split '=', 2)[0] } | Sort-Object)
     if (($keys -join ',') -ne 'active,autoUpdate,height,lang,notifyAt,showCompleted,theme,updatedSeen,width') { throw "the settings file's keys changed: $($keys -join ',')" }
     # the version: the line under every Settings view (plain while no update needs a look), About, the tray icon's tooltip
@@ -5706,6 +5774,25 @@ if ($SmokeTest) {
     if (-not (& $find $list 'Bring back from Some.App') -or -not (& $find $list "Open Some.App's copy")) { throw 'Your lists does not offer what another app''s copy has' }
     $script:copyFindings = @(); Show-View 'list'
     Write-Output 'BACKUP OK'
+    if (-not $script:sync) {
+      # a deleted list is in Recently deleted; Restore brings its file back from lists\.trash, as it was, in its old place
+      $tripText = "# Berlin`nHotel near the station.`n- [ ] Tickets ^smktrip1`n- [x] Hotel ^smktrip2`n"
+      Write-Utf8 (Proj-Path 'Smoke trip') $tripText
+      $tripAt = [array]::IndexOf(@(Get-ProjectNames), 'Smoke trip')
+      Delete-Project 'Smoke trip' -Confirmed
+      if (Test-Path -LiteralPath (Proj-Path 'Smoke trip')) { throw 'Delete list left the file' }
+      $gone = @(Get-DeletedLists | Where-Object { $_.List -eq 'Smoke trip' })
+      if ($gone.Count -ne 1 -or $gone[0].Count -ne 2) { throw "Recently deleted lists: $($gone.Count)" }
+      Show-View 'trash'
+      if (-not (& $find $list 'Restore the list Smoke trip')) { throw 'the deleted list is not in Recently deleted' }
+      Restore-DeletedList $gone[0]
+      if ([IO.File]::ReadAllText((Proj-Path 'Smoke trip')) -cne $tripText) { throw "restored list: $([IO.File]::ReadAllText((Proj-Path 'Smoke trip')))" }
+      if ([array]::IndexOf(@(Get-ProjectNames), 'Smoke trip') -ne $tripAt -or $script:proj -ne 'Smoke trip') { throw "restored list at $([array]::IndexOf(@(Get-ProjectNames), 'Smoke trip')), not $tripAt" }
+      if (@(Get-DeletedLists).Count) { throw 'the restored list is still in Recently deleted' }
+      Switch-Project 'General'
+      Delete-Project 'Smoke trip' -Confirmed   # (and deleted again: Recently deleted has a list in every language below)
+      Write-Output 'LIST RESTORE OK'
+    }
     $first = @($script:items | Where-Object { $_.Kind -eq 'task' -and $_.Text -eq 'smoke task one' })[0]
     if ($script:sync) {
       # with a sync config in the data dir: the real loop must push our task, and a change made on
@@ -5763,6 +5850,27 @@ if ($SmokeTest) {
       Request-Sync
       & $wait { $x = & $rowOfId $other.Id; $x -and -not $x['fields']['deleted']['v'] } 'the restore to reach the server'
       Write-Output 'RESTORE OK'
+      # a list deleted on another device (or by the AI connector) is in Recently deleted here; Restore undeletes it on the
+      # server, and its file comes back from its copy in lists\.trash, heading and all, in its place
+      $tripText = "# Berlin`n- [ ] Tickets ^smksync1`n"
+      Write-Utf8 (Proj-Path 'Smoke synced trip') $tripText
+      Request-Sync
+      $projOf = {
+        $r = Invoke-SaqmeApi $api ([string]$syncCfg['token']) 'POST' @{ deviceId = 'smoke-probe'; cursor = 0; changes = @() }
+        foreach ($x in @($r.Data['changes'])) { if ($x['kind'] -eq 'project' -and $x['fields']['name']['v'] -ceq 'Smoke synced trip') { return $x } }
+        return $null
+      }
+      & $wait { $null -ne (& $projOf) } 'the new list to reach the server'
+      $trip = & $projOf
+      $gone = @{ kind = 'project'; id = $trip['id']; fields = @{ deleted = @{ v = $true; ts = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds(); base = [long]$trip['fields']['deleted']['ts'] } } }
+      [void](Invoke-SaqmeApi $api ([string]$syncCfg['token']) 'POST' @{ deviceId = 'smoke-phone'; cursor = 0; changes = @($gone) })
+      Request-Sync
+      & $wait { -not (Test-Path -LiteralPath (Proj-Path 'Smoke synced trip')) } 'the deleted list to go to lists\.trash'
+      & $wait { @(Get-DeletedLists | Where-Object { $_.Project -eq $trip['id'] }).Count -eq 1 } 'the list in Recently deleted'
+      Restore-DeletedList @(Get-DeletedLists | Where-Object { $_.Project -eq $trip['id'] })[0]
+      & $wait { (Test-Path -LiteralPath (Proj-Path 'Smoke synced trip')) -and [IO.File]::ReadAllText((Proj-Path 'Smoke synced trip')) -ceq $tripText } 'the list to come back as it was'
+      if ((& $projOf)['fields']['deleted']['v']) { throw 'the list is still deleted on the server' }
+      Write-Output 'LIST SYNC RESTORE OK'
       if ($env:SAQME_SMOKE_SHOTS) {
         # a stale edit from yet another device -> a conflict to look at
         $stale = @{ kind = 'task'; id = $first.Id; fields = @{ text = @{ v = 'older edit from a laptop'; ts = [long]$row['fields']['text']['ts'] + 5; base = [long]$row['fields']['text']['ts'] } } }

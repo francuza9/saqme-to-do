@@ -997,6 +997,17 @@ function Read-LocalLists([string]$listsDir, [int]$settleMs = 1500, $view = $null
 $script:PlannedKeep = 30 * 60000   # how long after a plan a save can still be from a copy older than it
 $script:MissingGrace = 10000       # a list gone this long (and for two cycles) is written again; its delete is held back
 
+# Recently deleted on this PC: recently-deleted.json in the data folder (outside the lists folder: nothing syncs or
+# reads it as a list), what the app and its Claude Desktop tools deleted. Each entry is a task with the subtasks
+# deleted with it (text: their lines with ids; ids) or, kind 'list', a list the app deleted (file: its copy in
+# lists\.trash; index: its place in the order). (widget.ps1 Get-DeletedEntries / Get-DeletedLists, mcp-core.ps1)
+function Read-RecentlyDeleted([string]$path) {
+  $t = Read-TextFile $path
+  if (-not $t) { return }
+  try { $o = ConvertFrom-JsonText $t } catch { return }
+  $o | Where-Object { $_ -is [System.Collections.IDictionary] -and ($_['text'] -or $_['kind'] -eq 'list') }
+}
+
 # lists\.trash holds a copy of list $name with one of $ids in it (any copy, if the list had no tasks)
 function Test-TrashedCopy([string]$listsDir, [string]$name, $ids) {
   if (-not $listsDir) { return $false }
@@ -1554,6 +1565,36 @@ function Update-ListFromRemote($st, $items, [string]$projId, $depth) {
   return ,$items
 }
 
+# A deleted list that comes back (restored on another device, or by the AI connector) is written as its file was when it
+# went to lists\.trash, headings and prose included: the newest copy there that holds exactly its tasks, with what the
+# server changed since applied (Update-ListFromRemote). $null when there is none: it is then written from its tasks.
+# Every copy of it there is renamed to *.restored: otherwise the list's file vanishing later would look like a delete
+# made on purpose (Test-TrashedCopy) and would not be held back. -> @{ Text; Renames } (engine.mjs trashedListText)
+function Get-TrashedListText($st, [string]$listsDir, [string]$projId, [string]$file, $depth) {
+  $out = @{ Text = $null; Renames = (New-Object System.Collections.ArrayList) }
+  $trash = Join-Path $listsDir '.trash'
+  if (-not $listsDir -or -not (Test-Path -LiteralPath $trash)) { return $out }
+  $live = New-Object 'System.Collections.Generic.HashSet[string]'
+  foreach ($id in (Get-LiveTaskIds $st.R $projId)) { [void]$live.Add($id) }
+  $best = $null
+  foreach ($f in [IO.Directory]::GetFiles($trash)) {
+    $fn = [IO.Path]::GetFileName($f)
+    if ($fn -notmatch '^(.+)-([0-9]{8}-[0-9]{6})\.md$') { continue }
+    $stem = $matches[1]; $stamp = $matches[2]
+    $text = Read-TextFile $f
+    if ($null -eq $text) { continue }
+    $items = Read-Items $text
+    $ids = Get-TaskIdSet $items
+    $mine = $(if ($live.Count) { @($ids | Where-Object { $live.Contains($_) }).Count -gt 0 } else { $stem -ieq $file -and $ids.Count -eq 0 })
+    if (-not $mine) { continue }
+    [void]$out.Renames.Add(@{ type = 'rename'; from = $f; to = [IO.Path]::ChangeExtension($f, '.restored') })
+    if ($ids.Count -ne $live.Count -or @($ids | Where-Object { -not $live.Contains($_) }).Count) { continue }   # not all of it, or more
+    if (-not $best -or [string]::CompareOrdinal($stamp, $best.Stamp) -gt 0) { $best = @{ Stamp = $stamp; Text = $text; Items = $items } }
+  }
+  if ($best) { $out.Text = ConvertTo-MarkdownText (Update-ListFromRemote $st $best.Items $projId $depth) 0 (Get-TextEol $best.Text) }
+  return $out
+}
+
 function New-ListFromRows($st, [string]$projId, $depth) {
   $items = New-Object System.Collections.ArrayList
   $rows = @($st.R.Values | Where-Object { $_['kind'] -eq 'task' -and -not (Get-Field $_ 'deleted')['v'] -and (Get-PlaceOf $_)['project'] -eq $projId })
@@ -1713,7 +1754,15 @@ function Get-RemotePlan($st, $local, [string]$listsDir, $Scope = $null) {
     if ($live -and -not $exists) {
       if (-not $depthCache) { $depthCache = Get-RowDepthMap $st $id }
       $n = $(if ($Scope) { $(if ($file) { $file } else { $Scope.File }) } else { Get-UniqueFileName $listsDir ([string](Get-Field $r 'name')['v']) $reserved })
-      [void]$creates.Add(@{ type = 'create'; path = (Join-Path $listsDir "$n.md"); text = (New-ListFromRows $st $id $depthCache) })
+      $text = $null
+      if ($s -and (Get-Field $s 'deleted')['v']) {
+        # a deleted list restored elsewhere: from its copy in lists\.trash when there is one
+        $tc = Get-TrashedListText $st $listsDir $id $n $depthCache
+        $text = $tc.Text
+        foreach ($o in $tc.Renames) { [void]$after.Add($o) }
+      }
+      if ($null -eq $text) { $text = New-ListFromRows $st $id $depthCache }
+      [void]$creates.Add(@{ type = 'create'; path = (Join-Path $listsDir "$n.md"); text = $text })
       $fileOf[$id] = $n; $plan.Files[$id] = $n
       if ($Scope) { $orderChanged = $true }
     } elseif (-not $live -and $exists -and $wasLive) {
