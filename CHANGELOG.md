@@ -1,6 +1,6 @@
 # Changes
 
-## Unreleased
+## 1.2.7
 
 **Your AI can rename, reorder, delete and restore lists** (Connect Claude / Connect ChatGPT, through your sync
 service). Three new tools: `update_list` (rename a list, or move it to the top, the bottom or after another list; same
